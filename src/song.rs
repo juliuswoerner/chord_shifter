@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn transpose_same_key_is_noop() {
-        // Transposing to the same root should leave all chord roots unchagned.
+        // Transposing to the same root should leave all chord roots unchanged.
         // This verifies that the interval calculation wraps correctly at 0 semitones.
         let mut song = c_major_song();
         song.transpose_to("C");
