@@ -3,31 +3,53 @@ set -euo pipefail
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
 BOLD='\033[1m'
 RESET='\033[0m'
 
-pass() { echo -e "${GREEN}✔${RESET}  $1"; }
-fail() { echo -e "${RED}✘${RESET}  $1"; }
+pass()  { echo -e "${GREEN}✔${RESET}  $1"; }
+fixed() { echo -e "${YELLOW}✎${RESET}  $1"; }
+fail()  { echo -e "${RED}✘${RESET}  $1"; }
 
 echo -e "\n${BOLD}Running pre-commit checks…${RESET}\n"
 
 # ── 1. Formatting ─────────────────────────────────────────────────────────────
 if ! cargo fmt --all -- --check 2>/dev/null; then
-    fail "Formatting issues found. Run \`cargo fmt\` to fix them."
-    exit 1
+    cargo fmt --all
+    # Re-stage every file that was already staged and just got reformatted
+    git diff --name-only | while read -r f; do
+        if git diff --cached --name-only | grep -qF "$f"; then
+            git add "$f"
+        fi
+    done
+    fixed "Formatting fixed and re-staged automatically (cargo fmt)."
+else
+    pass "cargo fmt"
 fi
-pass "cargo fmt"
 
 # ── 2. Typos ──────────────────────────────────────────────────────────────────
 if ! command -v typos &>/dev/null; then
     echo "  ⚠  'typos' not found — skipping spell check."
     echo "     Install with: cargo install typos-cli"
 else
-    if ! typos; then
-        fail "Typos found. Fix them or add exceptions to .typos.toml."
-        exit 1
+    if ! typos --quiet; then
+        typos --write-changes
+        # Re-stage every file that was already staged and just got fixed
+        git diff --name-only | while read -r f; do
+            if git diff --cached --name-only | grep -qF "$f"; then
+                git add "$f"
+            fi
+        done
+        fixed "Typos fixed and re-staged automatically (typos --write-changes)."
+
+        # Abort if any typos couldn't be auto-fixed (typos still reports them)
+        if ! typos --quiet; then
+            fail "Some typos could not be auto-fixed. Add exceptions to .typos.toml."
+            exit 1
+        fi
+    else
+        pass "typos"
     fi
-    pass "typos"
 fi
 
 echo -e "\n${GREEN}All checks passed.${RESET}\n"
