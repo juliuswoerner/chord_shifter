@@ -1,0 +1,284 @@
+// ── Chord quality ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
+pub enum ChordQuality {
+    Major,
+    Minor,
+    Dominant7,
+    Major7,
+    Minor7,
+    Diminished,
+    Augmented,
+    Sus2,
+    Sus4,
+}
+
+impl ChordQuality {
+    pub fn symbol(&self) -> &str {
+        match self {
+            ChordQuality::Major      => "",
+            ChordQuality::Minor      => "m",
+            ChordQuality::Dominant7  => "7",
+            ChordQuality::Major7     => "maj7",
+            ChordQuality::Minor7     => "m7",
+            ChordQuality::Diminished => "dim",
+            ChordQuality::Augmented  => "aug",
+            ChordQuality::Sus2       => "sus2",
+            ChordQuality::Sus4       => "sus4",
+        }
+    }
+
+    pub fn label(&self) -> &str {
+        match self {
+            ChordQuality::Major      => "Major",
+            ChordQuality::Minor      => "Minor",
+            ChordQuality::Dominant7  => "Dom 7",
+            ChordQuality::Major7     => "Maj 7",
+            ChordQuality::Minor7     => "Min 7",
+            ChordQuality::Diminished => "Dim",
+            ChordQuality::Augmented  => "Aug",
+            ChordQuality::Sus2       => "Sus 2",
+            ChordQuality::Sus4       => "Sus 4",
+        }
+    }
+
+    pub fn all() -> Vec<ChordQuality> {
+        vec![
+            ChordQuality::Major,
+            ChordQuality::Minor,
+            ChordQuality::Dominant7,
+            ChordQuality::Major7,
+            ChordQuality::Minor7,
+            ChordQuality::Diminished,
+            ChordQuality::Augmented,
+            ChordQuality::Sus2,
+            ChordQuality::Sus4,
+        ]
+    }
+
+    pub fn from_symbol(s: &str) -> ChordQuality {
+        match s {
+            "m"    => ChordQuality::Minor,
+            "7"    => ChordQuality::Dominant7,
+            "maj7" => ChordQuality::Major7,
+            "m7"   => ChordQuality::Minor7,
+            "dim"  => ChordQuality::Diminished,
+            "aug"  => ChordQuality::Augmented,
+            "sus2" => ChordQuality::Sus2,
+            "sus4" => ChordQuality::Sus4,
+            _      => ChordQuality::Major,
+        }
+    }
+}
+
+// ── Scale degree ──────────────────────────────────────────────────────────────
+
+/// Scale degree (1–7) of a chord relative to the song's key.
+///
+/// Examples in C Major:
+///   C → 1 (I),  D → 2 (II),  E → 3 (III),  F → 4 (IV),
+///   G → 5 (V),  A → 6 (VI),  B → 7 (VII)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub struct ScaleDegree(pub u8);
+
+#[allow(dead_code)]
+impl ScaleDegree {
+    /// Returns `Some(ScaleDegree)` for values 1–7, `None` otherwise.
+    pub fn new(degree: u8) -> Option<Self> {
+        if (1..=7).contains(&degree) { Some(Self(degree)) } else { None }
+    }
+
+    /// The raw degree number (1–7).
+    pub fn get(self) -> u8 { self.0 }
+
+    /// Upper-case Roman numeral, e.g. `"IV"`.
+    pub fn roman(self) -> &'static str {
+        match self.0 {
+            1 => "I",
+            2 => "II",
+            3 => "III",
+            4 => "IV",
+            5 => "V",
+            6 => "VI",
+            7 => "VII",
+            _ => "?",
+        }
+    }
+}
+
+impl std::fmt::Display for ScaleDegree {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.roman())
+    }
+}
+
+// ── Chord ─────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Chord {
+    pub root:    String,
+    pub quality: ChordQuality,
+    /// Scale degree of this chord relative to the song's key (1–7).
+    /// `None` means the degree hasn't been set yet.
+    pub degree:  Option<ScaleDegree>,
+}
+
+impl Chord {
+    /// Create a chord without a scale degree assigned.
+    pub fn new(root: impl Into<String>, quality: ChordQuality) -> Self {
+        Self { root: root.into(), quality, degree: None }
+    }
+
+    /// Builder helper – assign a scale degree (1–7) to the chord.
+    #[allow(dead_code)]
+    pub fn with_degree(mut self, degree: u8) -> Self {
+        self.degree = ScaleDegree::new(degree);
+        self
+    }
+
+    /// Human-readable chord name, e.g. `"Am"`, `"G7"`, `"Fmaj7"`.
+    pub fn display(&self) -> String {
+        format!("{}{}", self.root, self.quality.symbol())
+    }
+
+    /// Scale-degree display: roman numeral + quality symbol (e.g. `"IVm"`, `"Imaj7"`).
+    /// Falls back to `display()` if no degree has been assigned yet.
+    pub fn degree_display(&self) -> String {
+        match self.degree {
+            Some(d) => format!("{}{}", d.roman(), self.quality.symbol()),
+            None    => self.display(),
+        }
+    }
+}
+
+// ── Song part ─────────────────────────────────────────────────────────────────
+
+/// A named section of a song (e.g. "Verse", "Chorus", or anything the user chooses).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SongPart {
+    pub name:   String,
+    pub chords: Vec<Chord>,
+}
+
+impl SongPart {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into(), chords: Vec::new() }
+    }
+}
+
+// ── Music-theory helpers ────────────────────────────────────────────────────
+
+/// Semitone offsets of scale degrees 1–7 in a major scale.
+const MAJOR_INTERVALS: [u8; 7] = [0, 2, 4, 5, 7, 9, 11];
+
+/// Returns the chromatic index (0 = C … 11 = B) for a note name, or `None`.
+fn note_to_index(note: &str) -> Option<u8> {
+    match note.trim() {
+        "C"  | "B#"  => Some(0),
+        "C#" | "Db"  => Some(1),
+        "D"           => Some(2),
+        "D#" | "Eb"  => Some(3),
+        "E"  | "Fb"  => Some(4),
+        "F"  | "E#"  => Some(5),
+        "F#" | "Gb"  => Some(6),
+        "G"           => Some(7),
+        "G#" | "Ab"  => Some(8),
+        "A"           => Some(9),
+        "A#" | "Bb"  => Some(10),
+        "B"  | "Cb"  => Some(11),
+        _             => None,
+    }
+}
+
+/// Converts a chromatic index back to a note name.
+/// Uses sharps for C, G, D, A, E, B, F#, C# and flats for the rest.
+fn index_to_note(index: u8, prefer_sharps: bool) -> &'static str {
+    match (index % 12, prefer_sharps) {
+        (0,  _)     => "C",
+        (1,  true)  => "C#",
+        (1,  false) => "Db",
+        (2,  _)     => "D",
+        (3,  true)  => "D#",
+        (3,  false) => "Eb",
+        (4,  _)     => "E",
+        (5,  _)     => "F",
+        (6,  true)  => "F#",
+        (6,  false) => "Gb",
+        (7,  _)     => "G",
+        (8,  true)  => "G#",
+        (8,  false) => "Ab",
+        (9,  _)     => "A",
+        (10, true)  => "A#",
+        (10, false) => "Bb",
+        (11, _)     => "B",
+        _           => "?",
+    }
+}
+
+// ── Song ──────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Song {
+    pub name:   String,
+    pub key:    String,
+    pub artist: String,
+    /// Ordered list of named parts, each with its own chord progression.
+    pub parts:  Vec<SongPart>,
+}
+
+impl Song {
+    pub fn new(
+        name:   impl Into<String>,
+        key:    impl Into<String>,
+        artist: impl Into<String>,
+    ) -> Self {
+        Self {
+            name:   name.into(),
+            key:    key.into(),
+            artist: artist.into(),
+            parts:  Vec::new(),
+        }
+    }
+
+    /// Builder-style helper – appends a new named part with the given chords.
+    pub fn with_part(mut self, name: impl Into<String>, chords: Vec<Chord>) -> Self {
+        self.parts.push(SongPart { name: name.into(), chords });
+        self
+    }
+
+    /// Transpose all chords to a new key root (e.g. `"G"`, `"Bb"`, `"F#"`).
+    ///
+    /// Only chords that have a `degree` assigned are moved; chords without a
+    /// degree are left unchanged.  The song's `key` field is updated to
+    /// `"<new_root> <mode>"`, preserving whatever mode suffix was there before.
+    pub fn transpose_to(&mut self, new_root: &str) {
+        let root_idx = match note_to_index(new_root) {
+            Some(i) => i,
+            None    => return,
+        };
+        let prefer_sharps = matches!(
+            new_root, "C" | "G" | "D" | "A" | "E" | "B" | "F#" | "C#"
+        );
+        for part in &mut self.parts {
+            for chord in &mut part.chords {
+                if let Some(degree) = chord.degree {
+                    let d = degree.get() as usize;
+                    if (1..=7).contains(&d) {
+                        let semitones = MAJOR_INTERVALS[d - 1];
+                        let note_idx  = (root_idx + semitones) % 12;
+                        chord.root    = index_to_note(note_idx, prefer_sharps).to_string();
+                    }
+                }
+            }
+        }
+        // Preserve mode suffix ("Major", "Minor", …) from the old key string.
+        let mode = self.key.split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
+        self.key = if mode.is_empty() {
+            new_root.to_string()
+        } else {
+            format!("{} {}", new_root, mode)
+        };
+    }
+}

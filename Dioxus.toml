@@ -1,0 +1,10 @@
+[application]
+name             = "chord_shifter"
+default_platform = "desktop"
+
+[web.app]
+title = "Chord Shifter"
+
+[web.watcher]
+watch_path = ["src"]
+reload_html = true

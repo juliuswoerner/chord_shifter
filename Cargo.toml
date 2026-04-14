@@ -1,0 +1,29 @@
+[package]
+name = "chord_shifter"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default  = ["desktop"]
+desktop  = ["dioxus/desktop", "dioxus/minimal"]
+web      = ["dioxus/web",     "dioxus/minimal"]
+
+[dependencies]
+dioxus   = { version = "0.6", default-features = false }
+printpdf = "0.6"
+
+# Web-only: used to trigger an in-browser PDF download
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys      = { version = "0.3", features = [
+    "Blob", "BlobPropertyBag", "Document",
+    "HtmlAnchorElement", "Url", "Window",
+] }
+wasm-bindgen = "0.2"
+js-sys       = "0.3"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
