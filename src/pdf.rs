@@ -37,7 +37,7 @@ pub fn generate_pdf_bytes(
 
     // ── Key ───────────────────────────────────────────────────────────────────
     layer.use_text(
-        &format!("Key: {}", song.key),
+        format!("Key: {}", song.key),
         11.0,
         Mm(MARGIN),
         Mm(y),
@@ -66,7 +66,7 @@ pub fn generate_pdf_bytes(
         // Part label
         layer.set_outline_color(Color::Greyscale(Greyscale::new(0.0, None)));
         layer.use_text(
-            &part.name.to_uppercase(),
+            part.name.to_uppercase(),
             part_name_size,
             Mm(MARGIN),
             Mm(y),
