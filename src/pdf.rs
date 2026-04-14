@@ -148,3 +148,58 @@ pub fn save_pdf(
     std::fs::write(path, bytes)?;
     Ok(())
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::song::{Chord, ChordQuality, Song};
+
+    fn sample_song() -> Song {
+        Song::new("Test Song", "G Major", "Test Artist").with_part(
+            "Verse",
+            vec![
+                Chord::new("G", ChordQuality::Major).with_degree(1),
+                Chord::new("E", ChordQuality::Minor).with_degree(6),
+                Chord::new("C", ChordQuality::Major).with_degree(4),
+                Chord::new("D", ChordQuality::Major).with_degree(5),
+            ],
+        )
+    }
+
+    #[test]
+    fn generate_pdf_returns_non_empty_bytes() {
+        let song = sample_song();
+        let bytes = generate_pdf_bytes(&song, false, 9.0, 18.0).unwrap();
+        assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn generate_pdf_starts_with_pdf_header() {
+        let song = sample_song();
+        let bytes = generate_pdf_bytes(&song, false, 9.0, 18.0).unwrap();
+        assert!(bytes.starts_with(b"%PDF-"), "output should be a valid PDF");
+    }
+
+    #[test]
+    fn generate_pdf_degrees_mode_also_produces_valid_pdf() {
+        let song = sample_song();
+        let bytes = generate_pdf_bytes(&song, true, 9.0, 18.0).unwrap();
+        assert!(bytes.starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn generate_pdf_custom_font_sizes_produce_valid_pdf() {
+        let song = sample_song();
+        let bytes = generate_pdf_bytes(&song, false, 14.0, 24.0).unwrap();
+        assert!(bytes.starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn generate_pdf_empty_song_produces_valid_pdf() {
+        let song = Song::new("Empty", "C", "Nobody");
+        let bytes = generate_pdf_bytes(&song, false, 9.0, 18.0).unwrap();
+        assert!(bytes.starts_with(b"%PDF-"));
+    }
+}
