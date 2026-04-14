@@ -297,3 +297,249 @@ impl Song {
         };
     }
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── ChordQuality ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn chord_quality_symbols_round_trip() {
+        for q in ChordQuality::all() {
+            assert_eq!(ChordQuality::from_symbol(q.symbol()), q);
+        }
+    }
+
+    #[test]
+    fn chord_quality_major_symbol_is_empty() {
+        assert_eq!(ChordQuality::Major.symbol(), "");
+    }
+
+    #[test]
+    fn chord_quality_unknown_symbol_falls_back_to_major() {
+        assert_eq!(ChordQuality::from_symbol("xyz"), ChordQuality::Major);
+    }
+
+    #[test]
+    fn chord_quality_all_has_nine_variants() {
+        assert_eq!(ChordQuality::all().len(), 9);
+    }
+
+    // ── ScaleDegree ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn scale_degree_valid_range() {
+        for d in 1u8..=7 {
+            assert!(ScaleDegree::new(d).is_some());
+        }
+    }
+
+    #[test]
+    fn scale_degree_out_of_range() {
+        assert!(ScaleDegree::new(0).is_none());
+        assert!(ScaleDegree::new(8).is_none());
+    }
+
+    #[test]
+    fn scale_degree_roman_numerals() {
+        let expected = ["I", "II", "III", "IV", "V", "VI", "VII"];
+        for (i, &roman) in expected.iter().enumerate() {
+            assert_eq!(ScaleDegree(i as u8 + 1).roman(), roman);
+        }
+    }
+
+    #[test]
+    fn scale_degree_display_uses_roman() {
+        assert_eq!(format!("{}", ScaleDegree(4)), "IV");
+    }
+
+    #[test]
+    fn scale_degree_get_returns_raw_value() {
+        assert_eq!(ScaleDegree(5).get(), 5);
+    }
+
+    // ── Chord ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn chord_display_major_has_no_suffix() {
+        let c = Chord::new("G", ChordQuality::Major);
+        assert_eq!(c.display(), "G");
+    }
+
+    #[test]
+    fn chord_display_minor() {
+        let c = Chord::new("A", ChordQuality::Minor);
+        assert_eq!(c.display(), "Am");
+    }
+
+    #[test]
+    fn chord_display_complex_quality() {
+        let c = Chord::new("F", ChordQuality::Major7);
+        assert_eq!(c.display(), "Fmaj7");
+    }
+
+    #[test]
+    fn chord_new_has_no_degree() {
+        let c = Chord::new("C", ChordQuality::Major);
+        assert!(c.degree.is_none());
+    }
+
+    #[test]
+    fn chord_with_degree_sets_degree() {
+        let c = Chord::new("C", ChordQuality::Major).with_degree(1);
+        assert_eq!(c.degree, Some(ScaleDegree(1)));
+    }
+
+    #[test]
+    fn chord_with_degree_out_of_range_leaves_none() {
+        let c = Chord::new("C", ChordQuality::Major).with_degree(0);
+        assert!(c.degree.is_none());
+    }
+
+    #[test]
+    fn chord_degree_display_with_degree() {
+        let c = Chord::new("A", ChordQuality::Minor).with_degree(6);
+        assert_eq!(c.degree_display(), "VIm");
+    }
+
+    #[test]
+    fn chord_degree_display_falls_back_without_degree() {
+        let c = Chord::new("A", ChordQuality::Minor);
+        assert_eq!(c.degree_display(), "Am");
+    }
+
+    // ── Song / SongPart ──────────────────────────────────────────────────────
+
+    #[test]
+    fn song_new_starts_with_no_parts() {
+        let s = Song::new("Test", "C Major", "Artist");
+        assert!(s.parts.is_empty());
+    }
+
+    #[test]
+    fn song_with_part_appends_in_order() {
+        let s = Song::new("S", "C", "A")
+            .with_part("Verse", vec![Chord::new("C", ChordQuality::Major)])
+            .with_part("Chorus", vec![Chord::new("G", ChordQuality::Major)]);
+        assert_eq!(s.parts.len(), 2);
+        assert_eq!(s.parts[0].name, "Verse");
+        assert_eq!(s.parts[1].name, "Chorus");
+    }
+
+    #[test]
+    fn song_part_new_has_no_chords() {
+        let p = SongPart::new("Bridge");
+        assert!(p.chords.is_empty());
+    }
+
+    // ── Transpose ────────────────────────────────────────────────────────────
+
+    fn c_major_song() -> Song {
+        Song::new("Test", "C Major", "Artist").with_part(
+            "Verse",
+            vec![
+                Chord::new("C", ChordQuality::Major).with_degree(1),
+                Chord::new("G", ChordQuality::Major).with_degree(5),
+                Chord::new("A", ChordQuality::Minor).with_degree(6),
+                Chord::new("F", ChordQuality::Major).with_degree(4),
+            ],
+        )
+    }
+
+    #[test]
+    fn transpose_c_to_g_major() {
+        let mut song = c_major_song();
+        song.transpose_to("G");
+        let roots: Vec<&str> = song.parts[0]
+            .chords
+            .iter()
+            .map(|c| c.root.as_str())
+            .collect();
+        assert_eq!(roots, ["G", "D", "E", "C"]);
+    }
+
+    #[test]
+    fn transpose_c_to_f_uses_flats() {
+        let mut song = c_major_song();
+        song.transpose_to("F");
+        let roots: Vec<&str> = song.parts[0]
+            .chords
+            .iter()
+            .map(|c| c.root.as_str())
+            .collect();
+        // F major: I=F, V=C, VI=D, IV=Bb
+        assert_eq!(roots, ["F", "C", "D", "Bb"]);
+    }
+
+    #[test]
+    fn transpose_updates_key_field() {
+        let mut song = c_major_song();
+        song.transpose_to("G");
+        assert_eq!(song.key, "G Major");
+    }
+
+    #[test]
+    fn transpose_preserves_qualities() {
+        let mut song = c_major_song();
+        song.transpose_to("G");
+        let qualities: Vec<&ChordQuality> =
+            song.parts[0].chords.iter().map(|c| &c.quality).collect();
+        assert_eq!(
+            qualities,
+            [
+                &ChordQuality::Major,
+                &ChordQuality::Major,
+                &ChordQuality::Minor,
+                &ChordQuality::Major
+            ]
+        );
+    }
+
+    #[test]
+    fn transpose_skips_chords_without_degree() {
+        let mut song = Song::new("S", "C Major", "A").with_part(
+            "Verse",
+            vec![Chord::new("C", ChordQuality::Major)], // no degree
+        );
+        song.transpose_to("G");
+        // root should be unchanged because no degree was set
+        assert_eq!(song.parts[0].chords[0].root, "C");
+    }
+
+    #[test]
+    fn transpose_invalid_root_is_noop() {
+        let mut song = c_major_song();
+        song.transpose_to("Z"); // not a valid note
+        assert_eq!(song.parts[0].chords[0].root, "C"); // unchanged
+        assert_eq!(song.key, "C Major"); // unchanged
+    }
+
+    #[test]
+    fn transpose_c_to_bb_uses_flats() {
+        let mut song = c_major_song();
+        song.transpose_to("Bb");
+        // Bb major: I=Bb, V=F, VI=G, IV=Eb
+        let roots: Vec<&str> = song.parts[0]
+            .chords
+            .iter()
+            .map(|c| c.root.as_str())
+            .collect();
+        assert_eq!(roots, ["Bb", "F", "G", "Eb"]);
+    }
+
+    #[test]
+    fn transpose_c_to_fsharp_uses_sharps() {
+        let mut song = c_major_song();
+        song.transpose_to("F#");
+        // F# major: I=F#, V=C#, VI=D#, IV=B
+        let roots: Vec<&str> = song.parts[0]
+            .chords
+            .iter()
+            .map(|c| c.root.as_str())
+            .collect();
+        assert_eq!(roots, ["F#", "C#", "D#", "B"]);
+    }
+}
