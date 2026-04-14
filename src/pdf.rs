@@ -6,7 +6,7 @@ use crate::song::Song;
 const PAGE_W: f32 = 210.0;
 const PAGE_H: f32 = 297.0;
 const MARGIN: f32 = 22.0;
-const RIGHT:  f32 = PAGE_W - MARGIN;
+const RIGHT: f32 = PAGE_W - MARGIN;
 
 /// Render `song` into a PDF and return the raw bytes.
 /// `use_degrees`    – when `true`, chords are shown as roman-numeral scale degrees.
@@ -19,11 +19,10 @@ pub fn generate_pdf_bytes(
     part_name_size: f32,
     chord_size: f32,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let (doc, page1, layer1) =
-        PdfDocument::new(&song.name, Mm(PAGE_W), Mm(PAGE_H), "Layer 1");
+    let (doc, page1, layer1) = PdfDocument::new(&song.name, Mm(PAGE_W), Mm(PAGE_H), "Layer 1");
     let layer = doc.get_page(page1).get_layer(layer1);
 
-    let font_bold    = doc.add_builtin_font(BuiltinFont::HelveticaBold)?;
+    let font_bold = doc.add_builtin_font(BuiltinFont::HelveticaBold)?;
     let font_regular = doc.add_builtin_font(BuiltinFont::Helvetica)?;
 
     let mut y: f32 = PAGE_H - MARGIN;
@@ -52,7 +51,7 @@ pub fn generate_pdf_bytes(
     layer.add_line(Line {
         points: vec![
             (Point::new(Mm(MARGIN), Mm(y)), false),
-            (Point::new(Mm(RIGHT),  Mm(y)), false),
+            (Point::new(Mm(RIGHT), Mm(y)), false),
         ],
         is_closed: false,
     });
@@ -78,19 +77,20 @@ pub fn generate_pdf_bytes(
         // Chords – root at chord_size pt, quality as superscript
         let mut x: f32 = MARGIN;
         // All metrics scale proportionally with chord_size (baseline: 18 pt)
-        let scale:       f32 = chord_size / 18.0;
-        let row_h:       f32 = 12.0 * scale;
-        let gap:         f32 =  6.0;
-        let qual_size:   f32 = chord_size * (10.0 / 18.0);
-        let raise_mm:    f32 = chord_size * (3.8  / 18.0);
-        let sup_offset:  f32 =  1.0;
-        let root_char_w: f32 = chord_size * (3.5  / 18.0);
+        let scale: f32 = chord_size / 18.0;
+        let row_h: f32 = 12.0 * scale;
+        let gap: f32 = 6.0;
+        let qual_size: f32 = chord_size * (10.0 / 18.0);
+        let raise_mm: f32 = chord_size * (3.8 / 18.0);
+        let sup_offset: f32 = 1.0;
+        let root_char_w: f32 = chord_size * (3.5 / 18.0);
         let qual_char_w: f32 = root_char_w * (qual_size / chord_size);
 
         for chord in &part.chords {
             // In degrees mode use the roman numeral; fall back to root name if no degree set.
             let root: String = if use_degrees {
-                chord.degree
+                chord
+                    .degree
                     .map(|d| d.roman().to_string())
                     .unwrap_or_else(|| chord.root.clone())
             } else {
@@ -98,14 +98,16 @@ pub fn generate_pdf_bytes(
             };
             let quality = chord.quality.symbol();
 
-            let root_w  = root.len()    as f32 * root_char_w;
-            let qual_w  = quality.len() as f32 * qual_char_w;
+            let root_w = root.len() as f32 * root_char_w;
+            let qual_w = quality.len() as f32 * qual_char_w;
             let total_w = root_w + sup_offset + qual_w;
 
             if x + total_w > RIGHT {
-                x  = MARGIN;
+                x = MARGIN;
                 y -= row_h + gap;
-                if y < MARGIN + 10.0 { break; }
+                if y < MARGIN + 10.0 {
+                    break;
+                }
             }
 
             // Root note (or roman numeral)
