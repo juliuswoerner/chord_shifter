@@ -13,21 +13,22 @@ fn trigger_download(bytes: Vec<u8>, filename: &str) {
     use web_sys::{Blob, BlobPropertyBag, HtmlAnchorElement, Url};
 
     let array = Uint8Array::from(bytes.as_slice());
-    let parts  = js_sys::Array::new();
+    let parts = js_sys::Array::new();
     parts.push(&array);
 
     let opts = BlobPropertyBag::new();
     opts.set_type("application/pdf");
 
-    let blob = Blob::new_with_u8_array_sequence_and_options(&parts, &opts)
-        .expect("blob");
-    let url  = Url::create_object_url_with_blob(&blob).expect("object url");
+    let blob = Blob::new_with_u8_array_sequence_and_options(&parts, &opts).expect("blob");
+    let url = Url::create_object_url_with_blob(&blob).expect("object url");
 
-    let window   = web_sys::window().expect("window");
+    let window = web_sys::window().expect("window");
     let document = window.document().expect("document");
     let a: HtmlAnchorElement = document
-        .create_element("a").expect("a")
-        .dyn_into().expect("cast");
+        .create_element("a")
+        .expect("a")
+        .dyn_into()
+        .expect("cast");
 
     a.set_href(&url);
     a.set_download(&format!("{filename}.pdf"));
@@ -115,8 +116,8 @@ fn SongView(song: Signal<Song>) -> Element {
     };
 
     let mut transpose_root = use_signal(|| "C".to_string());
-    let mut part_name_size  = use_signal(|| 9_u32);
-    let mut chord_size      = use_signal(|| 18_u32);
+    let mut part_name_size = use_signal(|| 9_u32);
+    let mut chord_size = use_signal(|| 18_u32);
 
     rsx! {
         div {
@@ -423,8 +424,18 @@ fn SongView(song: Signal<Song>) -> Element {
 
 #[component]
 fn PartView(song: Signal<Song>, part_index: usize, show_degrees: Signal<bool>) -> Element {
-    let chord_count = song.read().parts.get(part_index).map(|p| p.chords.len()).unwrap_or(0);
-    let part_name   = song.read().parts.get(part_index).map(|p| p.name.clone()).unwrap_or_default();
+    let chord_count = song
+        .read()
+        .parts
+        .get(part_index)
+        .map(|p| p.chords.len())
+        .unwrap_or(0);
+    let part_name = song
+        .read()
+        .parts
+        .get(part_index)
+        .map(|p| p.name.clone())
+        .unwrap_or_default();
 
     rsx! {
         div {
@@ -529,7 +540,12 @@ fn PartView(song: Signal<Song>, part_index: usize, show_degrees: Signal<bool>) -
 // ── Chord editor ─────────────────────────────────────────────────────────────
 
 #[component]
-fn ChordEditor(song: Signal<Song>, part_index: usize, chord_index: usize, show_degrees: Signal<bool>) -> Element {
+fn ChordEditor(
+    song: Signal<Song>,
+    part_index: usize,
+    chord_index: usize,
+    show_degrees: Signal<bool>,
+) -> Element {
     let chord = song
         .read()
         .parts
@@ -538,7 +554,11 @@ fn ChordEditor(song: Signal<Song>, part_index: usize, chord_index: usize, show_d
         .cloned()
         .unwrap_or_else(|| Chord::new("C", ChordQuality::Major));
 
-    let display_label = if show_degrees() { chord.degree_display() } else { chord.display() };
+    let display_label = if show_degrees() {
+        chord.degree_display()
+    } else {
+        chord.display()
+    };
 
     rsx! {
         div {

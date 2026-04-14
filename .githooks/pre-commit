@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+BOLD='\033[1m'
+RESET='\033[0m'
+
+pass() { echo -e "${GREEN}✔${RESET}  $1"; }
+fail() { echo -e "${RED}✘${RESET}  $1"; }
+
+echo -e "\n${BOLD}Running pre-commit checks…${RESET}\n"
+
+# ── 1. Formatting ─────────────────────────────────────────────────────────────
+if ! cargo fmt --all -- --check 2>/dev/null; then
+    fail "Formatting issues found. Run \`cargo fmt\` to fix them."
+    exit 1
+fi
+pass "cargo fmt"
+
+# ── 2. Typos ──────────────────────────────────────────────────────────────────
+if ! command -v typos &>/dev/null; then
+    echo "  ⚠  'typos' not found — skipping spell check."
+    echo "     Install with: cargo install typos-cli"
+else
+    if ! typos; then
+        fail "Typos found. Fix them or add exceptions to .typos.toml."
+        exit 1
+    fi
+    pass "typos"
+fi
+
+echo -e "\n${GREEN}All checks passed.${RESET}\n"

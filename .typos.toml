@@ -1,0 +1,6 @@
+# Typos configuration – add project-specific exceptions here.
+# See: https://github.com/colessel/typos#false-positives
+
+[default.extend-words]
+# Example: ignore a word that typos incorrectly flags
+# "iff" = "iff"
