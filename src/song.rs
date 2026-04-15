@@ -1,6 +1,6 @@
 // ── Chord quality ─────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[allow(dead_code)]
 pub enum ChordQuality {
     Major,
@@ -79,7 +79,7 @@ impl ChordQuality {
 /// Examples in C Major:
 ///   C → 1 (I),  D → 2 (II),  E → 3 (III),  F → 4 (IV),
 ///   G → 5 (V),  A → 6 (VI),  B → 7 (VII)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[allow(dead_code)]
 pub struct ScaleDegree(pub u8);
 
@@ -122,7 +122,7 @@ impl std::fmt::Display for ScaleDegree {
 
 // ── Chord ─────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Chord {
     pub root: String,
     pub quality: ChordQuality,
@@ -166,7 +166,7 @@ impl Chord {
 // ── Song part ─────────────────────────────────────────────────────────────────
 
 /// A named section of a song (e.g. "Verse", "Chorus", or anything the user chooses).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SongPart {
     pub name: String,
     pub chords: Vec<Chord>,
@@ -232,7 +232,7 @@ fn index_to_note(index: u8, prefer_sharps: bool) -> &'static str {
 
 // ── Song ──────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Song {
     pub name: String,
     pub key: String,

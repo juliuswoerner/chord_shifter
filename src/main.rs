@@ -2,6 +2,8 @@
 
 use dioxus::prelude::*;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod db;
 mod pdf;
 mod song;
 
@@ -34,6 +36,127 @@ fn trigger_download(bytes: Vec<u8>, filename: &str) {
     a.set_download(&format!("{filename}.pdf"));
     a.click();
     let _ = Url::revoke_object_url(&url);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+use db::{Db, SongRow};
+
+// ── Web storage backend (localStorage, wasm32 only) ──────────────────────────
+// Desktop uses SQLite via db.rs; the browser uses localStorage so the Library
+// panel works the same way on both platforms.
+
+#[cfg(target_arch = "wasm32")]
+const LS_SONGS_KEY: &str = "chord_shifter_songs";
+
+#[cfg(target_arch = "wasm32")]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredSong {
+    id: i64,
+    name: String,
+    artist: String,
+    key: String,
+    parts_json: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn ls_read() -> Vec<StoredSong> {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item(LS_SONGS_KEY).ok().flatten())
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn ls_write(songs: &[StoredSong]) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        if let Ok(json) = serde_json::to_string(songs) {
+            let _ = storage.set_item(LS_SONGS_KEY, &json);
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct Db;
+
+#[cfg(target_arch = "wasm32")]
+impl Db {
+    fn open(_: &str) -> Result<Self, String> {
+        Ok(Self)
+    }
+
+    fn save_song(&self, song: &song::Song) -> Result<i64, String> {
+        let parts_json = serde_json::to_string(&song.parts).map_err(|e| e.to_string())?;
+        let mut songs = ls_read();
+        if let Some(row) = songs
+            .iter_mut()
+            .find(|s| s.name == song.name && s.artist == song.artist)
+        {
+            row.key = song.key.clone();
+            row.parts_json = parts_json;
+            let id = row.id;
+            ls_write(&songs);
+            Ok(id)
+        } else {
+            let id = songs.iter().map(|s| s.id).max().unwrap_or(0) + 1;
+            songs.push(StoredSong {
+                id,
+                name: song.name.clone(),
+                artist: song.artist.clone(),
+                key: song.key.clone(),
+                parts_json,
+            });
+            ls_write(&songs);
+            Ok(id)
+        }
+    }
+
+    fn list_songs(&self) -> Result<Vec<SongRow>, String> {
+        Ok(ls_read()
+            .into_iter()
+            .map(|s| SongRow {
+                id: s.id,
+                name: s.name,
+                artist: s.artist,
+            })
+            .collect())
+    }
+
+    fn load_song(&self, id: i64) -> Result<song::Song, String> {
+        ls_read()
+            .into_iter()
+            .find(|s| s.id == id)
+            .ok_or_else(|| format!("Song {id} not found"))
+            .and_then(|s| {
+                let parts = serde_json::from_str(&s.parts_json).map_err(|e| e.to_string())?;
+                Ok(song::Song {
+                    name: s.name,
+                    artist: s.artist,
+                    key: s.key,
+                    parts,
+                })
+            })
+    }
+
+    fn delete_song(&self, id: i64) -> Result<(), String> {
+        let mut songs = ls_read();
+        songs.retain(|s| s.id != id);
+        ls_write(&songs);
+        Ok(())
+    }
+
+    fn save_pdf(&self, _: i64, _: &[u8]) -> Result<i64, String> {
+        Ok(0) // PDFs not persisted in the browser (localStorage size limits)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Debug)]
+struct SongRow {
+    id: i64,
+    name: String,
+    artist: String,
 }
 
 use song::{Chord, ChordQuality, ScaleDegree, Song};
@@ -82,6 +205,14 @@ fn example_song() -> Song {
 fn App() -> Element {
     let song = use_signal(example_song);
 
+    let db: Signal<Option<Db>> = use_signal(|| {
+        Db::open("chord_shifter.db")
+            .map_err(|e| eprintln!("DB open failed: {e}"))
+            .ok()
+    });
+    // Incremented after every successful save; SongLibrary watches it to re-fetch.
+    let library_rev: Signal<u32> = use_signal(|| 0);
+
     rsx! {
         div {
             style: "
@@ -92,8 +223,13 @@ fn App() -> Element {
                 align-items: flex-start;
                 justify-content: center;
                 padding: 48px 20px;
+                gap: 32px;
             ",
-            SongView { song }
+
+            // ── Song library sidebar ───────────────────────────────────────
+            SongLibrary { song, db, library_rev }
+
+            SongView { song, db, library_rev }
         }
     }
 }
@@ -101,7 +237,7 @@ fn App() -> Element {
 // ── Song sheet ────────────────────────────────────────────────────────────────
 
 #[component]
-fn SongView(song: Signal<Song>) -> Element {
+fn SongView(song: Signal<Song>, db: Signal<Option<Db>>, mut library_rev: Signal<u32>) -> Element {
     let mut show_degrees = use_signal(|| false);
 
     let chords_btn_style = if !show_degrees() {
@@ -416,11 +552,53 @@ fn SongView(song: Signal<Song>) -> Element {
                 },
                 "📄  Export as PDF"
             }
+
+            // ── Save to DB button ─────────────────────────────────────────
+            button {
+                style: "
+                    margin-top: 12px;
+                    width: 100%;
+                    padding: 15px;
+                    background: #2d6a4f;
+                    color: #f0ece2;
+                    border: none;
+                    border-radius: 10px;
+                    font-size: 15px;
+                    font-weight: 700;
+                    letter-spacing: 0.6px;
+                    cursor: pointer;
+                    font-family: inherit;
+                ",
+                onclick: move |_| {
+                    let s   = song.read().clone();
+                    let deg = show_degrees();
+                    let pns = part_name_size() as f32;
+                    let cs  = chord_size() as f32;
+                    if let Some(db_ref) = db.read().as_ref() {
+                        match db_ref.save_song(&s) {
+                            Ok(song_id) => {
+                                println!("✅  Song saved (id={song_id})");
+                                *library_rev.write() += 1;
+                                // Also generate and store the current PDF
+                                match pdf::generate_pdf_bytes(&s, deg, pns, cs) {
+                                    Ok(bytes) => match db_ref.save_pdf(song_id, &bytes) {
+                                        Ok(pdf_id) => println!("✅  PDF stored (id={pdf_id})"),
+                                        Err(e) => eprintln!("❌  PDF store failed: {e}"),
+                                    },
+                                    Err(e) => eprintln!("❌  PDF generation failed: {e}"),
+                                }
+                            }
+                            Err(e) => eprintln!("❌  Save failed: {e}"),
+                        }
+                    }
+                },
+                "💾  Save to Library"
+            }
         }
     }
 }
 
-// ── Part block ───────────────────────────────────────────────────────────────
+// ── Part block ────────────────────────────────────────────────────────────────
 
 #[component]
 fn PartView(song: Signal<Song>, part_index: usize, show_degrees: Signal<bool>) -> Element {
@@ -537,6 +715,162 @@ fn PartView(song: Signal<Song>, part_index: usize, show_degrees: Signal<bool>) -
     }
 }
 
+// ── Song library sidebar ──────────────────────────────────────────────────────
+
+#[component]
+fn SongLibrary(song: Signal<Song>, db: Signal<Option<Db>>, library_rev: Signal<u32>) -> Element {
+    // Local list of song rows, refreshed on demand
+    let mut rows: Signal<Vec<SongRow>> = use_signal(Vec::new);
+    let mut status: Signal<String> = use_signal(String::new);
+
+    // Re-fetch whenever library_rev changes (incremented by Save button)
+    use_effect(move || {
+        let _rev = library_rev();
+        if let Some(db_ref) = db.read().as_ref() {
+            match db_ref.list_songs() {
+                Ok(list) => *rows.write() = list,
+                Err(e) => *status.write() = format!("Load error: {e}"),
+            }
+        }
+    });
+
+    rsx! {
+        div {
+            style: "
+                background: #ffffff;
+                border-radius: 14px;
+                padding: 24px 20px;
+                box-shadow: 0 4px 32px rgba(0,0,0,0.10);
+                width: 260px;
+                min-width: 220px;
+                align-self: flex-start;
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+            ",
+
+            // Header + Refresh
+            div {
+                style: "display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;",
+                h3 {
+                    style: "margin: 0; font-size: 15px; font-weight: 800; color: #1a1a2e; letter-spacing: 0.5px;",
+                    "📚  Library"
+                }
+                button {
+                    style: "
+                        padding: 4px 10px;
+                        background: #f0ece2;
+                        border: 1px solid #d8d4ca;
+                        border-radius: 8px;
+                        font-size: 12px;
+                        font-weight: 700;
+                        cursor: pointer;
+                        font-family: inherit;
+                        color: #1a1a2e;
+                    ",
+                    onclick: move |_| {
+                        if let Some(db_ref) = db.read().as_ref() {
+                            match db_ref.list_songs() {
+                                Ok(list) => *rows.write() = list,
+                                Err(e) => *status.write() = format!("Refresh error: {e}"),
+                            }
+                        }
+                    },
+                    "↻  Refresh"
+                }
+            }
+
+            // Status message
+            if !status.read().is_empty() {
+                p { style: "color: #c0392b; font-size: 12px; margin: 0;", "{status}" }
+            }
+
+            // Song list
+            if rows.read().is_empty() {
+                p {
+                    style: "color: #aaa; font-size: 13px; margin: 0; text-align: center; padding: 16px 0;",
+                    "No songs saved yet."
+                }
+            }
+
+            for row in rows.read().iter().cloned() {
+                {
+                    let row_id = row.id;
+                    rsx! {
+                        div {
+                            key: "{row_id}",
+                            style: "
+                                display: flex;
+                                align-items: center;
+                                gap: 6px;
+                                background: #f7f5f0;
+                                border-radius: 8px;
+                                padding: 8px 10px;
+                            ",
+
+                            // Load button (the song title)
+                            button {
+                                style: "
+                                    flex: 1;
+                                    text-align: left;
+                                    background: none;
+                                    border: none;
+                                    cursor: pointer;
+                                    font-family: inherit;
+                                    font-size: 13px;
+                                    font-weight: 700;
+                                    color: #1a1a2e;
+                                    padding: 0;
+                                    overflow: hidden;
+                                    text-overflow: ellipsis;
+                                    white-space: nowrap;
+                                ",
+                                title: "{row.name} – {row.artist}",
+                                onclick: move |_| {
+                                    if let Some(db_ref) = db.read().as_ref() {
+                                        match db_ref.load_song(row_id) {
+                                            Ok(loaded) => *song.write() = loaded,
+                                            Err(e) => eprintln!("Load error: {e}"),
+                                        }
+                                    }
+                                },
+                                "{row.name}"
+                                span {
+                                    style: "font-weight: 400; font-size: 11px; color: #777; display: block;",
+                                    "{row.artist}"
+                                }
+                            }
+
+                            // Delete button
+                            button {
+                                style: "
+                                    background: none;
+                                    border: none;
+                                    cursor: pointer;
+                                    font-size: 14px;
+                                    padding: 2px 4px;
+                                    color: #c0392b;
+                                    border-radius: 4px;
+                                ",
+                                title: "Delete",
+                                onclick: move |_| {
+                                    if let Some(db_ref) = db.read().as_ref() {
+                                        let _ = db_ref.delete_song(row_id);
+                                        match db_ref.list_songs() {
+                                            Ok(list) => *rows.write() = list,
+                                            Err(e) => *status.write() = format!("Refresh error: {e}"),
+                                        }
+                                    }
+                                },
+                                "✕"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 // ── Chord editor ─────────────────────────────────────────────────────────────
 
 #[component]
