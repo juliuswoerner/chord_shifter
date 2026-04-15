@@ -236,6 +236,7 @@ fn index_to_note(index: u8, prefer_sharps: bool) -> &'static str {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Instrument {
     Guitar,
+    AcousticGuitar,
     Bass,
     Piano,
     Drums,
@@ -244,25 +245,53 @@ pub enum Instrument {
 impl Instrument {
     pub fn icon(self) -> &'static str {
         match self {
-            Instrument::Guitar => "🎸",
-            Instrument::Bass => "🎸",
-            Instrument::Piano => "🎹",
-            Instrument::Drums => "🥁",
+            Instrument::Guitar => "\u{1F3B8}",
+            Instrument::AcousticGuitar => "\u{1FA95}",
+            Instrument::Bass => "\u{1F3B8}",
+            Instrument::Piano => "\u{1F3B9}",
+            Instrument::Drums => "\u{1F941}",
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            Instrument::Guitar => "Guitar",
+            Instrument::Guitar => "Electric",
+            Instrument::AcousticGuitar => "Acoustic",
             Instrument::Bass => "Bass",
             Instrument::Piano => "Piano",
             Instrument::Drums => "Drums",
         }
     }
 
-    pub fn all() -> [Instrument; 4] {
+    /// Accent colour used on the instrument sheet page.
+    #[allow(dead_code)]
+    pub fn accent_color(self) -> &'static str {
+        match self {
+            Instrument::Guitar => "#1a5c38",
+            Instrument::AcousticGuitar => "#7c4a00",
+            Instrument::Bass => "#1a2e5c",
+            Instrument::Piano => "#4a1a6e",
+            Instrument::Drums => "#7c1a1a",
+        }
+    }
+
+    /// Parse from the label string (used for URL routing).
+    #[allow(dead_code)]
+    pub fn from_label(s: &str) -> Option<Instrument> {
+        match s {
+            "Electric" => Some(Instrument::Guitar),
+            "Acoustic" => Some(Instrument::AcousticGuitar),
+            "Bass" => Some(Instrument::Bass),
+            "Piano" => Some(Instrument::Piano),
+            "Drums" => Some(Instrument::Drums),
+            _ => None,
+        }
+    }
+
+    pub fn all() -> [Instrument; 5] {
         [
             Instrument::Guitar,
+            Instrument::AcousticGuitar,
             Instrument::Bass,
             Instrument::Piano,
             Instrument::Drums,

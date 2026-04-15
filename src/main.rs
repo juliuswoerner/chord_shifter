@@ -261,6 +261,8 @@ enum Route {
     NewSongPage {},
     #[route("/song/:id")]
     SongPage { id: i64 },
+    #[route("/song/:id/instrument/:instrument")]
+    InstrumentSheetPage { id: i64, instrument: String },
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -346,6 +348,7 @@ fn SongView(
     song: Signal<Song>,
     db: Signal<Option<Db>>,
     mut current_user: Signal<Option<User>>,
+    song_id: Option<i64>,
 ) -> Element {
     let nav = use_navigator();
     let mut show_degrees = use_signal(|| false);
@@ -601,11 +604,18 @@ fn SongView(
                                         style: "{btn_style}",
                                         title: "{inst.label()}",
                                         onclick: move |_| {
-                                            let mut s = song.write();
-                                            if s.instruments.contains(&inst) {
-                                                s.instruments.retain(|i| i != &inst);
+                                            if let Some(id) = song_id {
+                                                nav.push(Route::InstrumentSheetPage {
+                                                    id,
+                                                    instrument: inst.label().to_string(),
+                                                });
                                             } else {
-                                                s.instruments.push(inst);
+                                                let mut s = song.write();
+                                                if s.instruments.contains(&inst) {
+                                                    s.instruments.retain(|i| i != &inst);
+                                                } else {
+                                                    s.instruments.push(inst);
+                                                }
                                             }
                                         },
                                         span { style: "{icon_style}", "{inst.icon()}" }
@@ -1306,7 +1316,7 @@ fn SongPage(id: i64) -> Element {
     rsx! {
         div {
             style: "display: flex; align-items: flex-start; justify-content: center; padding: 48px 20px;",
-            SongView { song, db, current_user }
+            SongView { song, db, current_user, song_id: Some(id) }
         }
     }
 }
@@ -1323,7 +1333,173 @@ fn NewSongPage() -> Element {
     rsx! {
         div {
             style: "display: flex; align-items: flex-start; justify-content: center; padding: 48px 20px;",
-            SongView { song, db, current_user }
+            SongView { song, db, current_user, song_id: None }
+        }
+    }
+}
+
+// ── Instrument sheet page ───────────────────────────────────────────────────────────────
+
+#[component]
+fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
+    let db: Signal<Option<Db>> = use_context();
+    let mut current_user: Signal<Option<User>> = use_context();
+    let nav = use_navigator();
+
+    let song: Signal<Song> = use_signal(move || {
+        db.read()
+            .as_ref()
+            .and_then(|d| d.load_song(id).ok())
+            .unwrap_or_else(example_song)
+    });
+
+    let inst = Instrument::from_label(&instrument);
+    let accent = inst.map(|i| i.accent_color()).unwrap_or("#1a1a2e");
+    let inst_icon = inst.map(|i| i.icon()).unwrap_or("🎵");
+    let inst_label = inst
+        .map(|i| i.label())
+        .unwrap_or_else(|| instrument.as_str());
+
+    rsx! {
+        div {
+            style: "display: flex; align-items: flex-start; justify-content: center; padding: 48px 20px;",
+
+            div {
+                style: "
+                    background: #ffffff;
+                    border-radius: 14px;
+                    padding: 48px 52px;
+                    box-shadow: 0 4px 32px rgba(0,0,0,0.10);
+                    max-width: 720px;
+                    width: 100%;
+                ",
+
+                // ── Page header ───────────────────────────────────────────────────────────────
+                div {
+                    style: "border-bottom: 2px solid #e8e4da; padding-bottom: 28px; margin-bottom: 36px;",
+
+                    // Top nav: back + user + logout
+                    div {
+                        style: "display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 20px;",
+                        button {
+                            style: "padding: 4px 12px; background: transparent; border: 1px solid #ccc; border-radius: 8px; font-size: 11px; font-weight: 700; cursor: pointer; font-family: inherit; color: #888;",
+                            onclick: move |_| { nav.push(Route::SongPage { id }); },
+                            "←  Full Sheet"
+                        }
+                        div {
+                            style: "display: flex; align-items: center; gap: 10px;",
+                            if let Some(user) = current_user.read().as_ref() {
+                                span {
+                                    style: "font-size: 12px; color: #888; font-weight: 600;",
+                                    "👤  {user.username}"
+                                }
+                            }
+                            button {
+                                style: "padding: 4px 12px; background: transparent; border: 1px solid #ccc; border-radius: 8px; font-size: 11px; font-weight: 700; cursor: pointer; font-family: inherit; color: #888;",
+                                onclick: move |_| *current_user.write() = None,
+                                "Log out"
+                            }
+                        }
+                    }
+
+                    // Instrument badge
+                    div {
+                        style: "display: inline-flex; align-items: center; gap: 10px; background: {accent}; color: #fff; border-radius: 12px; padding: 10px 20px; margin-bottom: 22px;",
+                        span { style: "font-size: 28px; line-height: 1;", "{inst_icon}" }
+                        span { style: "font-size: 16px; font-weight: 800; letter-spacing: 0.5px;", "{inst_label}" }
+                    }
+
+                    // Song title + artist
+                    h1 {
+                        style: "margin: 0 0 6px; font-size: 38px; font-weight: 800; color: #1a1a2e; letter-spacing: -0.5px;",
+                        "{song.read().name}"
+                    }
+                    p {
+                        style: "margin: 0 0 14px; font-size: 17px; color: #666; font-style: italic;",
+                        "{song.read().artist}"
+                    }
+
+                    // Key pill
+                    span {
+                        style: "display: inline-block; background: {accent}; color: #fff; border-radius: 20px; padding: 5px 16px; font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;",
+                        "Key: {song.read().key}"
+                    }
+                }
+
+                // ── Chord parts (read-only) ──────────────────────────────────────────────────
+                for part_index in 0..song.read().parts.len() {{
+                    let part_name = song
+                        .read()
+                        .parts
+                        .get(part_index)
+                        .map(|p| p.name.clone())
+                        .unwrap_or_default();
+                    let chord_count = song
+                        .read()
+                        .parts
+                        .get(part_index)
+                        .map(|p| p.chords.len())
+                        .unwrap_or(0);
+                    rsx! {
+                        div {
+                            key: "{part_index}",
+                            style: "margin-bottom: 32px; border: 1px solid #ece8df; border-radius: 12px; padding: 18px 20px 16px;",
+                            p {
+                                style: "margin: 0 0 14px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 3px; color: #aaa;",
+                                "{part_name}"
+                            }
+                            div {
+                                style: "display: flex; flex-wrap: wrap; gap: 10px;",
+                                for chord_index in 0..chord_count {{
+                                    let chord = song
+                                        .read()
+                                        .parts
+                                        .get(part_index)
+                                        .and_then(|p| p.chords.get(chord_index))
+                                        .cloned()
+                                        .unwrap_or_else(|| Chord::new("C", ChordQuality::Major));
+                                    rsx! {
+                                        div {
+                                            key: "{chord_index}",
+                                            style: "
+                                                background: #f5f2ea;
+                                                border: 2px solid {accent};
+                                                border-radius: 12px;
+                                                padding: 14px 18px;
+                                                min-width: 72px;
+                                                text-align: center;
+                                            ",
+                                            span {
+                                                style: "font-size: 36px; font-weight: 800; color: #1a1a2e; letter-spacing: -1px; line-height: 1; display: block;",
+                                                "{chord.display()}"
+                                            }
+                                        }
+                                    }
+                                }}
+                            }
+                        }
+                    }
+                }}
+
+                // ── Vocals / notes (read-only) ─────────────────────────────────────────────
+                if !song.read().vocals_notes.is_empty() {
+                    div {
+                        style: "border: 1.5px solid #e8e4da; border-radius: 12px; overflow: hidden;",
+                        div {
+                            style: "display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: #f7f5f0; border-bottom: 1.5px solid #e8e4da;",
+                            span { style: "font-size: 18px; line-height: 1;", "🎤" }
+                            span {
+                                style: "font-size: 11px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: 1.2px;",
+                                "Vocals / Notes"
+                            }
+                        }
+                        div {
+                            style: "padding: 14px 16px; font-size: 14px; color: #444; line-height: 1.6; white-space: pre-wrap;",
+                            "{song.read().vocals_notes}"
+                        }
+                    }
+                }
+            }
         }
     }
 }
