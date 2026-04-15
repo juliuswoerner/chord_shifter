@@ -2,10 +2,12 @@
 ///
 /// Schema
 /// ──────
+/// users (id INTEGER PK, username TEXT UNIQUE, password_hash TEXT)
 /// songs (id INTEGER PK, name TEXT, artist TEXT, key TEXT, parts_json TEXT)
 /// pdfs  (id INTEGER PK, song_id INTEGER FK → songs.id, created_at TEXT, data BLOB)
 use rusqlite::{params, Connection, Result};
 
+use crate::auth;
 use crate::song::Song;
 
 // ── Database handle ───────────────────────────────────────────────────────────
@@ -35,6 +37,12 @@ impl Db {
     fn migrate(&self) -> Result<()> {
         self.conn.execute_batch(
             "
+            CREATE TABLE IF NOT EXISTS users (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                username      TEXT    NOT NULL UNIQUE,
+                password_hash TEXT    NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS songs (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 name       TEXT    NOT NULL,
@@ -52,6 +60,61 @@ impl Db {
             );
             ",
         )
+    }
+}
+
+// ── User ─────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct User {
+    #[allow(dead_code)]
+    pub id: i64,
+    pub username: String,
+}
+
+impl Db {
+    /// Create a new user. The password is hashed with Argon2id before storage.
+    /// Returns the new user's id, or an error if the username is already taken.
+    pub fn create_user(&self, username: &str, password: &str) -> Result<i64> {
+        let hash =
+            auth::hash_password(password).map_err(|e| rusqlite::Error::InvalidParameterName(e))?;
+        self.conn.execute(
+            "INSERT INTO users (username, password_hash) VALUES (?1, ?2)",
+            params![username, hash],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Verify credentials. Returns `Some(User)` on success, `None` on bad
+    /// username or wrong password.
+    pub fn verify_user(&self, username: &str, password: &str) -> Result<Option<User>> {
+        let result = self.conn.query_row(
+            "SELECT id, password_hash FROM users WHERE username = ?1",
+            params![username],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        );
+        match result {
+            Ok((id, hash)) => {
+                if auth::verify_password(password, &hash) {
+                    Ok(Some(User {
+                        id,
+                        username: username.to_string(),
+                    }))
+                } else {
+                    Ok(None)
+                }
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Check if any users exist (used to show Register vs Login on first run).
+    pub fn has_users(&self) -> Result<bool> {
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))?;
+        Ok(count > 0)
     }
 }
 
@@ -216,6 +279,30 @@ mod tests {
                 Chord::new("C", ChordQuality::Major).with_degree(5),
             ],
         )
+    }
+
+    #[test]
+    fn create_and_verify_user() {
+        let db = Db::open_in_memory().unwrap();
+        db.create_user("alice", "s3cr3t").unwrap();
+        let user = db.verify_user("alice", "s3cr3t").unwrap();
+        assert!(user.is_some());
+        assert_eq!(user.unwrap().username, "alice");
+    }
+
+    #[test]
+    fn wrong_password_returns_none() {
+        let db = Db::open_in_memory().unwrap();
+        db.create_user("bob", "correct").unwrap();
+        let result = db.verify_user("bob", "wrong").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn duplicate_username_is_error() {
+        let db = Db::open_in_memory().unwrap();
+        db.create_user("carol", "pw1").unwrap();
+        assert!(db.create_user("carol", "pw2").is_err());
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 use dioxus::prelude::*;
 
+mod auth;
 #[cfg(not(target_arch = "wasm32"))]
 mod db;
 mod pdf;
@@ -39,7 +40,7 @@ fn trigger_download(bytes: Vec<u8>, filename: &str) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-use db::{Db, SongRow};
+use db::{Db, SongRow, User};
 
 // ── Web storage backend (localStorage, wasm32 only) ──────────────────────────
 // Desktop uses SQLite via db.rs; the browser uses localStorage so the Library
@@ -47,6 +48,16 @@ use db::{Db, SongRow};
 
 #[cfg(target_arch = "wasm32")]
 const LS_SONGS_KEY: &str = "chord_shifter_songs";
+#[cfg(target_arch = "wasm32")]
+const LS_USERS_KEY: &str = "chord_shifter_users";
+
+#[cfg(target_arch = "wasm32")]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredUser {
+    id: i64,
+    username: String,
+    password_hash: String,
+}
 
 #[cfg(target_arch = "wasm32")]
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -56,6 +67,24 @@ struct StoredSong {
     artist: String,
     key: String,
     parts_json: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn ls_read_users() -> Vec<StoredUser> {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item(LS_USERS_KEY).ok().flatten())
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn ls_write_users(users: &[StoredUser]) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        if let Ok(json) = serde_json::to_string(users) {
+            let _ = storage.set_item(LS_USERS_KEY, &json);
+        }
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -149,6 +178,49 @@ impl Db {
     fn save_pdf(&self, _: i64, _: &[u8]) -> Result<i64, String> {
         Ok(0) // PDFs not persisted in the browser (localStorage size limits)
     }
+
+    fn create_user(&self, username: &str, password: &str) -> Result<i64, String> {
+        let mut users = ls_read_users();
+        if users.iter().any(|u| u.username == username) {
+            return Err(format!("Username '{username}' is already taken"));
+        }
+        let hash = auth::hash_password(password)?;
+        let id = users.iter().map(|u| u.id).max().unwrap_or(0) + 1;
+        users.push(StoredUser {
+            id,
+            username: username.to_string(),
+            password_hash: hash,
+        });
+        ls_write_users(&users);
+        Ok(id)
+    }
+
+    fn verify_user(&self, username: &str, password: &str) -> Result<Option<User>, String> {
+        Ok(ls_read_users()
+            .into_iter()
+            .find(|u| u.username == username)
+            .and_then(|u| {
+                if auth::verify_password(password, &u.password_hash) {
+                    Some(User {
+                        id: u.id,
+                        username: u.username,
+                    })
+                } else {
+                    None
+                }
+            }))
+    }
+
+    fn has_users(&self) -> Result<bool, String> {
+        Ok(!ls_read_users().is_empty())
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Debug)]
+struct User {
+    id: i64,
+    username: String,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -204,14 +276,13 @@ fn example_song() -> Song {
 #[component]
 fn App() -> Element {
     let song = use_signal(example_song);
-
     let db: Signal<Option<Db>> = use_signal(|| {
         Db::open("chord_shifter.db")
             .map_err(|e| eprintln!("DB open failed: {e}"))
             .ok()
     });
-    // Incremented after every successful save; SongLibrary watches it to re-fetch.
     let library_rev: Signal<u32> = use_signal(|| 0);
+    let current_user: Signal<Option<User>> = use_signal(|| None);
 
     rsx! {
         div {
@@ -226,10 +297,13 @@ fn App() -> Element {
                 gap: 32px;
             ",
 
-            // ── Song library sidebar ───────────────────────────────────────
-            SongLibrary { song, db, library_rev }
-
-            SongView { song, db, library_rev }
+            if current_user.read().is_none() {
+                LoginScreen { db, current_user }
+            } else {
+                // ── Song library sidebar ─────────────────────────────────
+                SongLibrary { song, db, library_rev }
+                SongView { song, db, library_rev, current_user }
+            }
         }
     }
 }
@@ -237,7 +311,12 @@ fn App() -> Element {
 // ── Song sheet ────────────────────────────────────────────────────────────────
 
 #[component]
-fn SongView(song: Signal<Song>, db: Signal<Option<Db>>, mut library_rev: Signal<u32>) -> Element {
+fn SongView(
+    song: Signal<Song>,
+    db: Signal<Option<Db>>,
+    mut library_rev: Signal<u32>,
+    mut current_user: Signal<Option<User>>,
+) -> Element {
     let mut show_degrees = use_signal(|| false);
 
     let chords_btn_style = if !show_degrees() {
@@ -273,6 +352,32 @@ fn SongView(song: Signal<Song>, db: Signal<Option<Db>>, mut library_rev: Signal<
                     padding-bottom: 24px;
                     margin-bottom: 36px;
                 ",
+
+                // Top row: user greeting + logout
+                div {
+                    style: "display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-bottom: 16px;",
+                    if let Some(user) = current_user.read().as_ref() {
+                        span {
+                            style: "font-size: 12px; color: #888; font-weight: 600;",
+                            "👤  {user.username}"
+                        }
+                    }
+                    button {
+                        style: "
+                            padding: 4px 12px;
+                            background: transparent;
+                            border: 1px solid #ccc;
+                            border-radius: 8px;
+                            font-size: 11px;
+                            font-weight: 700;
+                            cursor: pointer;
+                            font-family: inherit;
+                            color: #888;
+                        ",
+                        onclick: move |_| *current_user.write() = None,
+                        "Log out"
+                    }
+                }
 
                 // Song name
                 input {
@@ -593,6 +698,153 @@ fn SongView(song: Signal<Song>, db: Signal<Option<Db>>, mut library_rev: Signal<
                     }
                 },
                 "💾  Save to Library"
+            }
+        }
+    }
+}
+
+// ── Login / Register screen ───────────────────────────────────────────────────
+
+#[component]
+fn LoginScreen(db: Signal<Option<Db>>, mut current_user: Signal<Option<User>>) -> Element {
+    let mut username = use_signal(String::new);
+    let mut password = use_signal(String::new);
+    let mut error_msg: Signal<String> = use_signal(String::new);
+
+    // true = show Register form, false = show Login form
+    // Start on Register if there are no users yet, Login otherwise.
+    let no_users = db
+        .read()
+        .as_ref()
+        .and_then(|d| d.has_users().ok())
+        .unwrap_or(false);
+    let mut is_register = use_signal(move || !no_users);
+
+    let form_title = if is_register() {
+        "Create account"
+    } else {
+        "Sign in"
+    };
+    let submit_label = if is_register() { "Register" } else { "Log in" };
+    let switch_label = if is_register() {
+        "Already have an account? Log in"
+    } else {
+        "No account yet? Register"
+    };
+
+    rsx! {
+        div {
+            style: "
+                background: #ffffff;
+                border-radius: 16px;
+                padding: 48px 52px;
+                box-shadow: 0 4px 32px rgba(0,0,0,0.12);
+                width: 380px;
+                display: flex;
+                flex-direction: column;
+                gap: 16px;
+            ",
+
+            h2 {
+                style: "margin: 0 0 8px; font-size: 26px; font-weight: 800; color: #1a1a2e;",
+                "🎵  Chord Shifter"
+            }
+            p {
+                style: "margin: 0 0 16px; font-size: 14px; color: #666;",
+                "{form_title}"
+            }
+
+            // Username
+            input {
+                style: "
+                    width: 100%; padding: 12px 14px; font-size: 14px;
+                    border: 1.5px solid #d0cbc0; border-radius: 8px;
+                    outline: none; font-family: inherit; box-sizing: border-box;
+                ",
+                r#type: "text",
+                placeholder: "Username",
+                value: "{username}",
+                oninput: move |e| {
+                    *username.write() = e.value();
+                    *error_msg.write() = String::new();
+                },
+            }
+
+            // Password
+            input {
+                style: "
+                    width: 100%; padding: 12px 14px; font-size: 14px;
+                    border: 1.5px solid #d0cbc0; border-radius: 8px;
+                    outline: none; font-family: inherit; box-sizing: border-box;
+                ",
+                r#type: "password",
+                placeholder: "Password",
+                value: "{password}",
+                oninput: move |e| {
+                    *password.write() = e.value();
+                    *error_msg.write() = String::new();
+                },
+            }
+
+            // Error message
+            if !error_msg.read().is_empty() {
+                p {
+                    style: "margin: 0; color: #c0392b; font-size: 13px; font-weight: 600;",
+                    "{error_msg}"
+                }
+            }
+
+            // Submit
+            button {
+                style: "
+                    padding: 14px; background: #1a1a2e; color: #f0ece2;
+                    border: none; border-radius: 10px; font-size: 15px;
+                    font-weight: 700; cursor: pointer; font-family: inherit;
+                    letter-spacing: 0.5px;
+                ",
+                onclick: move |_| {
+                    let u = username.read().trim().to_string();
+                    let p = password.read().clone();
+                    if u.is_empty() || p.is_empty() {
+                        *error_msg.write() = "Please fill in all fields.".into();
+                        return;
+                    }
+                    if let Some(db_ref) = db.read().as_ref() {
+                        if is_register() {
+                            match db_ref.create_user(&u, &p) {
+                                Ok(id) => {
+                                    *current_user.write() =
+                                        Some(User { id, username: u });
+                                }
+                                Err(e) => *error_msg.write() = e.to_string(),
+                            }
+                        } else {
+                            match db_ref.verify_user(&u, &p) {
+                                Ok(Some(user)) => *current_user.write() = Some(user),
+                                Ok(None) => {
+                                    *error_msg.write() =
+                                        "Invalid username or password.".into();
+                                }
+                                Err(e) => *error_msg.write() = e.to_string(),
+                            }
+                        }
+                    }
+                },
+                "{submit_label}"
+            }
+
+            // Switch between login / register
+            button {
+                style: "
+                    background: none; border: none; cursor: pointer;
+                    font-family: inherit; font-size: 13px; color: #888;
+                    text-decoration: underline; padding: 0;
+                ",
+                onclick: move |_| {
+                    *is_register.write() = !is_register();
+                    *error_msg.write() = String::new();
+                },
+                "{switch_label}"
             }
         }
     }
