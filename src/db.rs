@@ -3,7 +3,8 @@
 /// Schema
 /// ──────
 /// users (id INTEGER PK, username TEXT UNIQUE, password_hash TEXT)
-/// songs (id INTEGER PK, name TEXT, artist TEXT, key TEXT, parts_json TEXT)
+/// songs (id INTEGER PK, name TEXT, artist TEXT, key TEXT, parts_json TEXT,
+///        instruments_json TEXT, vocals_notes TEXT)
 /// pdfs  (id INTEGER PK, song_id INTEGER FK → songs.id, created_at TEXT, data BLOB)
 use rusqlite::{params, Connection, Result};
 
@@ -44,11 +45,13 @@ impl Db {
             );
 
             CREATE TABLE IF NOT EXISTS songs (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                name       TEXT    NOT NULL,
-                artist     TEXT    NOT NULL,
-                key        TEXT    NOT NULL,
-                parts_json TEXT    NOT NULL,
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                name             TEXT    NOT NULL,
+                artist           TEXT    NOT NULL,
+                key              TEXT    NOT NULL,
+                parts_json       TEXT    NOT NULL,
+                instruments_json TEXT    NOT NULL DEFAULT '[]',
+                vocals_notes     TEXT    NOT NULL DEFAULT '',
                 UNIQUE(name, artist)
             );
 
@@ -59,7 +62,20 @@ impl Db {
                 data       BLOB    NOT NULL
             );
             ",
-        )
+        )?;
+
+        // Best-effort migrations for existing databases: ignore "duplicate column"
+        // errors (which fire when the column already exists from the CREATE TABLE above).
+        let _ = self.conn.execute(
+            "ALTER TABLE songs ADD COLUMN instruments_json TEXT NOT NULL DEFAULT '[]'",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE songs ADD COLUMN vocals_notes TEXT NOT NULL DEFAULT ''",
+            [],
+        );
+
+        Ok(())
     }
 }
 
@@ -134,15 +150,26 @@ impl Db {
     /// If a song with the same name + artist already exists it is **updated**.
     pub fn save_song(&self, song: &Song) -> Result<i64> {
         let parts_json = serde_json::to_string(&song.parts).expect("Song is always serialisable");
+        let instruments_json =
+            serde_json::to_string(&song.instruments).expect("Instruments are always serialisable");
 
         // Upsert by (name, artist)
         self.conn.execute(
-            "INSERT INTO songs (name, artist, key, parts_json)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO songs (name, artist, key, parts_json, instruments_json, vocals_notes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(name, artist) DO UPDATE SET
-                 key        = excluded.key,
-                 parts_json = excluded.parts_json",
-            params![song.name, song.artist, song.key, parts_json],
+                 key              = excluded.key,
+                 parts_json       = excluded.parts_json,
+                 instruments_json = excluded.instruments_json,
+                 vocals_notes     = excluded.vocals_notes",
+            params![
+                song.name,
+                song.artist,
+                song.key,
+                parts_json,
+                instruments_json,
+                song.vocals_notes
+            ],
         )?;
 
         let id: i64 = self.conn.query_row(
@@ -177,13 +204,16 @@ impl Db {
     /// Load the full `Song` for a given id.
     pub fn load_song(&self, id: i64) -> Result<Song> {
         self.conn.query_row(
-            "SELECT name, artist, key, parts_json FROM songs WHERE id = ?1",
+            "SELECT name, artist, key, parts_json, instruments_json, vocals_notes
+             FROM songs WHERE id = ?1",
             params![id],
             |row| {
                 let name: String = row.get(0)?;
                 let artist: String = row.get(1)?;
                 let key: String = row.get(2)?;
                 let parts_json: String = row.get(3)?;
+                let instruments_json: String = row.get(4)?;
+                let vocals_notes: String = row.get(5)?;
 
                 let parts = serde_json::from_str(&parts_json).map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
@@ -192,12 +222,15 @@ impl Db {
                         Box::new(e),
                     )
                 })?;
+                let instruments = serde_json::from_str(&instruments_json).unwrap_or_default();
 
                 Ok(Song {
                     name,
                     artist,
                     key,
                     parts,
+                    instruments,
+                    vocals_notes,
                 })
             },
         )

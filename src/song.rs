@@ -230,6 +230,46 @@ fn index_to_note(index: u8, prefer_sharps: bool) -> &'static str {
     }
 }
 
+// ── Instrument ────────────────────────────────────────────────────────────────
+
+/// Which instrument(s) this chord sheet is arranged for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Instrument {
+    Guitar,
+    Bass,
+    Piano,
+    Drums,
+}
+
+impl Instrument {
+    pub fn icon(self) -> &'static str {
+        match self {
+            Instrument::Guitar => "🎸",
+            Instrument::Bass => "🎸",
+            Instrument::Piano => "🎹",
+            Instrument::Drums => "🥁",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Instrument::Guitar => "Guitar",
+            Instrument::Bass => "Bass",
+            Instrument::Piano => "Piano",
+            Instrument::Drums => "Drums",
+        }
+    }
+
+    pub fn all() -> [Instrument; 4] {
+        [
+            Instrument::Guitar,
+            Instrument::Bass,
+            Instrument::Piano,
+            Instrument::Drums,
+        ]
+    }
+}
+
 // ── Song ──────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -239,6 +279,12 @@ pub struct Song {
     pub artist: String,
     /// Ordered list of named parts, each with its own chord progression.
     pub parts: Vec<SongPart>,
+    /// Which instruments this arrangement is for.
+    #[serde(default)]
+    pub instruments: Vec<Instrument>,
+    /// Free-form vocals / lyrics notes.
+    #[serde(default)]
+    pub vocals_notes: String,
 }
 
 impl Song {
@@ -248,6 +294,8 @@ impl Song {
             key: key.into(),
             artist: artist.into(),
             parts: Vec::new(),
+            instruments: Vec::new(),
+            vocals_notes: String::new(),
         }
     }
 

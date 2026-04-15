@@ -67,6 +67,10 @@ struct StoredSong {
     artist: String,
     key: String,
     parts_json: String,
+    #[serde(default)]
+    instruments_json: String,
+    #[serde(default)]
+    vocals_notes: String,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -117,6 +121,8 @@ impl Db {
 
     fn save_song(&self, song: &song::Song) -> Result<i64, String> {
         let parts_json = serde_json::to_string(&song.parts).map_err(|e| e.to_string())?;
+        let instruments_json =
+            serde_json::to_string(&song.instruments).map_err(|e| e.to_string())?;
         let mut songs = ls_read();
         if let Some(row) = songs
             .iter_mut()
@@ -124,6 +130,8 @@ impl Db {
         {
             row.key = song.key.clone();
             row.parts_json = parts_json;
+            row.instruments_json = instruments_json;
+            row.vocals_notes = song.vocals_notes.clone();
             let id = row.id;
             ls_write(&songs);
             Ok(id)
@@ -135,6 +143,8 @@ impl Db {
                 artist: song.artist.clone(),
                 key: song.key.clone(),
                 parts_json,
+                instruments_json,
+                vocals_notes: song.vocals_notes.clone(),
             });
             ls_write(&songs);
             Ok(id)
@@ -159,11 +169,18 @@ impl Db {
             .ok_or_else(|| format!("Song {id} not found"))
             .and_then(|s| {
                 let parts = serde_json::from_str(&s.parts_json).map_err(|e| e.to_string())?;
+                let instruments = if s.instruments_json.is_empty() {
+                    Vec::new()
+                } else {
+                    serde_json::from_str(&s.instruments_json).unwrap_or_default()
+                };
                 Ok(song::Song {
                     name: s.name,
                     artist: s.artist,
                     key: s.key,
                     parts,
+                    instruments,
+                    vocals_notes: s.vocals_notes,
                 })
             })
     }
@@ -231,7 +248,7 @@ struct SongRow {
     artist: String,
 }
 
-use song::{Chord, ChordQuality, ScaleDegree, Song};
+use song::{Chord, ChordQuality, Instrument, ScaleDegree, Song};
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 #[derive(Routable, Clone, PartialEq)]
@@ -550,6 +567,55 @@ fn SongView(
                         "Transpose"
                     }
                 }
+
+                // ── Instrument picker ─────────────────────────────────────────
+                div {
+                    style: "margin-top: 18px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;",
+                    span {
+                        style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;",
+                        "Instruments:"
+                    }
+                    div {
+                        style: "display: flex; gap: 8px; flex-wrap: wrap;",
+                        for inst in Instrument::all() {
+                            {
+                                let is_active = song.read().instruments.contains(&inst);
+                                let btn_style = if is_active {
+                                    "display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:#1a1a2e;border:none;border-radius:10px;cursor:pointer;font-family:inherit;"
+                                } else {
+                                    "display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:#f0ece2;border:1.5px solid #d8d4ca;border-radius:10px;cursor:pointer;font-family:inherit;"
+                                };
+                                let icon_style = if is_active {
+                                    "font-size:22px;"
+                                } else {
+                                    "font-size:22px;opacity:0.35;"
+                                };
+                                let label_style = if is_active {
+                                    "font-size:9px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#f0ece2;"
+                                } else {
+                                    "font-size:9px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#888;"
+                                };
+                                rsx! {
+                                    button {
+                                        key: "{inst.label()}",
+                                        style: "{btn_style}",
+                                        title: "{inst.label()}",
+                                        onclick: move |_| {
+                                            let mut s = song.write();
+                                            if s.instruments.contains(&inst) {
+                                                s.instruments.retain(|i| i != &inst);
+                                            } else {
+                                                s.instruments.push(inst);
+                                            }
+                                        },
+                                        span { style: "{icon_style}", "{inst.icon()}" }
+                                        span { style: "{label_style}", "{inst.label()}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // ── Parts ─────────────────────────────────────────────────────────
@@ -579,6 +645,51 @@ fn SongView(
                     );
                 },
                 "+ Add Part"
+            }
+
+            // ── Vocals / notes ────────────────────────────────────────────────
+            div {
+                style: "
+                    margin-bottom: 24px;
+                    border: 1.5px solid #e8e4da;
+                    border-radius: 12px;
+                    overflow: hidden;
+                ",
+                div {
+                    style: "
+                        display: flex;
+                        align-items: center;
+                        gap: 8px;
+                        padding: 10px 16px;
+                        background: #f7f5f0;
+                        border-bottom: 1.5px solid #e8e4da;
+                    ",
+                    span { style: "font-size: 18px; line-height: 1;", "\u{1F3A4}" }
+                    span {
+                        style: "font-size: 11px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: 1.2px;",
+                        "Vocals / Notes"
+                    }
+                }
+                textarea {
+                    style: "
+                        display: block;
+                        width: 100%;
+                        min-height: 90px;
+                        padding: 12px 16px;
+                        font-size: 14px;
+                        color: #444;
+                        background: #fff;
+                        border: none;
+                        outline: none;
+                        font-family: inherit;
+                        resize: vertical;
+                        box-sizing: border-box;
+                        line-height: 1.6;
+                    ",
+                    placeholder: "Add lyrics, vocal notes, cues\u{2026}",
+                    value: "{song.read().vocals_notes}",
+                    oninput: move |e| song.write().vocals_notes = e.value(),
+                }
             }
 
             // ── PDF font sizes ────────────────────────────────────────────────
