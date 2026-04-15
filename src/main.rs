@@ -233,6 +233,19 @@ struct SongRow {
 
 use song::{Chord, ChordQuality, ScaleDegree, Song};
 
+// ── Routes ────────────────────────────────────────────────────────────────────
+#[derive(Routable, Clone, PartialEq)]
+#[rustfmt::skip]
+#[allow(clippy::enum_variant_names)]
+enum Route {
+    #[route("/")]
+    LibraryPage {},
+    #[route("/song/new")]
+    NewSongPage {},
+    #[route("/song/:id")]
+    SongPage { id: i64 },
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 fn main() {
@@ -271,18 +284,23 @@ fn example_song() -> Song {
         )
 }
 
+fn blank_song() -> Song {
+    Song::new("", "", "")
+}
+
 // ── Root component ────────────────────────────────────────────────────────────
 
 #[component]
 fn App() -> Element {
-    let song = use_signal(example_song);
     let db: Signal<Option<Db>> = use_signal(|| {
         Db::open("chord_shifter.db")
             .map_err(|e| eprintln!("DB open failed: {e}"))
             .ok()
     });
-    let library_rev: Signal<u32> = use_signal(|| 0);
     let current_user: Signal<Option<User>> = use_signal(|| None);
+
+    use_context_provider(|| db);
+    use_context_provider(|| current_user);
 
     rsx! {
         div {
@@ -290,19 +308,15 @@ fn App() -> Element {
                 font-family: 'Helvetica Neue', Arial, sans-serif;
                 min-height: 100vh;
                 background: #f0ece2;
-                display: flex;
-                align-items: flex-start;
-                justify-content: center;
-                padding: 48px 20px;
-                gap: 32px;
             ",
 
             if current_user.read().is_none() {
-                LoginScreen { db, current_user }
+                div {
+                    style: "display: flex; align-items: flex-start; justify-content: center; padding: 48px 20px;",
+                    LoginScreen { db, current_user }
+                }
             } else {
-                // ── Song library sidebar ─────────────────────────────────
-                SongLibrary { song, db, library_rev }
-                SongView { song, db, library_rev, current_user }
+                Router::<Route> {}
             }
         }
     }
@@ -314,9 +328,9 @@ fn App() -> Element {
 fn SongView(
     song: Signal<Song>,
     db: Signal<Option<Db>>,
-    mut library_rev: Signal<u32>,
     mut current_user: Signal<Option<User>>,
 ) -> Element {
+    let nav = use_navigator();
     let mut show_degrees = use_signal(|| false);
 
     let chords_btn_style = if !show_degrees() {
@@ -353,15 +367,9 @@ fn SongView(
                     margin-bottom: 36px;
                 ",
 
-                // Top row: user greeting + logout
+                // Top row: back button + user greeting + logout
                 div {
-                    style: "display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-bottom: 16px;",
-                    if let Some(user) = current_user.read().as_ref() {
-                        span {
-                            style: "font-size: 12px; color: #888; font-weight: 600;",
-                            "👤  {user.username}"
-                        }
-                    }
+                    style: "display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 16px;",
                     button {
                         style: "
                             padding: 4px 12px;
@@ -374,8 +382,32 @@ fn SongView(
                             font-family: inherit;
                             color: #888;
                         ",
-                        onclick: move |_| *current_user.write() = None,
-                        "Log out"
+                        onclick: move |_| { nav.push(Route::LibraryPage {}); },
+                        "← Library"
+                    }
+                    div {
+                        style: "display: flex; align-items: center; gap: 10px;",
+                        if let Some(user) = current_user.read().as_ref() {
+                            span {
+                                style: "font-size: 12px; color: #888; font-weight: 600;",
+                                "👤  {user.username}"
+                            }
+                        }
+                        button {
+                            style: "
+                                padding: 4px 12px;
+                                background: transparent;
+                                border: 1px solid #ccc;
+                                border-radius: 8px;
+                                font-size: 11px;
+                                font-weight: 700;
+                                cursor: pointer;
+                                font-family: inherit;
+                                color: #888;
+                            ",
+                            onclick: move |_| *current_user.write() = None,
+                            "Log out"
+                        }
                     }
                 }
 
@@ -683,7 +715,6 @@ fn SongView(
                         match db_ref.save_song(&s) {
                             Ok(song_id) => {
                                 println!("✅  Song saved (id={song_id})");
-                                *library_rev.write() += 1;
                                 // Also generate and store the current PDF
                                 match pdf::generate_pdf_bytes(&s, deg, pns, cs) {
                                     Ok(bytes) => match db_ref.save_pdf(song_id, &bytes) {
@@ -967,17 +998,18 @@ fn PartView(song: Signal<Song>, part_index: usize, show_degrees: Signal<bool>) -
     }
 }
 
-// ── Song library sidebar ──────────────────────────────────────────────────────
+// ── Library page ─────────────────────────────────────────────────────────────
 
 #[component]
-fn SongLibrary(song: Signal<Song>, db: Signal<Option<Db>>, library_rev: Signal<u32>) -> Element {
-    // Local list of song rows, refreshed on demand
+fn LibraryPage() -> Element {
+    let db: Signal<Option<Db>> = use_context();
+    let mut current_user: Signal<Option<User>> = use_context();
+    let nav = use_navigator();
+
     let mut rows: Signal<Vec<SongRow>> = use_signal(Vec::new);
     let mut status: Signal<String> = use_signal(String::new);
 
-    // Re-fetch whenever library_rev changes (incremented by Save button)
     use_effect(move || {
-        let _rev = library_rev();
         if let Some(db_ref) = db.read().as_ref() {
             match db_ref.list_songs() {
                 Ok(list) => *rows.write() = list,
@@ -988,133 +1020,155 @@ fn SongLibrary(song: Signal<Song>, db: Signal<Option<Db>>, library_rev: Signal<u
 
     rsx! {
         div {
-            style: "
-                background: #ffffff;
-                border-radius: 14px;
-                padding: 24px 20px;
-                box-shadow: 0 4px 32px rgba(0,0,0,0.10);
-                width: 260px;
-                min-width: 220px;
-                align-self: flex-start;
-                display: flex;
-                flex-direction: column;
-                gap: 8px;
-            ",
+            style: "display: flex; align-items: flex-start; justify-content: center; padding: 48px 20px;",
 
-            // Header + Refresh
             div {
-                style: "display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;",
-                h3 {
-                    style: "margin: 0; font-size: 15px; font-weight: 800; color: #1a1a2e; letter-spacing: 0.5px;",
-                    "📚  Library"
-                }
-                button {
-                    style: "
-                        padding: 4px 10px;
-                        background: #f0ece2;
-                        border: 1px solid #d8d4ca;
-                        border-radius: 8px;
-                        font-size: 12px;
-                        font-weight: 700;
-                        cursor: pointer;
-                        font-family: inherit;
-                        color: #1a1a2e;
-                    ",
-                    onclick: move |_| {
-                        if let Some(db_ref) = db.read().as_ref() {
-                            match db_ref.list_songs() {
-                                Ok(list) => *rows.write() = list,
-                                Err(e) => *status.write() = format!("Refresh error: {e}"),
+                style: "
+                    background: #ffffff;
+                    border-radius: 14px;
+                    padding: 28px 28px 32px;
+                    box-shadow: 0 4px 32px rgba(0,0,0,0.10);
+                    width: 440px;
+                    min-width: 320px;
+                ",
+
+                // ── App header ───────────────────────────────────────────
+                div {
+                    style: "display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px;",
+                    h2 {
+                        style: "margin: 0; font-size: 22px; font-weight: 800; color: #1a1a2e; letter-spacing: -0.3px;",
+                        "🎵  Chord Shifter"
+                    }
+                    div {
+                        style: "display: flex; align-items: center; gap: 10px;",
+                        if let Some(user) = current_user.read().as_ref() {
+                            span {
+                                style: "font-size: 12px; color: #888; font-weight: 600;",
+                                "👤  {user.username}"
                             }
                         }
-                    },
-                    "↻  Refresh"
-                }
-            }
-
-            // Status message
-            if !status.read().is_empty() {
-                p { style: "color: #c0392b; font-size: 12px; margin: 0;", "{status}" }
-            }
-
-            // Song list
-            if rows.read().is_empty() {
-                p {
-                    style: "color: #aaa; font-size: 13px; margin: 0; text-align: center; padding: 16px 0;",
-                    "No songs saved yet."
-                }
-            }
-
-            for row in rows.read().iter().cloned() {
-                {
-                    let row_id = row.id;
-                    rsx! {
-                        div {
-                            key: "{row_id}",
+                        button {
                             style: "
-                                display: flex;
-                                align-items: center;
-                                gap: 6px;
-                                background: #f7f5f0;
+                                padding: 4px 12px;
+                                background: transparent;
+                                border: 1px solid #ccc;
                                 border-radius: 8px;
-                                padding: 8px 10px;
+                                font-size: 11px;
+                                font-weight: 700;
+                                cursor: pointer;
+                                font-family: inherit;
+                                color: #888;
                             ",
+                            onclick: move |_| *current_user.write() = None,
+                            "Log out"
+                        }
+                    }
+                }
 
-                            // Load button (the song title)
-                            button {
+                // ── "My Songs" title + New Song button ───────────────────
+                div {
+                    style: "display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;",
+                    h3 {
+                        style: "margin: 0; font-size: 16px; font-weight: 800; color: #1a1a2e; letter-spacing: 0.3px;",
+                        "📚  My Songs"
+                    }
+                    button {
+                        style: "
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            width: 36px;
+                            height: 36px;
+                            background: #1a1a2e;
+                            color: #f0ece2;
+                            border: none;
+                            border-radius: 50%;
+                            font-size: 24px;
+                            font-weight: 300;
+                            cursor: pointer;
+                            font-family: inherit;
+                            line-height: 1;
+                            flex-shrink: 0;
+                        ",
+                        title: "New Song",
+                        onclick: move |_| { nav.push(Route::NewSongPage {}); },
+                        "+"
+                    }
+                }
+
+                // ── Status message ────────────────────────────────────────
+                if !status.read().is_empty() {
+                    p { style: "color: #c0392b; font-size: 12px; margin: 0 0 8px;", "{status}" }
+                }
+
+                // ── Empty state ───────────────────────────────────────────
+                if rows.read().is_empty() {
+                    div {
+                        style: "text-align: center; padding: 40px 0; color: #aaa;",
+                        div { style: "font-size: 48px; margin-bottom: 12px;", "🎶" }
+                        p { style: "font-size: 14px; margin: 0; font-weight: 600;", "No songs yet." }
+                        p {
+                            style: "font-size: 13px; margin: 6px 0 0; color: #bbb;",
+                            "Tap + to create your first song."
+                        }
+                    }
+                }
+
+                // ── Song rows ─────────────────────────────────────────────
+                for row in rows.read().iter().cloned() {
+                    {
+                        let row_id = row.id;
+                        rsx! {
+                            div {
+                                key: "{row_id}",
                                 style: "
-                                    flex: 1;
-                                    text-align: left;
-                                    background: none;
-                                    border: none;
+                                    display: flex;
+                                    align-items: center;
+                                    gap: 8px;
+                                    background: #f7f5f0;
+                                    border-radius: 10px;
+                                    padding: 12px 14px;
+                                    margin-bottom: 8px;
                                     cursor: pointer;
-                                    font-family: inherit;
-                                    font-size: 13px;
-                                    font-weight: 700;
-                                    color: #1a1a2e;
-                                    padding: 0;
-                                    overflow: hidden;
-                                    text-overflow: ellipsis;
-                                    white-space: nowrap;
                                 ",
-                                title: "{row.name} – {row.artist}",
-                                onclick: move |_| {
-                                    if let Some(db_ref) = db.read().as_ref() {
-                                        match db_ref.load_song(row_id) {
-                                            Ok(loaded) => *song.write() = loaded,
-                                            Err(e) => eprintln!("Load error: {e}"),
-                                        }
+                                onclick: move |_| { nav.push(Route::SongPage { id: row_id }); },
+
+                                div {
+                                    style: "flex: 1; overflow: hidden;",
+                                    div {
+                                        style: "font-size: 14px; font-weight: 700; color: #1a1a2e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;",
+                                        "{row.name}"
                                     }
-                                },
-                                "{row.name}"
-                                span {
-                                    style: "font-weight: 400; font-size: 11px; color: #777; display: block;",
-                                    "{row.artist}"
+                                    div {
+                                        style: "font-size: 12px; color: #777; margin-top: 2px;",
+                                        "{row.artist}"
+                                    }
                                 }
-                            }
 
-                            // Delete button
-                            button {
-                                style: "
-                                    background: none;
-                                    border: none;
-                                    cursor: pointer;
-                                    font-size: 14px;
-                                    padding: 2px 4px;
-                                    color: #c0392b;
-                                    border-radius: 4px;
-                                ",
-                                title: "Delete",
-                                onclick: move |_| {
-                                    if let Some(db_ref) = db.read().as_ref() {
-                                        let _ = db_ref.delete_song(row_id);
-                                        match db_ref.list_songs() {
-                                            Ok(list) => *rows.write() = list,
-                                            Err(e) => *status.write() = format!("Refresh error: {e}"),
+                                button {
+                                    style: "
+                                        background: none;
+                                        border: none;
+                                        cursor: pointer;
+                                        font-size: 14px;
+                                        padding: 4px 6px;
+                                        color: #c0392b;
+                                        border-radius: 4px;
+                                        flex-shrink: 0;
+                                    ",
+                                    title: "Delete",
+                                    onclick: move |e| {
+                                        e.stop_propagation();
+                                        if let Some(db_ref) = db.read().as_ref() {
+                                            let _ = db_ref.delete_song(row_id);
+                                            match db_ref.list_songs() {
+                                                Ok(list) => *rows.write() = list,
+                                                Err(err) => *status.write() = format!("Error: {err}"),
+                                            }
                                         }
-                                    }
-                                },
-                                "✕"
+                                    },
+                                    "✕"
+                                }
                             }
                         }
                     }
@@ -1123,6 +1177,46 @@ fn SongLibrary(song: Signal<Song>, db: Signal<Option<Db>>, library_rev: Signal<u
         }
     }
 }
+
+// ── Song detail page ──────────────────────────────────────────────────────────
+
+#[component]
+fn SongPage(id: i64) -> Element {
+    let db: Signal<Option<Db>> = use_context();
+    let current_user: Signal<Option<User>> = use_context();
+
+    let song: Signal<Song> = use_signal(move || {
+        db.read()
+            .as_ref()
+            .and_then(|d| d.load_song(id).ok())
+            .unwrap_or_else(example_song)
+    });
+
+    rsx! {
+        div {
+            style: "display: flex; align-items: flex-start; justify-content: center; padding: 48px 20px;",
+            SongView { song, db, current_user }
+        }
+    }
+}
+
+// ── New song page ─────────────────────────────────────────────────────────────
+
+#[component]
+fn NewSongPage() -> Element {
+    let db: Signal<Option<Db>> = use_context();
+    let current_user: Signal<Option<User>> = use_context();
+
+    let song: Signal<Song> = use_signal(blank_song);
+
+    rsx! {
+        div {
+            style: "display: flex; align-items: flex-start; justify-content: center; padding: 48px 20px;",
+            SongView { song, db, current_user }
+        }
+    }
+}
+
 // ── Chord editor ─────────────────────────────────────────────────────────────
 
 #[component]
