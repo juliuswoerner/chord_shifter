@@ -71,6 +71,8 @@ struct StoredSong {
     instruments_json: String,
     #[serde(default)]
     vocals_notes: String,
+    #[serde(default)]
+    user_id: i64,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -119,14 +121,14 @@ impl Db {
         Ok(Self)
     }
 
-    fn save_song(&self, song: &song::Song) -> Result<i64, String> {
+    fn save_song(&self, song: &song::Song, user_id: i64) -> Result<i64, String> {
         let parts_json = serde_json::to_string(&song.parts).map_err(|e| e.to_string())?;
         let instruments_json =
             serde_json::to_string(&song.instruments).map_err(|e| e.to_string())?;
         let mut songs = ls_read();
         if let Some(row) = songs
             .iter_mut()
-            .find(|s| s.name == song.name && s.artist == song.artist)
+            .find(|s| s.name == song.name && s.artist == song.artist && s.user_id == user_id)
         {
             row.key = song.key.clone();
             row.parts_json = parts_json;
@@ -145,19 +147,36 @@ impl Db {
                 parts_json,
                 instruments_json,
                 vocals_notes: song.vocals_notes.clone(),
+                user_id,
             });
             ls_write(&songs);
             Ok(id)
         }
     }
 
-    fn list_songs(&self) -> Result<Vec<SongRow>, String> {
+    fn list_songs(&self, user_id: i64) -> Result<Vec<SongRow>, String> {
+        let users = ls_read_users();
+        let username = users
+            .iter()
+            .find(|u| u.id == user_id)
+            .map(|u| u.username.clone())
+            .unwrap_or_default();
         Ok(ls_read()
             .into_iter()
-            .map(|s| SongRow {
-                id: s.id,
-                name: s.name,
-                artist: s.artist,
+            .filter(|s| s.user_id == user_id)
+            .map(|s| {
+                let instruments = if s.instruments_json.is_empty() {
+                    Vec::new()
+                } else {
+                    serde_json::from_str(&s.instruments_json).unwrap_or_default()
+                };
+                SongRow {
+                    id: s.id,
+                    name: s.name,
+                    artist: s.artist,
+                    instruments,
+                    username: username.clone(),
+                }
             })
             .collect())
     }
@@ -246,6 +265,8 @@ struct SongRow {
     id: i64,
     name: String,
     artist: String,
+    instruments: Vec<song::Instrument>,
+    username: String,
 }
 
 use song::{Chord, ChordQuality, Instrument, ScaleDegree, Song};
@@ -828,12 +849,13 @@ fn SongView(
                     font-family: inherit;
                 ",
                 onclick: move |_| {
-                    let s   = song.read().clone();
-                    let deg = show_degrees();
-                    let pns = part_name_size() as f32;
-                    let cs  = chord_size() as f32;
+                    let s       = song.read().clone();
+                    let deg     = show_degrees();
+                    let pns     = part_name_size() as f32;
+                    let cs      = chord_size() as f32;
+                    let user_id = current_user.read().as_ref().map(|u| u.id).unwrap_or(0);
                     if let Some(db_ref) = db.read().as_ref() {
-                        match db_ref.save_song(&s) {
+                        match db_ref.save_song(&s, user_id) {
                             Ok(song_id) => {
                                 println!("✅  Song saved (id={song_id})");
                                 // Also generate and store the current PDF
@@ -1131,8 +1153,9 @@ fn LibraryPage() -> Element {
     let mut status: Signal<String> = use_signal(String::new);
 
     use_effect(move || {
+        let user_id = current_user.read().as_ref().map(|u| u.id).unwrap_or(0);
         if let Some(db_ref) = db.read().as_ref() {
-            match db_ref.list_songs() {
+            match db_ref.list_songs(user_id) {
                 Ok(list) => *rows.write() = list,
                 Err(e) => *status.write() = format!("Load error: {e}"),
             }
@@ -1264,6 +1287,24 @@ fn LibraryPage() -> Element {
                                         style: "font-size: 12px; color: #777; margin-top: 2px;",
                                         "{row.artist}"
                                     }
+                                    // Instruments + username chips
+                                    div {
+                                        style: "display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 7px;",
+                                        for inst in row.instruments.iter().cloned() {
+                                            span {
+                                                key: "{inst.label()}",
+                                                style: "display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600; background: #f0ece2; border: 1px solid #d8d4ca; border-radius: 6px; padding: 2px 7px; color: #555;",
+                                                span { style: "font-size: 13px;", "{inst.icon()}" }
+                                                "{inst.label()}"
+                                            }
+                                        }
+                                        if !row.username.is_empty() {
+                                            span {
+                                                style: "display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600; background: #e8f0e8; border: 1px solid #c8d8c8; border-radius: 6px; padding: 2px 7px; color: #2d6a4f;",
+                                                "👤  {row.username}"
+                                            }
+                                        }
+                                    }
                                 }
 
                                 button {
@@ -1280,9 +1321,10 @@ fn LibraryPage() -> Element {
                                     title: "Delete",
                                     onclick: move |e| {
                                         e.stop_propagation();
+                                        let uid = current_user.read().as_ref().map(|u| u.id).unwrap_or(0);
                                         if let Some(db_ref) = db.read().as_ref() {
                                             let _ = db_ref.delete_song(row_id);
-                                            match db_ref.list_songs() {
+                                            match db_ref.list_songs(uid) {
                                                 Ok(list) => *rows.write() = list,
                                                 Err(err) => *status.write() = format!("Error: {err}"),
                                             }

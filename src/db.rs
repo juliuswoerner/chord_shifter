@@ -4,12 +4,13 @@
 /// ──────
 /// users (id INTEGER PK, username TEXT UNIQUE, password_hash TEXT)
 /// songs (id INTEGER PK, name TEXT, artist TEXT, key TEXT, parts_json TEXT,
-///        instruments_json TEXT, vocals_notes TEXT)
+///        instruments_json TEXT, vocals_notes TEXT, user_id INTEGER FK→users)
+///        UNIQUE(name, artist, user_id)
 /// pdfs  (id INTEGER PK, song_id INTEGER FK → songs.id, created_at TEXT, data BLOB)
 use rusqlite::{params, Connection, Result};
 
 use crate::auth;
-use crate::song::Song;
+use crate::song::{Instrument, Song};
 
 // ── Database handle ───────────────────────────────────────────────────────────
 
@@ -36,6 +37,7 @@ impl Db {
     }
 
     fn migrate(&self) -> Result<()> {
+        // Base schema for fresh databases.
         self.conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS users (
@@ -52,7 +54,8 @@ impl Db {
                 parts_json       TEXT    NOT NULL,
                 instruments_json TEXT    NOT NULL DEFAULT '[]',
                 vocals_notes     TEXT    NOT NULL DEFAULT '',
-                UNIQUE(name, artist)
+                user_id          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                UNIQUE(name, artist, user_id)
             );
 
             CREATE TABLE IF NOT EXISTS pdfs (
@@ -64,16 +67,68 @@ impl Db {
             ",
         )?;
 
-        // Best-effort migrations for existing databases: ignore "duplicate column"
-        // errors (which fire when the column already exists from the CREATE TABLE above).
-        let _ = self.conn.execute(
-            "ALTER TABLE songs ADD COLUMN instruments_json TEXT NOT NULL DEFAULT '[]'",
-            [],
-        );
-        let _ = self.conn.execute(
-            "ALTER TABLE songs ADD COLUMN vocals_notes TEXT NOT NULL DEFAULT ''",
-            [],
-        );
+        // If the existing on-disk songs table lacks user_id, rebuild it to add
+        // the column and update the UNIQUE constraint.
+        let has_user_id: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name='user_id'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !has_user_id {
+            let has_instruments: bool = self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name='instruments_json'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false);
+            let has_vocals: bool = self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('songs') WHERE name='vocals_notes'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false);
+
+            let sel_instruments = if has_instruments {
+                "instruments_json"
+            } else {
+                "'[]'"
+            };
+            let sel_vocals = if has_vocals { "vocals_notes" } else { "''" };
+
+            self.conn.execute_batch(&format!(
+                "
+                CREATE TABLE songs_new (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name             TEXT    NOT NULL,
+                    artist           TEXT    NOT NULL,
+                    key              TEXT    NOT NULL,
+                    parts_json       TEXT    NOT NULL,
+                    instruments_json TEXT    NOT NULL DEFAULT '[]',
+                    vocals_notes     TEXT    NOT NULL DEFAULT '',
+                    user_id          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                    UNIQUE(name, artist, user_id)
+                );
+                INSERT INTO songs_new
+                    (id, name, artist, key, parts_json, instruments_json, vocals_notes, user_id)
+                    SELECT id, name, artist, key, parts_json,
+                        {sel_instruments}, {sel_vocals}, NULL
+                    FROM songs;
+                DROP TABLE songs;
+                ALTER TABLE songs_new RENAME TO songs;
+                ",
+            ))?;
+        }
 
         Ok(())
     }
@@ -143,21 +198,25 @@ pub struct SongRow {
     pub artist: String,
     #[allow(dead_code)]
     pub key: String,
+    /// Active instruments for this song.
+    pub instruments: Vec<Instrument>,
+    /// Username of the owner.
+    pub username: String,
 }
 
 impl Db {
-    /// Persist a song; returns the new row id.
-    /// If a song with the same name + artist already exists it is **updated**.
-    pub fn save_song(&self, song: &Song) -> Result<i64> {
+    /// Persist a song for `user_id`; returns the new row id.
+    /// If the same user already has a song with the same name + artist it is **updated**.
+    pub fn save_song(&self, song: &Song, user_id: i64) -> Result<i64> {
         let parts_json = serde_json::to_string(&song.parts).expect("Song is always serialisable");
         let instruments_json =
             serde_json::to_string(&song.instruments).expect("Instruments are always serialisable");
 
-        // Upsert by (name, artist)
+        // Upsert by (name, artist, user_id)
         self.conn.execute(
-            "INSERT INTO songs (name, artist, key, parts_json, instruments_json, vocals_notes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(name, artist) DO UPDATE SET
+            "INSERT INTO songs (name, artist, key, parts_json, instruments_json, vocals_notes, user_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(name, artist, user_id) DO UPDATE SET
                  key              = excluded.key,
                  parts_json       = excluded.parts_json,
                  instruments_json = excluded.instruments_json,
@@ -168,32 +227,43 @@ impl Db {
                 song.key,
                 parts_json,
                 instruments_json,
-                song.vocals_notes
+                song.vocals_notes,
+                user_id
             ],
         )?;
 
         let id: i64 = self.conn.query_row(
-            "SELECT id FROM songs WHERE name = ?1 AND artist = ?2",
-            params![song.name, song.artist],
+            "SELECT id FROM songs WHERE name = ?1 AND artist = ?2 AND user_id = ?3",
+            params![song.name, song.artist, user_id],
             |row| row.get(0),
         )?;
 
         Ok(id)
     }
 
-    /// List all songs (id, name, artist, key) without loading parts.
-    pub fn list_songs(&self) -> Result<Vec<SongRow>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, name, artist, key FROM songs ORDER BY name")?;
+    /// List all songs for a given user (id, name, artist, key, instruments, username).
+    pub fn list_songs(&self, user_id: i64) -> Result<Vec<SongRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, s.name, s.artist, s.key, s.instruments_json, COALESCE(u.username, '')
+             FROM songs s
+             LEFT JOIN users u ON s.user_id = u.id
+             WHERE s.user_id = ?1
+             ORDER BY s.name",
+        )?;
 
         let rows = stmt
-            .query_map([], |row| {
+            .query_map(params![user_id], |row| {
+                let instruments_json: String = row.get(4)?;
+                let username: String = row.get(5)?;
+                let instruments =
+                    serde_json::from_str::<Vec<Instrument>>(&instruments_json).unwrap_or_default();
                 Ok(SongRow {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     artist: row.get(2)?,
                     key: row.get(3)?,
+                    instruments,
+                    username,
                 })
             })?
             .collect::<Result<Vec<_>>>()?;
@@ -313,6 +383,10 @@ mod tests {
         )
     }
 
+    fn setup_user(db: &Db) -> i64 {
+        db.create_user("testuser", "testpass").unwrap()
+    }
+
     #[test]
     fn create_and_verify_user() {
         let db = Db::open_in_memory().unwrap();
@@ -340,8 +414,9 @@ mod tests {
     #[test]
     fn save_and_load_song_round_trips() {
         let db = Db::open_in_memory().unwrap();
+        let uid = setup_user(&db);
         let song = sample_song();
-        let id = db.save_song(&song).unwrap();
+        let id = db.save_song(&song, uid).unwrap();
         let loaded = db.load_song(id).unwrap();
         assert_eq!(loaded, song);
     }
@@ -349,37 +424,52 @@ mod tests {
     #[test]
     fn list_songs_returns_saved_row() {
         let db = Db::open_in_memory().unwrap();
-        db.save_song(&sample_song()).unwrap();
-        let rows = db.list_songs().unwrap();
+        let uid = setup_user(&db);
+        db.save_song(&sample_song(), uid).unwrap();
+        let rows = db.list_songs(uid).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "Hey Jude");
+        assert_eq!(rows[0].username, "testuser");
     }
 
     #[test]
     fn save_song_twice_upserts() {
         let db = Db::open_in_memory().unwrap();
+        let uid = setup_user(&db);
         let mut song = sample_song();
-        db.save_song(&song).unwrap();
+        db.save_song(&song, uid).unwrap();
         song.key = "G Major".to_string();
-        db.save_song(&song).unwrap();
-        let rows = db.list_songs().unwrap();
+        db.save_song(&song, uid).unwrap();
+        let rows = db.list_songs(uid).unwrap();
         assert_eq!(rows.len(), 1); // still one row
         let loaded = db.load_song(rows[0].id).unwrap();
         assert_eq!(loaded.key, "G Major");
     }
 
     #[test]
+    fn users_only_see_their_own_songs() {
+        let db = Db::open_in_memory().unwrap();
+        let uid_a = db.create_user("alice", "pw").unwrap();
+        let uid_b = db.create_user("bob", "pw").unwrap();
+        db.save_song(&sample_song(), uid_a).unwrap();
+        assert_eq!(db.list_songs(uid_a).unwrap().len(), 1);
+        assert_eq!(db.list_songs(uid_b).unwrap().len(), 0);
+    }
+
+    #[test]
     fn delete_song_removes_it() {
         let db = Db::open_in_memory().unwrap();
-        let id = db.save_song(&sample_song()).unwrap();
+        let uid = setup_user(&db);
+        let id = db.save_song(&sample_song(), uid).unwrap();
         db.delete_song(id).unwrap();
-        assert!(db.list_songs().unwrap().is_empty());
+        assert!(db.list_songs(uid).unwrap().is_empty());
     }
 
     #[test]
     fn save_and_load_pdf_round_trips() {
         let db = Db::open_in_memory().unwrap();
-        let song_id = db.save_song(&sample_song()).unwrap();
+        let uid = setup_user(&db);
+        let song_id = db.save_song(&sample_song(), uid).unwrap();
         let data = b"fake-pdf-bytes";
         let pdf_id = db.save_pdf(song_id, data).unwrap();
         let loaded = db.load_pdf(pdf_id).unwrap();
@@ -389,7 +479,8 @@ mod tests {
     #[test]
     fn list_pdfs_returns_metadata() {
         let db = Db::open_in_memory().unwrap();
-        let song_id = db.save_song(&sample_song()).unwrap();
+        let uid = setup_user(&db);
+        let song_id = db.save_song(&sample_song(), uid).unwrap();
         db.save_pdf(song_id, b"pdf1").unwrap();
         db.save_pdf(song_id, b"pdf2").unwrap();
         let rows = db.list_pdfs(song_id).unwrap();
@@ -399,7 +490,8 @@ mod tests {
     #[test]
     fn delete_song_cascades_to_pdfs() {
         let db = Db::open_in_memory().unwrap();
-        let song_id = db.save_song(&sample_song()).unwrap();
+        let uid = setup_user(&db);
+        let song_id = db.save_song(&sample_song(), uid).unwrap();
         db.save_pdf(song_id, b"pdf").unwrap();
         db.delete_song(song_id).unwrap();
         // pdf rows should be gone too
