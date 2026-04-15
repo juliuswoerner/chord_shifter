@@ -5,8 +5,8 @@ edition = "2021"
 
 [features]
 default  = ["desktop"]
-desktop  = ["dioxus/desktop", "dioxus/minimal"]
-web      = ["dioxus/web",     "dioxus/minimal"]
+desktop  = ["dioxus/desktop", "dioxus/minimal", "dioxus/router"]
+web      = ["dioxus/web",     "dioxus/minimal", "dioxus/router"]
 
 [dependencies]
 dioxus   = { version = "0.6", default-features = false }
