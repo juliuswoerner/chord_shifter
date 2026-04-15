@@ -76,8 +76,7 @@ impl Db {
     /// Create a new user. The password is hashed with Argon2id before storage.
     /// Returns the new user's id, or an error if the username is already taken.
     pub fn create_user(&self, username: &str, password: &str) -> Result<i64> {
-        let hash =
-            auth::hash_password(password).map_err(|e| rusqlite::Error::InvalidParameterName(e))?;
+        let hash = auth::hash_password(password).map_err(rusqlite::Error::InvalidParameterName)?;
         self.conn.execute(
             "INSERT INTO users (username, password_hash) VALUES (?1, ?2)",
             params![username, hash],
