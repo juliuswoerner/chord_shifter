@@ -38,7 +38,44 @@ fn trigger_download(bytes: Vec<u8>, filename: &str) {
     let _ = Url::revoke_object_url(&url);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 use db::{Db, SongRow};
+
+// ── Wasm stubs for DB types (SQLite is desktop-only) ─────────────────────────
+/// On wasm the DB is never available; these stubs keep component signatures
+/// compiling without any `#[cfg]` noise in the UI code.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct Db;
+#[cfg(target_arch = "wasm32")]
+impl Db {
+    fn open(_: &str) -> Result<Self, String> {
+        Ok(Self)
+    }
+    fn save_song(&self, _: &song::Song) -> Result<i64, String> {
+        Ok(0)
+    }
+    fn list_songs(&self) -> Result<Vec<SongRow>, String> {
+        Ok(vec![])
+    }
+    fn load_song(&self, _: i64) -> Result<song::Song, String> {
+        Err("SQLite is not available in the browser".into())
+    }
+    fn delete_song(&self, _: i64) -> Result<(), String> {
+        Ok(())
+    }
+    fn save_pdf(&self, _: i64, _: &[u8]) -> Result<i64, String> {
+        Ok(0)
+    }
+}
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Debug)]
+struct SongRow {
+    id: i64,
+    name: String,
+    artist: String,
+}
+
 use song::{Chord, ChordQuality, ScaleDegree, Song};
 
 // ── Entry point ───────────────────────────────────────────────────────────────
