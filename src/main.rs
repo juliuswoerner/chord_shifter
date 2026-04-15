@@ -41,33 +41,116 @@ fn trigger_download(bytes: Vec<u8>, filename: &str) {
 #[cfg(not(target_arch = "wasm32"))]
 use db::{Db, SongRow};
 
-// ── Wasm stubs for DB types (SQLite is desktop-only) ─────────────────────────
-/// On wasm the DB is never available; these stubs keep component signatures
-/// compiling without any `#[cfg]` noise in the UI code.
+// ── Web storage backend (localStorage, wasm32 only) ──────────────────────────
+// Desktop uses SQLite via db.rs; the browser uses localStorage so the Library
+// panel works the same way on both platforms.
+
+#[cfg(target_arch = "wasm32")]
+const LS_SONGS_KEY: &str = "chord_shifter_songs";
+
+#[cfg(target_arch = "wasm32")]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredSong {
+    id: i64,
+    name: String,
+    artist: String,
+    key: String,
+    parts_json: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn ls_read() -> Vec<StoredSong> {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item(LS_SONGS_KEY).ok().flatten())
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn ls_write(songs: &[StoredSong]) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        if let Ok(json) = serde_json::to_string(songs) {
+            let _ = storage.set_item(LS_SONGS_KEY, &json);
+        }
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 #[derive(Clone)]
 struct Db;
+
 #[cfg(target_arch = "wasm32")]
 impl Db {
     fn open(_: &str) -> Result<Self, String> {
         Ok(Self)
     }
-    fn save_song(&self, _: &song::Song) -> Result<i64, String> {
-        Ok(0)
+
+    fn save_song(&self, song: &song::Song) -> Result<i64, String> {
+        let parts_json = serde_json::to_string(&song.parts).map_err(|e| e.to_string())?;
+        let mut songs = ls_read();
+        if let Some(row) = songs
+            .iter_mut()
+            .find(|s| s.name == song.name && s.artist == song.artist)
+        {
+            row.key = song.key.clone();
+            row.parts_json = parts_json;
+            let id = row.id;
+            ls_write(&songs);
+            Ok(id)
+        } else {
+            let id = songs.iter().map(|s| s.id).max().unwrap_or(0) + 1;
+            songs.push(StoredSong {
+                id,
+                name: song.name.clone(),
+                artist: song.artist.clone(),
+                key: song.key.clone(),
+                parts_json,
+            });
+            ls_write(&songs);
+            Ok(id)
+        }
     }
+
     fn list_songs(&self) -> Result<Vec<SongRow>, String> {
-        Ok(vec![])
+        Ok(ls_read()
+            .into_iter()
+            .map(|s| SongRow {
+                id: s.id,
+                name: s.name,
+                artist: s.artist,
+            })
+            .collect())
     }
-    fn load_song(&self, _: i64) -> Result<song::Song, String> {
-        Err("SQLite is not available in the browser".into())
+
+    fn load_song(&self, id: i64) -> Result<song::Song, String> {
+        ls_read()
+            .into_iter()
+            .find(|s| s.id == id)
+            .ok_or_else(|| format!("Song {id} not found"))
+            .and_then(|s| {
+                let parts = serde_json::from_str(&s.parts_json).map_err(|e| e.to_string())?;
+                Ok(song::Song {
+                    name: s.name,
+                    artist: s.artist,
+                    key: s.key,
+                    parts,
+                })
+            })
     }
-    fn delete_song(&self, _: i64) -> Result<(), String> {
+
+    fn delete_song(&self, id: i64) -> Result<(), String> {
+        let mut songs = ls_read();
+        songs.retain(|s| s.id != id);
+        ls_write(&songs);
         Ok(())
     }
+
     fn save_pdf(&self, _: i64, _: &[u8]) -> Result<i64, String> {
-        Ok(0)
+        Ok(0) // PDFs not persisted in the browser (localStorage size limits)
     }
 }
+
 #[cfg(target_arch = "wasm32")]
 #[derive(Clone, Debug)]
 struct SongRow {
@@ -127,6 +210,8 @@ fn App() -> Element {
             .map_err(|e| eprintln!("DB open failed: {e}"))
             .ok()
     });
+    // Incremented after every successful save; SongLibrary watches it to re-fetch.
+    let library_rev: Signal<u32> = use_signal(|| 0);
 
     rsx! {
         div {
@@ -142,9 +227,9 @@ fn App() -> Element {
             ",
 
             // ── Song library sidebar ───────────────────────────────────────
-            SongLibrary { song, db }
+            SongLibrary { song, db, library_rev }
 
-            SongView { song, db }
+            SongView { song, db, library_rev }
         }
     }
 }
@@ -152,7 +237,7 @@ fn App() -> Element {
 // ── Song sheet ────────────────────────────────────────────────────────────────
 
 #[component]
-fn SongView(song: Signal<Song>, db: Signal<Option<Db>>) -> Element {
+fn SongView(song: Signal<Song>, db: Signal<Option<Db>>, mut library_rev: Signal<u32>) -> Element {
     let mut show_degrees = use_signal(|| false);
 
     let chords_btn_style = if !show_degrees() {
@@ -493,6 +578,7 @@ fn SongView(song: Signal<Song>, db: Signal<Option<Db>>) -> Element {
                         match db_ref.save_song(&s) {
                             Ok(song_id) => {
                                 println!("✅  Song saved (id={song_id})");
+                                *library_rev.write() += 1;
                                 // Also generate and store the current PDF
                                 match pdf::generate_pdf_bytes(&s, deg, pns, cs) {
                                     Ok(bytes) => match db_ref.save_pdf(song_id, &bytes) {
@@ -632,13 +718,14 @@ fn PartView(song: Signal<Song>, part_index: usize, show_degrees: Signal<bool>) -
 // ── Song library sidebar ──────────────────────────────────────────────────────
 
 #[component]
-fn SongLibrary(song: Signal<Song>, db: Signal<Option<Db>>) -> Element {
+fn SongLibrary(song: Signal<Song>, db: Signal<Option<Db>>, library_rev: Signal<u32>) -> Element {
     // Local list of song rows, refreshed on demand
     let mut rows: Signal<Vec<SongRow>> = use_signal(Vec::new);
     let mut status: Signal<String> = use_signal(String::new);
 
-    // Load library on first render
+    // Re-fetch whenever library_rev changes (incremented by Save button)
     use_effect(move || {
+        let _rev = library_rev();
         if let Some(db_ref) = db.read().as_ref() {
             match db_ref.list_songs() {
                 Ok(list) => *rows.write() = list,
