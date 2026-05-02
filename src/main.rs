@@ -844,15 +844,16 @@ fn SongView(
                     let deg = show_degrees();
                     let pns = part_name_size() as f32;
                     let cs  = chord_size() as f32;
+                    let cap = capo();
 
                     #[cfg(not(target_arch = "wasm32"))]
-                    match pdf::save_pdf(&s, "chord_sheet.pdf", deg, pns, cs) {
+                    match pdf::save_pdf(&s, "chord_sheet.pdf", deg, pns, cs, cap) {
                         Ok(_)  => println!("✅  PDF saved to chord_sheet.pdf"),
                         Err(e) => eprintln!("❌  PDF export failed: {e}"),
                     }
 
                     #[cfg(target_arch = "wasm32")]
-                    match pdf::generate_pdf_bytes(&s, deg, pns, cs) {
+                    match pdf::generate_pdf_bytes(&s, deg, pns, cs, cap) {
                         Ok(bytes) => trigger_download(bytes, &s.name),
                         Err(e)    => web_sys::console::error_1(
                             &format!("PDF export failed: {e}").into(),
@@ -883,13 +884,14 @@ fn SongView(
                     let deg     = show_degrees();
                     let pns     = part_name_size() as f32;
                     let cs      = chord_size() as f32;
+                    let cap     = capo();
                     let user_id = current_user.read().as_ref().map(|u| u.id).unwrap_or(0);
                     if let Some(db_ref) = db.read().as_ref() {
                         match db_ref.save_song(&s, user_id) {
                             Ok(song_id) => {
                                 println!("✅  Song saved (id={song_id})");
                                 // Also generate and store the current PDF
-                                match pdf::generate_pdf_bytes(&s, deg, pns, cs) {
+                                match pdf::generate_pdf_bytes(&s, deg, pns, cs, cap) {
                                     Ok(bytes) => match db_ref.save_pdf(song_id, &bytes) {
                                         Ok(pdf_id) => println!("✅  PDF stored (id={pdf_id})"),
                                         Err(e) => eprintln!("❌  PDF store failed: {e}"),

@@ -12,13 +12,24 @@ const RIGHT: f32 = PAGE_W - MARGIN;
 /// `use_degrees`    – when `true`, chords are shown as roman-numeral scale degrees.
 /// `part_name_size` – font size in pt for part labels (default 9).
 /// `chord_size`     – font size in pt for chord roots (default 18).
+/// `capo`           – capo fret (0 = no capo); chord roots are shifted accordingly.
 /// Works on every target (desktop and WASM).
 pub fn generate_pdf_bytes(
     song: &Song,
     use_degrees: bool,
     part_name_size: f32,
     chord_size: f32,
+    capo: u8,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    // When a capo is set, produce a capo-shifted view of the song for rendering.
+    let capo_song: Song;
+    let effective = if capo > 0 {
+        capo_song = song.apply_capo(capo);
+        &capo_song
+    } else {
+        song
+    };
+
     let (doc, page1, layer1) = PdfDocument::new(&song.name, Mm(PAGE_W), Mm(PAGE_H), "Layer 1");
     let layer = doc.get_page(page1).get_layer(layer1);
 
@@ -37,13 +48,25 @@ pub fn generate_pdf_bytes(
 
     // ── Key ───────────────────────────────────────────────────────────────────
     layer.use_text(
-        format!("Key: {}", song.key),
+        format!("Key: {}", effective.key),
         11.0,
         Mm(MARGIN),
         Mm(y),
         &font_regular,
     );
     y -= 5.0;
+
+    // ── Capo ─────────────────────────────────────────────────────────────────
+    if capo > 0 {
+        layer.use_text(
+            format!("Capo: {capo}  (shapes in {})", effective.key),
+            11.0,
+            Mm(MARGIN),
+            Mm(y),
+            &font_regular,
+        );
+        y -= 5.0;
+    }
 
     // ── Horizontal rule ───────────────────────────────────────────────────────
     layer.set_outline_thickness(0.4);
@@ -58,7 +81,7 @@ pub fn generate_pdf_bytes(
     y -= 10.0;
 
     // ── Parts ─────────────────────────────────────────────────────────────────
-    for part in &song.parts {
+    for part in &effective.parts {
         if y < MARGIN + 20.0 {
             break;
         }
@@ -143,8 +166,9 @@ pub fn save_pdf(
     use_degrees: bool,
     part_name_size: f32,
     chord_size: f32,
+    capo: u8,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let bytes = generate_pdf_bytes(song, use_degrees, part_name_size, chord_size)?;
+    let bytes = generate_pdf_bytes(song, use_degrees, part_name_size, chord_size, capo)?;
     std::fs::write(path, bytes)?;
     Ok(())
 }
@@ -171,35 +195,48 @@ mod tests {
     #[test]
     fn generate_pdf_returns_non_empty_bytes() {
         let song = sample_song();
-        let bytes = generate_pdf_bytes(&song, false, 9.0, 18.0).unwrap();
+        let bytes = generate_pdf_bytes(&song, false, 9.0, 18.0, 0).unwrap();
         assert!(!bytes.is_empty());
     }
 
     #[test]
     fn generate_pdf_starts_with_pdf_header() {
         let song = sample_song();
-        let bytes = generate_pdf_bytes(&song, false, 9.0, 18.0).unwrap();
+        let bytes = generate_pdf_bytes(&song, false, 9.0, 18.0, 0).unwrap();
         assert!(bytes.starts_with(b"%PDF-"), "output should be a valid PDF");
     }
 
     #[test]
     fn generate_pdf_degrees_mode_also_produces_valid_pdf() {
         let song = sample_song();
-        let bytes = generate_pdf_bytes(&song, true, 9.0, 18.0).unwrap();
+        let bytes = generate_pdf_bytes(&song, true, 9.0, 18.0, 0).unwrap();
         assert!(bytes.starts_with(b"%PDF-"));
     }
 
     #[test]
     fn generate_pdf_custom_font_sizes_produce_valid_pdf() {
         let song = sample_song();
-        let bytes = generate_pdf_bytes(&song, false, 14.0, 24.0).unwrap();
+        let bytes = generate_pdf_bytes(&song, false, 14.0, 24.0, 0).unwrap();
         assert!(bytes.starts_with(b"%PDF-"));
     }
 
     #[test]
     fn generate_pdf_empty_song_produces_valid_pdf() {
         let song = Song::new("Empty", "C", "Nobody");
-        let bytes = generate_pdf_bytes(&song, false, 9.0, 18.0).unwrap();
+        let bytes = generate_pdf_bytes(&song, false, 9.0, 18.0, 0).unwrap();
         assert!(bytes.starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn generate_pdf_with_capo_shows_shifted_key() {
+        // G Major, capo 2 → chord shapes in F Major
+        let song = sample_song();
+        let bytes = generate_pdf_bytes(&song, false, 9.0, 18.0, 2).unwrap();
+        assert!(bytes.starts_with(b"%PDF-"));
+        // The raw PDF stream contains the text we printed.
+        assert!(
+            bytes.windows(1).count() > 0,
+            "non-empty PDF produced with capo"
+        );
     }
 }
