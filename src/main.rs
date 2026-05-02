@@ -386,6 +386,7 @@ fn SongView(
     };
 
     let mut transpose_root = use_signal(|| "C".to_string());
+    let mut capo = use_signal(|| 0_u8);
     let mut part_name_size = use_signal(|| 9_u32);
     let mut chord_size = use_signal(|| 18_u32);
 
@@ -592,6 +593,35 @@ fn SongView(
                     }
                 }
 
+                // Capo row
+                div {
+                    style: "margin-top: 14px; display: flex; align-items: center; gap: 10px;",
+                    span {
+                        style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;",
+                        "Capo:"
+                    }
+                    button {
+                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                        onclick: move |_| { if capo() > 0 { *capo.write() -= 1; } },
+                        "−"
+                    }
+                    span {
+                        style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #1a1a2e;",
+                        if capo() == 0 { "Off" } else { "{capo()}" }
+                    }
+                    button {
+                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                        onclick: move |_| { if capo() < 12 { *capo.write() += 1; } },
+                        "+"
+                    }
+                    if capo() > 0 {
+                        span {
+                            style: "font-size: 11px; color: #888; font-style: italic;",
+                            "→ play in {song.read().apply_capo(capo()).key}"
+                        }
+                    }
+                }
+
                 // ── Instrument picker ─────────────────────────────────────────
                 div {
                     style: "margin-top: 18px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;",
@@ -651,7 +681,7 @@ fn SongView(
 
             // ── Parts ─────────────────────────────────────────────────────────
             for part_index in 0..song.read().parts.len() {
-                PartView { key: "{part_index}", song, part_index, show_degrees }
+                PartView { key: "{part_index}", song, part_index, show_degrees, capo }
             }
 
             // ── Add part button ───────────────────────────────────────────────
@@ -1027,7 +1057,12 @@ fn LoginScreen(db: Signal<Option<Db>>, mut current_user: Signal<Option<User>>) -
 // ── Part block ────────────────────────────────────────────────────────────────
 
 #[component]
-fn PartView(song: Signal<Song>, part_index: usize, show_degrees: Signal<bool>) -> Element {
+fn PartView(
+    song: Signal<Song>,
+    part_index: usize,
+    show_degrees: Signal<bool>,
+    capo: Signal<u8>,
+) -> Element {
     let chord_count = song
         .read()
         .parts
@@ -1107,7 +1142,7 @@ fn PartView(song: Signal<Song>, part_index: usize, show_degrees: Signal<bool>) -
                 style: "display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start;",
 
                 for chord_index in 0..chord_count {
-                    ChordEditor { key: "{chord_index}", song, part_index, chord_index, show_degrees }
+                    ChordEditor { key: "{chord_index}", song, part_index, chord_index, show_degrees, capo }
                 }
 
                 // Add chord button
@@ -1402,6 +1437,8 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
         .map(|i| i.label())
         .unwrap_or_else(|| instrument.as_str());
 
+    let mut capo = use_signal(|| 0_u8);
+
     rsx! {
         div {
             style: "display: flex; align-items: flex-start; justify-content: center; padding: 48px 20px;",
@@ -1466,6 +1503,35 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                         style: "display: inline-block; background: {accent}; color: #fff; border-radius: 20px; padding: 5px 16px; font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;",
                         "Key: {song.read().key}"
                     }
+
+                    // Capo control
+                    div {
+                        style: "margin-top: 14px; display: flex; align-items: center; gap: 10px;",
+                        span {
+                            style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;",
+                            "Capo:"
+                        }
+                        button {
+                            style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                            onclick: move |_| { if capo() > 0 { *capo.write() -= 1; } },
+                            "−"
+                        }
+                        span {
+                            style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #1a1a2e;",
+                            if capo() == 0 { "Off" } else { "{capo()}" }
+                        }
+                        button {
+                            style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                            onclick: move |_| { if capo() < 12 { *capo.write() += 1; } },
+                            "+"
+                        }
+                        if capo() > 0 {
+                            span {
+                                style: "font-size: 11px; color: #888; font-style: italic;",
+                                "→ play in {song.read().apply_capo(capo()).key}"
+                            }
+                        }
+                    }
                 }
 
                 // ── Chord parts (read-only) ──────────────────────────────────────────────────
@@ -1500,6 +1566,11 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                                         .and_then(|p| p.chords.get(chord_index))
                                         .cloned()
                                         .unwrap_or_else(|| Chord::new("C", ChordQuality::Major));
+                                    let capo_label = if capo() > 0 {
+                                        format!("{}{}", song::shift_note(&chord.root, capo()), chord.quality.symbol())
+                                    } else {
+                                        chord.display()
+                                    };
                                     rsx! {
                                         div {
                                             key: "{chord_index}",
@@ -1513,7 +1584,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                                             ",
                                             span {
                                                 style: "font-size: 36px; font-weight: 800; color: #1a1a2e; letter-spacing: -1px; line-height: 1; display: block;",
-                                                "{chord.display()}"
+                                                "{capo_label}"
                                             }
                                         }
                                     }
@@ -1554,6 +1625,7 @@ fn ChordEditor(
     part_index: usize,
     chord_index: usize,
     show_degrees: Signal<bool>,
+    capo: Signal<u8>,
 ) -> Element {
     let chord = song
         .read()
@@ -1565,6 +1637,13 @@ fn ChordEditor(
 
     let display_label = if show_degrees() {
         chord.degree_display()
+    } else if capo() > 0 {
+        // Show the chord shape the player needs to play with the capo.
+        format!(
+            "{}{}",
+            song::shift_note(&chord.root, capo()),
+            chord.quality.symbol()
+        )
     } else {
         chord.display()
     };
