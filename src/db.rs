@@ -10,7 +10,7 @@
 use rusqlite::{params, Connection, Result};
 
 use crate::auth;
-use crate::song::{Instrument, Song};
+use crate::song::{Chord, ChordQuality, Instrument, Song};
 
 // ── Database handle ───────────────────────────────────────────────────────────
 
@@ -24,6 +24,7 @@ impl Db {
         let conn = Connection::open(path)?;
         let db = Self { conn };
         db.migrate()?;
+        db.seed_example_songs()?;
         Ok(db)
     }
 
@@ -179,6 +180,63 @@ impl Db {
         }
     }
 
+    /// Insert the built-in example song when the songs table is empty.
+    /// Uses NULL user_id so it shows up for every user.
+    fn seed_example_songs(&self) -> Result<()> {
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM songs", [], |row| row.get(0))?;
+        if count > 0 {
+            return Ok(());
+        }
+
+        let song = Song::new("Let It Be", "C Major", "The Beatles")
+            .with_part(
+                "Verse",
+                vec![
+                    Chord::new("C", ChordQuality::Major).with_degree(1),
+                    Chord::new("G", ChordQuality::Major).with_degree(5),
+                    Chord::new("A", ChordQuality::Minor).with_degree(6),
+                    Chord::new("F", ChordQuality::Major).with_degree(4),
+                ],
+            )
+            .with_part(
+                "Chorus",
+                vec![
+                    Chord::new("F", ChordQuality::Major).with_degree(4),
+                    Chord::new("C", ChordQuality::Major).with_degree(1),
+                    Chord::new("G", ChordQuality::Major).with_degree(5),
+                    Chord::new("F", ChordQuality::Major).with_degree(4),
+                ],
+            )
+            .with_part(
+                "Bridge",
+                vec![
+                    Chord::new("G", ChordQuality::Major).with_degree(5),
+                    Chord::new("F", ChordQuality::Major).with_degree(4),
+                    Chord::new("C", ChordQuality::Major).with_degree(1),
+                ],
+            );
+
+        let parts_json = serde_json::to_string(&song.parts).expect("Song is always serialisable");
+        let instruments_json =
+            serde_json::to_string(&song.instruments).expect("Instruments are always serialisable");
+
+        self.conn.execute(
+            "INSERT OR IGNORE INTO songs
+                (name, artist, key, parts_json, instruments_json, vocals_notes, user_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, '', NULL)",
+            params![
+                song.name,
+                song.artist,
+                song.key,
+                parts_json,
+                instruments_json,
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Check if any users exist (used to show Register vs Login on first run).
     pub fn has_users(&self) -> Result<bool> {
         let count: i64 = self
@@ -247,7 +305,7 @@ impl Db {
             "SELECT s.id, s.name, s.artist, s.key, s.instruments_json, COALESCE(u.username, '')
              FROM songs s
              LEFT JOIN users u ON s.user_id = u.id
-             WHERE s.user_id = ?1
+             WHERE s.user_id = ?1 OR s.user_id IS NULL
              ORDER BY s.name",
         )?;
 

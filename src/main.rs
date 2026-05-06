@@ -118,6 +118,49 @@ struct Db;
 #[cfg(target_arch = "wasm32")]
 impl Db {
     fn open(_: &str) -> Result<Self, String> {
+        // Seed the example song into localStorage on first run.
+        if ls_read().is_empty() {
+            use song::{Chord, ChordQuality};
+            let s = song::Song::new("Let It Be", "C Major", "The Beatles")
+                .with_part(
+                    "Verse",
+                    vec![
+                        Chord::new("C", ChordQuality::Major).with_degree(1),
+                        Chord::new("G", ChordQuality::Major).with_degree(5),
+                        Chord::new("A", ChordQuality::Minor).with_degree(6),
+                        Chord::new("F", ChordQuality::Major).with_degree(4),
+                    ],
+                )
+                .with_part(
+                    "Chorus",
+                    vec![
+                        Chord::new("F", ChordQuality::Major).with_degree(4),
+                        Chord::new("C", ChordQuality::Major).with_degree(1),
+                        Chord::new("G", ChordQuality::Major).with_degree(5),
+                        Chord::new("F", ChordQuality::Major).with_degree(4),
+                    ],
+                )
+                .with_part(
+                    "Bridge",
+                    vec![
+                        Chord::new("G", ChordQuality::Major).with_degree(5),
+                        Chord::new("F", ChordQuality::Major).with_degree(4),
+                        Chord::new("C", ChordQuality::Major).with_degree(1),
+                    ],
+                );
+            let parts_json = serde_json::to_string(&s.parts).unwrap_or_default();
+            let instruments_json = serde_json::to_string(&s.instruments).unwrap_or_default();
+            ls_write(&[StoredSong {
+                id: 1,
+                name: s.name,
+                artist: s.artist,
+                key: s.key,
+                parts_json,
+                instruments_json,
+                vocals_notes: String::new(),
+                user_id: 0, // sentinel: visible to all users
+            }]);
+        }
         Ok(Self)
     }
 
@@ -163,7 +206,7 @@ impl Db {
             .unwrap_or_default();
         Ok(ls_read()
             .into_iter()
-            .filter(|s| s.user_id == user_id)
+            .filter(|s| s.user_id == user_id || s.user_id == 0)
             .map(|s| {
                 let instruments = if s.instruments_json.is_empty() {
                     Vec::new()
