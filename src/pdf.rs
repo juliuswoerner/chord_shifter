@@ -47,8 +47,9 @@ pub fn generate_pdf_bytes(
     y -= 6.5;
 
     // ── Key ───────────────────────────────────────────────────────────────────
+    // Always show the original (sounding) key of the song.
     layer.use_text(
-        format!("Key: {}", effective.key),
+        format!("Key: {}", song.key),
         11.0,
         Mm(MARGIN),
         Mm(y),
@@ -57,9 +58,10 @@ pub fn generate_pdf_bytes(
     y -= 5.0;
 
     // ── Capo ─────────────────────────────────────────────────────────────────
+    // When a capo is used: print the fret number and the resulting shape key.
     if capo > 0 {
         layer.use_text(
-            format!("Capo: {capo}  (shapes in {})", effective.key),
+            format!("Capo: fret {}  (shapes in {})", capo, effective.key),
             11.0,
             Mm(MARGIN),
             Mm(y),
