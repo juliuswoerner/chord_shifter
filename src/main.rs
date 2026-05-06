@@ -1,6 +1,26 @@
 #![allow(non_snake_case)]
 
 use dioxus::prelude::*;
+use manganis::Asset;
+
+use song::Instrument;
+
+const ICON_BASE: Asset = manganis::asset!("/assets/icons/base.png");
+const ICON_ELECTRIC: Asset = manganis::asset!("/assets/icons/electric.png");
+const ICON_ACOUSTIC: Asset = manganis::asset!("/assets/icons/acoustic.png");
+const ICON_BASS: Asset = manganis::asset!("/assets/icons/bass.png");
+const ICON_PIANO: Asset = manganis::asset!("/assets/icons/piano.png");
+const ICON_DRUMS: Asset = manganis::asset!("/assets/icons/drums.png");
+
+fn inst_icon(inst: Instrument) -> Asset {
+    match inst {
+        Instrument::Guitar => ICON_ELECTRIC,
+        Instrument::AcousticGuitar => ICON_ACOUSTIC,
+        Instrument::Bass => ICON_BASS,
+        Instrument::Piano => ICON_PIANO,
+        Instrument::Drums => ICON_DRUMS,
+    }
+}
 
 mod auth;
 #[cfg(not(target_arch = "wasm32"))]
@@ -73,6 +93,8 @@ struct StoredSong {
     vocals_notes: String,
     #[serde(default)]
     user_id: i64,
+    #[serde(default)]
+    instrument_parts_json: String,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -118,6 +140,50 @@ struct Db;
 #[cfg(target_arch = "wasm32")]
 impl Db {
     fn open(_: &str) -> Result<Self, String> {
+        // Seed the example song into localStorage on first run.
+        if ls_read().is_empty() {
+            use song::{Chord, ChordQuality};
+            let s = song::Song::new("Let It Be", "C Major", "The Beatles")
+                .with_part(
+                    "Verse",
+                    vec![
+                        Chord::new("C", ChordQuality::Major).with_degree(1),
+                        Chord::new("G", ChordQuality::Major).with_degree(5),
+                        Chord::new("A", ChordQuality::Minor).with_degree(6),
+                        Chord::new("F", ChordQuality::Major).with_degree(4),
+                    ],
+                )
+                .with_part(
+                    "Chorus",
+                    vec![
+                        Chord::new("F", ChordQuality::Major).with_degree(4),
+                        Chord::new("C", ChordQuality::Major).with_degree(1),
+                        Chord::new("G", ChordQuality::Major).with_degree(5),
+                        Chord::new("F", ChordQuality::Major).with_degree(4),
+                    ],
+                )
+                .with_part(
+                    "Bridge",
+                    vec![
+                        Chord::new("G", ChordQuality::Major).with_degree(5),
+                        Chord::new("F", ChordQuality::Major).with_degree(4),
+                        Chord::new("C", ChordQuality::Major).with_degree(1),
+                    ],
+                );
+            let parts_json = serde_json::to_string(&s.parts).unwrap_or_default();
+            let instruments_json = serde_json::to_string(&s.instruments).unwrap_or_default();
+            ls_write(&[StoredSong {
+                id: 1,
+                name: s.name,
+                artist: s.artist,
+                key: s.key,
+                parts_json,
+                instruments_json,
+                vocals_notes: String::new(),
+                user_id: 0, // sentinel: visible to all users
+                instrument_parts_json: "{}".to_string(),
+            }]);
+        }
         Ok(Self)
     }
 
@@ -125,6 +191,8 @@ impl Db {
         let parts_json = serde_json::to_string(&song.parts).map_err(|e| e.to_string())?;
         let instruments_json =
             serde_json::to_string(&song.instruments).map_err(|e| e.to_string())?;
+        let instrument_parts_json =
+            serde_json::to_string(&song.instrument_parts).map_err(|e| e.to_string())?;
         let mut songs = ls_read();
         if let Some(row) = songs
             .iter_mut()
@@ -134,6 +202,7 @@ impl Db {
             row.parts_json = parts_json;
             row.instruments_json = instruments_json;
             row.vocals_notes = song.vocals_notes.clone();
+            row.instrument_parts_json = instrument_parts_json;
             let id = row.id;
             ls_write(&songs);
             Ok(id)
@@ -148,6 +217,7 @@ impl Db {
                 instruments_json,
                 vocals_notes: song.vocals_notes.clone(),
                 user_id,
+                instrument_parts_json,
             });
             ls_write(&songs);
             Ok(id)
@@ -163,7 +233,7 @@ impl Db {
             .unwrap_or_default();
         Ok(ls_read()
             .into_iter()
-            .filter(|s| s.user_id == user_id)
+            .filter(|s| s.user_id == user_id || s.user_id == 0)
             .map(|s| {
                 let instruments = if s.instruments_json.is_empty() {
                     Vec::new()
@@ -193,6 +263,11 @@ impl Db {
                 } else {
                     serde_json::from_str(&s.instruments_json).unwrap_or_default()
                 };
+                let instrument_parts = if s.instrument_parts_json.is_empty() {
+                    Default::default()
+                } else {
+                    serde_json::from_str(&s.instrument_parts_json).unwrap_or_default()
+                };
                 Ok(song::Song {
                     name: s.name,
                     artist: s.artist,
@@ -200,6 +275,8 @@ impl Db {
                     parts,
                     instruments,
                     vocals_notes: s.vocals_notes,
+                    instrument_parts,
+                    instrument_capos: Default::default(),
                 })
             })
     }
@@ -269,7 +346,7 @@ struct SongRow {
     username: String,
 }
 
-use song::{Chord, ChordQuality, Instrument, ScaleDegree, Song};
+use song::{Chord, ChordQuality, ScaleDegree, Song};
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 #[derive(Routable, Clone, PartialEq)]
@@ -386,9 +463,87 @@ fn SongView(
     };
 
     let mut transpose_root = use_signal(|| "C".to_string());
-    let mut capo = use_signal(|| 0_u8);
     let mut part_name_size = use_signal(|| 9_u32);
     let mut chord_size = use_signal(|| 18_u32);
+    // None = base sheet; Some(inst) = that instrument's sheet
+    let mut active_instrument: Signal<Option<Instrument>> = use_signal(|| None);
+    // Per-instrument working copies — each instrument has its own isolated signal
+    let guitar_song = {
+        let s = song.read();
+        let parts = s
+            .instrument_parts
+            .get("Electric")
+            .cloned()
+            .unwrap_or_else(|| s.parts.clone());
+        let sc = s.clone();
+        drop(s);
+        use_signal(move || Song { parts, ..sc })
+    };
+    let guitar_capo = {
+        let cap = *song.read().instrument_capos.get("Electric").unwrap_or(&0);
+        use_signal(move || cap)
+    };
+    let acoustic_song = {
+        let s = song.read();
+        let parts = s
+            .instrument_parts
+            .get("Acoustic")
+            .cloned()
+            .unwrap_or_else(|| s.parts.clone());
+        let sc = s.clone();
+        drop(s);
+        use_signal(move || Song { parts, ..sc })
+    };
+    let acoustic_capo = {
+        let cap = *song.read().instrument_capos.get("Acoustic").unwrap_or(&0);
+        use_signal(move || cap)
+    };
+    let bass_song = {
+        let s = song.read();
+        let parts = s
+            .instrument_parts
+            .get("Bass")
+            .cloned()
+            .unwrap_or_else(|| s.parts.clone());
+        let sc = s.clone();
+        drop(s);
+        use_signal(move || Song { parts, ..sc })
+    };
+    let bass_capo = {
+        let cap = *song.read().instrument_capos.get("Bass").unwrap_or(&0);
+        use_signal(move || cap)
+    };
+    let piano_song = {
+        let s = song.read();
+        let parts = s
+            .instrument_parts
+            .get("Piano")
+            .cloned()
+            .unwrap_or_else(|| s.parts.clone());
+        let sc = s.clone();
+        drop(s);
+        use_signal(move || Song { parts, ..sc })
+    };
+    let piano_capo = {
+        let cap = *song.read().instrument_capos.get("Piano").unwrap_or(&0);
+        use_signal(move || cap)
+    };
+    let drums_song = {
+        let s = song.read();
+        let parts = s
+            .instrument_parts
+            .get("Drums")
+            .cloned()
+            .unwrap_or_else(|| s.parts.clone());
+        let sc = s.clone();
+        drop(s);
+        use_signal(move || Song { parts, ..sc })
+    };
+    let drums_capo = {
+        let cap = *song.read().instrument_capos.get("Drums").unwrap_or(&0);
+        use_signal(move || cap)
+    };
+    let mut inst_save_msg: Signal<Option<&'static str>> = use_signal(|| None);
 
     rsx! {
         div {
@@ -593,84 +748,76 @@ fn SongView(
                     }
                 }
 
-                // Capo row
-                div {
-                    style: "margin-top: 14px; display: flex; align-items: center; gap: 10px;",
-                    span {
-                        style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;",
-                        "Capo:"
-                    }
-                    button {
-                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
-                        onclick: move |_| { if capo() > 0 { *capo.write() -= 1; } },
-                        "−"
-                    }
-                    span {
-                        style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #1a1a2e;",
-                        if capo() == 0 { "Off" } else { "{capo()}" }
-                    }
-                    button {
-                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
-                        onclick: move |_| { if capo() < 12 { *capo.write() += 1; } },
-                        "+"
-                    }
-                    if capo() > 0 {
-                        span {
-                            style: "font-size: 11px; color: #888; font-style: italic;",
-                            "→ play in {song.read().apply_capo(capo()).key}"
-                        }
-                    }
-                }
-
-                // ── Instrument picker ─────────────────────────────────────────
+                // ── Instrument tabs ─────────────────────────────────────────
                 div {
                     style: "margin-top: 18px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;",
                     span {
                         style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;",
-                        "Instruments:"
+                        "Sheet:"
                     }
                     div {
                         style: "display: flex; gap: 8px; flex-wrap: wrap;",
+
+                        // Base tab
+                        {
+                            let is_base = active_instrument.read().is_none();
+                            let s = if is_base {
+                                "display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:#1a1a2e;border:none;border-radius:10px;cursor:pointer;font-family:inherit;"
+                            } else {
+                                "display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:#f0ece2;border:1.5px solid #d8d4ca;border-radius:10px;cursor:pointer;font-family:inherit;"
+                            };
+                            let lbl_s = if is_base {
+                                "font-size:9px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#f0ece2;"
+                            } else {
+                                "font-size:9px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#888;"
+                            };
+                            rsx! {
+                                button {
+                                    style: "{s}",
+                                    onclick: move |_| {
+                                        *active_instrument.write() = None;
+                                        *inst_save_msg.write() = None;
+                                    },
+                                    img { src: ICON_BASE.to_string(), style: "width: 28px; height: 28px; object-fit: contain;", alt: "Base" }
+                                    span { style: "{lbl_s}", "Base" }
+                                }
+                            }
+                        }
+
+                        // Per-instrument tabs
                         for inst in Instrument::all() {
                             {
-                                let is_active = song.read().instruments.contains(&inst);
-                                let btn_style = if is_active {
-                                    "display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:#1a1a2e;border:none;border-radius:10px;cursor:pointer;font-family:inherit;"
+                                let is_active = active_instrument.read().as_ref() == Some(&inst);
+                                let has_override = song.read().instrument_parts.contains_key(inst.label());
+                                let accent = inst.accent_color();
+                                let btn_s = if is_active {
+                                    format!("display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:{accent};border:none;border-radius:10px;cursor:pointer;font-family:inherit;")
+                                } else if has_override {
+                                    format!("display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:#f0ece2;border:2px solid {accent};border-radius:10px;cursor:pointer;font-family:inherit;")
                                 } else {
-                                    "display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:#f0ece2;border:1.5px solid #d8d4ca;border-radius:10px;cursor:pointer;font-family:inherit;"
+                                    "display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:#f0ece2;border:1.5px solid #d8d4ca;border-radius:10px;cursor:pointer;font-family:inherit;".to_string()
                                 };
-                                let icon_style = if is_active {
-                                    "font-size:22px;"
+                                let lbl_s = if is_active {
+                                    "font-size:9px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#fff;".to_string()
                                 } else {
-                                    "font-size:22px;opacity:0.35;"
-                                };
-                                let label_style = if is_active {
-                                    "font-size:9px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#f0ece2;"
-                                } else {
-                                    "font-size:9px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#888;"
+                                    "font-size:9px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#888;".to_string()
                                 };
                                 rsx! {
                                     button {
                                         key: "{inst.label()}",
-                                        style: "{btn_style}",
-                                        title: "{inst.label()}",
+                                        style: "{btn_s}",
+                                        title: "{inst.label()} sheet",
                                         onclick: move |_| {
-                                            if let Some(id) = song_id {
-                                                nav.push(Route::InstrumentSheetPage {
-                                                    id,
-                                                    instrument: inst.label().to_string(),
-                                                });
+                                            if active_instrument.read().as_ref() == Some(&inst) {
+                                                *active_instrument.write() = None;
+                                                *inst_save_msg.write() = None;
                                             } else {
-                                                let mut s = song.write();
-                                                if s.instruments.contains(&inst) {
-                                                    s.instruments.retain(|i| i != &inst);
-                                                } else {
-                                                    s.instruments.push(inst);
-                                                }
+                                                *active_instrument.write() = Some(inst);
+                                                *inst_save_msg.write() = None;
                                             }
                                         },
-                                        span { style: "{icon_style}", "{inst.icon()}" }
-                                        span { style: "{label_style}", "{inst.label()}" }
+                                        img { src: inst_icon(inst).to_string(), style: "width: 28px; height: 28px; object-fit: contain;", alt: "{inst.label()}" }
+                                        span { style: "{lbl_s}", "{inst.label()}" }
                                     }
                                 }
                             }
@@ -679,33 +826,144 @@ fn SongView(
                 }
             }
 
-            // ── Parts ─────────────────────────────────────────────────────────
-            for part_index in 0..song.read().parts.len() {
-                PartView { key: "{part_index}", song, part_index, show_degrees, capo }
-            }
-
-            // ── Add part button ───────────────────────────────────────────────
-            button {
-                style: "
-                    margin-top: 8px;
-                    margin-bottom: 24px;
-                    padding: 10px 20px;
-                    background: transparent;
-                    color: #999;
-                    border: 2px dashed #c8c3b3;
-                    border-radius: 10px;
-                    font-size: 13px;
-                    font-weight: 600;
-                    cursor: pointer;
-                    font-family: inherit;
-                    width: 100%;
-                ",
-                onclick: move |_| {
-                    song.write().parts.push(
-                        crate::song::SongPart::new("New Part")
-                    );
-                },
-                "+ Add Part"
+            // ── Parts editor (base or instrument) ─────────────────────────────────
+            if active_instrument.read().is_none() {
+                // Base sheet
+                for part_index in 0..song.read().parts.len() {
+                    PartView { key: "{part_index}", song, part_index, show_degrees, capo: use_signal(|| 0_u8) }
+                }
+                button {
+                    style: "
+                        margin-top: 8px;
+                        margin-bottom: 24px;
+                        padding: 10px 20px;
+                        background: transparent;
+                        color: #999;
+                        border: 2px dashed #c8c3b3;
+                        border-radius: 10px;
+                        font-size: 13px;
+                        font-weight: 600;
+                        cursor: pointer;
+                        font-family: inherit;
+                        width: 100%;
+                    ",
+                    onclick: move |_| { song.write().parts.push(crate::song::SongPart::new("New Part")); },
+                    "+ Add Part"
+                }
+            } else {
+                // Instrument-specific sheet
+                {
+                    let inst = (*active_instrument.read()).unwrap();
+                    let (mut act_song, mut act_capo) = match inst {
+                        Instrument::Guitar => (guitar_song, guitar_capo),
+                        Instrument::AcousticGuitar => (acoustic_song, acoustic_capo),
+                        Instrument::Bass => (bass_song, bass_capo),
+                        Instrument::Piano => (piano_song, piano_capo),
+                        Instrument::Drums => (drums_song, drums_capo),
+                    };
+                    let accent = inst.accent_color();
+                    let inst_label = inst.label();
+                    rsx! {
+                        // Info banner
+                        div {
+                            style: "margin-bottom: 18px; background: #fff8e1; border: 1px solid #ffe082; border-radius: 8px; padding: 10px 16px; font-size: 12px; color: #795548; display: flex; align-items: center; gap: 8px;",
+                            img { src: inst_icon(inst).to_string(), style: "width: 22px; height: 22px; object-fit: contain;", alt: "{inst_label}" }
+                            span { "✏️  " strong { "{inst_label}" } " sheet — edits apply to this instrument only" }
+                        }
+                        // Instrument capo control
+                        div {
+                            style: "margin-bottom: 20px; display: flex; align-items: center; gap: 10px;",
+                            span {
+                                style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;",
+                                "Capo:"
+                            }
+                            button {
+                                style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                                onclick: move |_| { if act_capo() > 0 { *act_capo.write() -= 1; } },
+                                "−"
+                            }
+                            span {
+                                style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #1a1a2e;",
+                                if act_capo() == 0 { "Off" } else { "{act_capo()}" }
+                            }
+                            button {
+                                style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                                onclick: move |_| { if act_capo() < 12 { *act_capo.write() += 1; } },
+                                "+"
+                            }
+                            if act_capo() > 0 {
+                                span {
+                                    style: "font-size: 11px; color: #888; font-style: italic;",
+                                    "→ play in {act_song.read().apply_capo(act_capo()).key}"
+                                }
+                            }
+                        }
+                        // Editable chord parts
+                        for part_index in 0..act_song.read().parts.len() {
+                            PartView { key: "{part_index}", song: act_song, part_index, show_degrees, capo: act_capo }
+                        }
+                        button {
+                            style: "
+                                margin-top: 8px;
+                                margin-bottom: 16px;
+                                padding: 10px 20px;
+                                background: transparent;
+                                color: #999;
+                                border: 2px dashed #c8c3b3;
+                                border-radius: 10px;
+                                font-size: 13px;
+                                font-weight: 600;
+                                cursor: pointer;
+                                font-family: inherit;
+                                width: 100%;
+                            ",
+                            onclick: move |_| { act_song.write().parts.push(crate::song::SongPart::new("New Part")); },
+                            "+ Add Part"
+                        }
+                        // Save instrument sheet
+                        div {
+                            style: "margin-bottom: 24px; display: flex; align-items: center; gap: 16px;",
+                            button {
+                                style: "
+                                    padding: 12px 28px;
+                                    background: {accent};
+                                    color: #fff;
+                                    border: none;
+                                    border-radius: 10px;
+                                    font-size: 14px;
+                                    font-weight: 800;
+                                    cursor: pointer;
+                                    font-family: inherit;
+                                ",
+                                onclick: move |_| {
+                                    let label = inst.label().to_string();
+                                    let inst_parts = act_song.read().parts.clone();
+                                    let cap = act_capo();
+                                    let mut updated = song.read().clone();
+                                    updated.instrument_parts.insert(label.clone(), inst_parts);
+                                    updated.instrument_capos.insert(label, cap);
+                                    let user_id = current_user.read().as_ref().map(|u| u.id).unwrap_or(0);
+                                    if let Some(db_ref) = db.read().as_ref() {
+                                        match db_ref.save_song(&updated, user_id) {
+                                            Ok(_) => {
+                                                *song.write() = updated;
+                                                *inst_save_msg.write() = Some("✅ Saved!");
+                                            }
+                                            Err(_) => *inst_save_msg.write() = Some("❌ Save failed"),
+                                        }
+                                    } else {
+                                        *song.write() = updated;
+                                        *inst_save_msg.write() = Some("✅ Saved!");
+                                    }
+                                },
+                                "💾  Save {inst_label} Sheet"
+                            }
+                            if let Some(msg) = inst_save_msg() {
+                                span { style: "font-size: 13px; font-weight: 600; color: #555;", "{msg}" }
+                            }
+                        }
+                    }
+                }
             }
 
             // ── Vocals / notes ────────────────────────────────────────────────
@@ -844,20 +1102,78 @@ fn SongView(
                     let deg = show_degrees();
                     let pns = part_name_size() as f32;
                     let cs  = chord_size() as f32;
-                    let cap = capo();
+                    let cap = 0_u8;
+
+                    // Collect: base sheet + one entry per instrument that has saved overrides.
+                    // Each entry is (song_with_correct_parts, filename, capo_for_that_sheet).
+                    let mut exports: Vec<(Song, String, u8)> = Vec::new();
+                    exports.push((s.clone(), s.name.clone(), cap));
+                    for inst in Instrument::all() {
+                        if let Some(parts) = s.instrument_parts.get(inst.label()).cloned() {
+                            let inst_cap = *s.instrument_capos.get(inst.label()).unwrap_or(&0);
+                            let mut inst_sheet = s.clone();
+                            inst_sheet.parts = parts;
+                            let filename = format!("{}_{}", s.name, inst.label());
+                            exports.push((inst_sheet, filename, inst_cap));
+                        }
+                    }
 
                     #[cfg(not(target_arch = "wasm32"))]
-                    match pdf::save_pdf(&s, "chord_sheet.pdf", deg, pns, cs, cap) {
-                        Ok(_)  => println!("✅  PDF saved to chord_sheet.pdf"),
-                        Err(e) => eprintln!("❌  PDF export failed: {e}"),
+                    for (sheet, filename, sheet_cap) in &exports {
+                        let path = format!("{filename}.pdf");
+                        match pdf::save_pdf(sheet, &path, deg, pns, cs, *sheet_cap) {
+                            Ok(_)  => println!("✅  PDF saved to {path}"),
+                            Err(e) => eprintln!("❌  PDF export failed for {path}: {e}"),
+                        }
                     }
 
                     #[cfg(target_arch = "wasm32")]
-                    match pdf::generate_pdf_bytes(&s, deg, pns, cs, cap) {
-                        Ok(bytes) => trigger_download(bytes, &s.name),
-                        Err(e)    => web_sys::console::error_1(
-                            &format!("PDF export failed: {e}").into(),
-                        ),
+                    {
+                        use js_sys::Uint8Array;
+                        use wasm_bindgen::JsCast;
+                        use web_sys::{Blob, BlobPropertyBag, HtmlAnchorElement, Url};
+                        use std::io::Write;
+
+                        // Build a ZIP containing base.pdf + one pdf per instrument override.
+                        // A single download is the only approach that works in Safari
+                        // (which blocks downloads not triggered directly by a user gesture).
+                        let mut zip_buf: Vec<u8> = Vec::new();
+                        {
+                            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buf));
+                            let opts = zip::write::SimpleFileOptions::default()
+                                .compression_method(zip::CompressionMethod::Deflated);
+
+                            for (sheet, filename, sheet_cap) in &exports {
+                                match pdf::generate_pdf_bytes(sheet, deg, pns, cs, *sheet_cap) {
+                                    Ok(bytes) => {
+                                        let _ = zip.start_file(format!("{filename}.pdf"), opts);
+                                        let _ = zip.write_all(&bytes);
+                                    }
+                                    Err(e) => web_sys::console::error_1(
+                                        &format!("PDF generation failed for {filename}: {e}").into(),
+                                    ),
+                                }
+                            }
+                            let _ = zip.finish();
+                        }
+
+                        let array = Uint8Array::from(zip_buf.as_slice());
+                        let parts = js_sys::Array::new();
+                        parts.push(&array);
+                        let opts = BlobPropertyBag::new();
+                        opts.set_type("application/zip");
+                        let blob =
+                            Blob::new_with_u8_array_sequence_and_options(&parts, &opts).expect("blob");
+                        let url = Url::create_object_url_with_blob(&blob).expect("url");
+                        let window = web_sys::window().expect("window");
+                        let document = window.document().expect("document");
+                        let a: HtmlAnchorElement = document
+                            .create_element("a").expect("a")
+                            .dyn_into().expect("cast");
+                        a.set_href(&url);
+                        a.set_download(&format!("{}.zip", s.name));
+                        a.click();
+                        let _ = Url::revoke_object_url(&url);
                     }
                 },
                 "📄  Export as PDF"
@@ -884,7 +1200,7 @@ fn SongView(
                     let deg     = show_degrees();
                     let pns     = part_name_size() as f32;
                     let cs      = chord_size() as f32;
-                    let cap     = capo();
+                    let cap     = 0_u8;
                     let user_id = current_user.read().as_ref().map(|u| u.id).unwrap_or(0);
                     if let Some(db_ref) = db.read().as_ref() {
                         match db_ref.save_song(&s, user_id) {
@@ -1331,7 +1647,7 @@ fn LibraryPage() -> Element {
                                             span {
                                                 key: "{inst.label()}",
                                                 style: "display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600; background: #f0ece2; border: 1px solid #d8d4ca; border-radius: 6px; padding: 2px 7px; color: #555;",
-                                                span { style: "font-size: 13px;", "{inst.icon()}" }
+                                                img { src: inst_icon(inst).to_string(), style: "width: 16px; height: 16px; object-fit: contain;", alt: "{inst.label()}" }
                                                 "{inst.label()}"
                                             }
                                         }
@@ -1434,7 +1750,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
 
     let inst = Instrument::from_label(&instrument);
     let accent = inst.map(|i| i.accent_color()).unwrap_or("#1a1a2e");
-    let inst_icon = inst.map(|i| i.icon()).unwrap_or("🎵");
+    let inst_icon_asset = inst.map(inst_icon).unwrap_or(ICON_BASE);
     let inst_label = inst
         .map(|i| i.label())
         .unwrap_or_else(|| instrument.as_str());
@@ -1486,7 +1802,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                     // Instrument badge
                     div {
                         style: "display: inline-flex; align-items: center; gap: 10px; background: {accent}; color: #fff; border-radius: 12px; padding: 10px 20px; margin-bottom: 22px;",
-                        span { style: "font-size: 28px; line-height: 1;", "{inst_icon}" }
+                        img { src: inst_icon_asset.to_string(), style: "width: 36px; height: 36px; object-fit: contain;", alt: "{inst_label}" }
                         span { style: "font-size: 16px; font-weight: 800; letter-spacing: 0.5px;", "{inst_label}" }
                     }
 

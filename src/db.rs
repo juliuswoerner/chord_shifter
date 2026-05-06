@@ -10,7 +10,7 @@
 use rusqlite::{params, Connection, Result};
 
 use crate::auth;
-use crate::song::{Instrument, Song};
+use crate::song::{Chord, ChordQuality, Instrument, Song};
 
 // ── Database handle ───────────────────────────────────────────────────────────
 
@@ -24,6 +24,7 @@ impl Db {
         let conn = Connection::open(path)?;
         let db = Self { conn };
         db.migrate()?;
+        db.seed_example_songs()?;
         Ok(db)
     }
 
@@ -47,14 +48,15 @@ impl Db {
             );
 
             CREATE TABLE IF NOT EXISTS songs (
-                id               INTEGER PRIMARY KEY AUTOINCREMENT,
-                name             TEXT    NOT NULL,
-                artist           TEXT    NOT NULL,
-                key              TEXT    NOT NULL,
-                parts_json       TEXT    NOT NULL,
-                instruments_json TEXT    NOT NULL DEFAULT '[]',
-                vocals_notes     TEXT    NOT NULL DEFAULT '',
-                user_id          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                name                  TEXT    NOT NULL,
+                artist                TEXT    NOT NULL,
+                key                   TEXT    NOT NULL,
+                parts_json            TEXT    NOT NULL,
+                instruments_json      TEXT    NOT NULL DEFAULT '[]',
+                vocals_notes          TEXT    NOT NULL DEFAULT '',
+                instrument_parts_json TEXT    NOT NULL DEFAULT '{}',
+                user_id               INTEGER REFERENCES users(id) ON DELETE SET NULL,
                 UNIQUE(name, artist, user_id)
             );
 
@@ -109,26 +111,34 @@ impl Db {
             self.conn.execute_batch(&format!(
                 "
                 CREATE TABLE songs_new (
-                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name             TEXT    NOT NULL,
-                    artist           TEXT    NOT NULL,
-                    key              TEXT    NOT NULL,
-                    parts_json       TEXT    NOT NULL,
-                    instruments_json TEXT    NOT NULL DEFAULT '[]',
-                    vocals_notes     TEXT    NOT NULL DEFAULT '',
-                    user_id          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name                  TEXT    NOT NULL,
+                    artist                TEXT    NOT NULL,
+                    key                   TEXT    NOT NULL,
+                    parts_json            TEXT    NOT NULL,
+                    instruments_json      TEXT    NOT NULL DEFAULT '[]',
+                    vocals_notes          TEXT    NOT NULL DEFAULT '',
+                    instrument_parts_json TEXT    NOT NULL DEFAULT '{{}}',
+                    user_id               INTEGER REFERENCES users(id) ON DELETE SET NULL,
                     UNIQUE(name, artist, user_id)
                 );
                 INSERT INTO songs_new
-                    (id, name, artist, key, parts_json, instruments_json, vocals_notes, user_id)
+                    (id, name, artist, key, parts_json, instruments_json, vocals_notes, instrument_parts_json, user_id)
                     SELECT id, name, artist, key, parts_json,
-                        {sel_instruments}, {sel_vocals}, NULL
+                        {sel_instruments}, {sel_vocals}, '{{}}', NULL
                     FROM songs;
                 DROP TABLE songs;
                 ALTER TABLE songs_new RENAME TO songs;
                 ",
             ))?;
         }
+
+        // Best-effort: add instrument_parts_json to databases that have user_id
+        // but were created before this column existed.
+        let _ = self.conn.execute(
+            "ALTER TABLE songs ADD COLUMN instrument_parts_json TEXT NOT NULL DEFAULT '{}'",
+            [],
+        );
 
         Ok(())
     }
@@ -179,6 +189,63 @@ impl Db {
         }
     }
 
+    /// Insert the built-in example song when the songs table is empty.
+    /// Uses NULL user_id so it shows up for every user.
+    fn seed_example_songs(&self) -> Result<()> {
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM songs", [], |row| row.get(0))?;
+        if count > 0 {
+            return Ok(());
+        }
+
+        let song = Song::new("Let It Be", "C Major", "The Beatles")
+            .with_part(
+                "Verse",
+                vec![
+                    Chord::new("C", ChordQuality::Major).with_degree(1),
+                    Chord::new("G", ChordQuality::Major).with_degree(5),
+                    Chord::new("A", ChordQuality::Minor).with_degree(6),
+                    Chord::new("F", ChordQuality::Major).with_degree(4),
+                ],
+            )
+            .with_part(
+                "Chorus",
+                vec![
+                    Chord::new("F", ChordQuality::Major).with_degree(4),
+                    Chord::new("C", ChordQuality::Major).with_degree(1),
+                    Chord::new("G", ChordQuality::Major).with_degree(5),
+                    Chord::new("F", ChordQuality::Major).with_degree(4),
+                ],
+            )
+            .with_part(
+                "Bridge",
+                vec![
+                    Chord::new("G", ChordQuality::Major).with_degree(5),
+                    Chord::new("F", ChordQuality::Major).with_degree(4),
+                    Chord::new("C", ChordQuality::Major).with_degree(1),
+                ],
+            );
+
+        let parts_json = serde_json::to_string(&song.parts).expect("Song is always serialisable");
+        let instruments_json =
+            serde_json::to_string(&song.instruments).expect("Instruments are always serialisable");
+
+        self.conn.execute(
+            "INSERT OR IGNORE INTO songs
+                (name, artist, key, parts_json, instruments_json, vocals_notes, user_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, '', NULL)",
+            params![
+                song.name,
+                song.artist,
+                song.key,
+                parts_json,
+                instruments_json,
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Check if any users exist (used to show Register vs Login on first run).
     pub fn has_users(&self) -> Result<bool> {
         let count: i64 = self
@@ -211,16 +278,19 @@ impl Db {
         let parts_json = serde_json::to_string(&song.parts).expect("Song is always serialisable");
         let instruments_json =
             serde_json::to_string(&song.instruments).expect("Instruments are always serialisable");
+        let instrument_parts_json = serde_json::to_string(&song.instrument_parts)
+            .expect("instrument_parts always serialisable");
 
         // Upsert by (name, artist, user_id)
         self.conn.execute(
-            "INSERT INTO songs (name, artist, key, parts_json, instruments_json, vocals_notes, user_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO songs (name, artist, key, parts_json, instruments_json, vocals_notes, instrument_parts_json, user_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(name, artist, user_id) DO UPDATE SET
-                 key              = excluded.key,
-                 parts_json       = excluded.parts_json,
-                 instruments_json = excluded.instruments_json,
-                 vocals_notes     = excluded.vocals_notes",
+                 key                   = excluded.key,
+                 parts_json            = excluded.parts_json,
+                 instruments_json      = excluded.instruments_json,
+                 vocals_notes          = excluded.vocals_notes,
+                 instrument_parts_json = excluded.instrument_parts_json",
             params![
                 song.name,
                 song.artist,
@@ -228,6 +298,7 @@ impl Db {
                 parts_json,
                 instruments_json,
                 song.vocals_notes,
+                instrument_parts_json,
                 user_id
             ],
         )?;
@@ -247,7 +318,7 @@ impl Db {
             "SELECT s.id, s.name, s.artist, s.key, s.instruments_json, COALESCE(u.username, '')
              FROM songs s
              LEFT JOIN users u ON s.user_id = u.id
-             WHERE s.user_id = ?1
+             WHERE s.user_id = ?1 OR s.user_id IS NULL
              ORDER BY s.name",
         )?;
 
@@ -274,7 +345,7 @@ impl Db {
     /// Load the full `Song` for a given id.
     pub fn load_song(&self, id: i64) -> Result<Song> {
         self.conn.query_row(
-            "SELECT name, artist, key, parts_json, instruments_json, vocals_notes
+            "SELECT name, artist, key, parts_json, instruments_json, vocals_notes, instrument_parts_json
              FROM songs WHERE id = ?1",
             params![id],
             |row| {
@@ -284,6 +355,7 @@ impl Db {
                 let parts_json: String = row.get(3)?;
                 let instruments_json: String = row.get(4)?;
                 let vocals_notes: String = row.get(5)?;
+                let instrument_parts_json: String = row.get(6)?;
 
                 let parts = serde_json::from_str(&parts_json).map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
@@ -293,6 +365,8 @@ impl Db {
                     )
                 })?;
                 let instruments = serde_json::from_str(&instruments_json).unwrap_or_default();
+                let instrument_parts =
+                    serde_json::from_str(&instrument_parts_json).unwrap_or_default();
 
                 Ok(Song {
                     name,
@@ -301,6 +375,8 @@ impl Db {
                     parts,
                     instruments,
                     vocals_notes,
+                    instrument_parts,
+                    instrument_capos: Default::default(),
                 })
             },
         )
