@@ -1,6 +1,26 @@
 #![allow(non_snake_case)]
 
 use dioxus::prelude::*;
+use manganis::Asset;
+
+use song::Instrument;
+
+const ICON_BASE: Asset = manganis::asset!("/assets/icons/base.png");
+const ICON_ELECTRIC: Asset = manganis::asset!("/assets/icons/electric.png");
+const ICON_ACOUSTIC: Asset = manganis::asset!("/assets/icons/acoustic.png");
+const ICON_BASS: Asset = manganis::asset!("/assets/icons/bass.png");
+const ICON_PIANO: Asset = manganis::asset!("/assets/icons/piano.png");
+const ICON_DRUMS: Asset = manganis::asset!("/assets/icons/drums.png");
+
+fn inst_icon(inst: Instrument) -> Asset {
+    match inst {
+        Instrument::Guitar => ICON_ELECTRIC,
+        Instrument::AcousticGuitar => ICON_ACOUSTIC,
+        Instrument::Bass => ICON_BASS,
+        Instrument::Piano => ICON_PIANO,
+        Instrument::Drums => ICON_DRUMS,
+    }
+}
 
 mod auth;
 #[cfg(not(target_arch = "wasm32"))]
@@ -326,7 +346,7 @@ struct SongRow {
     username: String,
 }
 
-use song::{Chord, ChordQuality, Instrument, ScaleDegree, Song};
+use song::{Chord, ChordQuality, ScaleDegree, Song};
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 #[derive(Routable, Clone, PartialEq)]
@@ -716,7 +736,7 @@ fn SongView(
                                         *active_instrument.write() = None;
                                         *inst_save_msg.write() = None;
                                     },
-                                    img { src: "/assets/icons/base.png", style: "width: 28px; height: 28px; object-fit: contain;", alt: "Base" }
+                                    img { src: ICON_BASE.to_string(), style: "width: 28px; height: 28px; object-fit: contain;", alt: "Base" }
                                     span { style: "{lbl_s}", "Base" }
                                 }
                             }
@@ -768,7 +788,7 @@ fn SongView(
                                                 *inst_save_msg.write() = None;
                                             }
                                         },
-                                        img { src: "{inst.icon_path()}", style: "width: 28px; height: 28px; object-fit: contain;", alt: "{inst.label()}" }
+                                        img { src: inst_icon(inst).to_string(), style: "width: 28px; height: 28px; object-fit: contain;", alt: "{inst.label()}" }
                                         span { style: "{lbl_s}", "{inst.label()}" }
                                     }
                                 }
@@ -812,7 +832,7 @@ fn SongView(
                         // Info banner
                         div {
                             style: "margin-bottom: 18px; background: #fff8e1; border: 1px solid #ffe082; border-radius: 8px; padding: 10px 16px; font-size: 12px; color: #795548; display: flex; align-items: center; gap: 8px;",
-                            img { src: "{inst.icon_path()}", style: "width: 22px; height: 22px; object-fit: contain;", alt: "{inst_label}" }
+                            img { src: inst_icon(inst).to_string(), style: "width: 22px; height: 22px; object-fit: contain;", alt: "{inst_label}" }
                             span { "✏️  " strong { "{inst_label}" } " sheet — edits apply to this instrument only" }
                         }
                         // Instrument capo control
@@ -1586,7 +1606,7 @@ fn LibraryPage() -> Element {
                                             span {
                                                 key: "{inst.label()}",
                                                 style: "display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600; background: #f0ece2; border: 1px solid #d8d4ca; border-radius: 6px; padding: 2px 7px; color: #555;",
-                                                img { src: "{inst.icon_path()}", style: "width: 16px; height: 16px; object-fit: contain;", alt: "{inst.label()}" }
+                                                img { src: inst_icon(inst).to_string(), style: "width: 16px; height: 16px; object-fit: contain;", alt: "{inst.label()}" }
                                                 "{inst.label()}"
                                             }
                                         }
@@ -1689,9 +1709,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
 
     let inst = Instrument::from_label(&instrument);
     let accent = inst.map(|i| i.accent_color()).unwrap_or("#1a1a2e");
-    let inst_icon_path = inst
-        .map(|i| i.icon_path())
-        .unwrap_or("/assets/icons/base.png");
+    let inst_icon_asset = inst.map(inst_icon).unwrap_or(ICON_BASE);
     let inst_label = inst
         .map(|i| i.label())
         .unwrap_or_else(|| instrument.as_str());
@@ -1743,7 +1761,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                     // Instrument badge
                     div {
                         style: "display: inline-flex; align-items: center; gap: 10px; background: {accent}; color: #fff; border-radius: 12px; padding: 10px 20px; margin-bottom: 22px;",
-                        img { src: "{inst_icon_path}", style: "width: 36px; height: 36px; object-fit: contain;", alt: "{inst_label}" }
+                        img { src: inst_icon_asset.to_string(), style: "width: 36px; height: 36px; object-fit: contain;", alt: "{inst_label}" }
                         span { style: "font-size: 16px; font-weight: 800; letter-spacing: 0.5px;", "{inst_label}" }
                     }
 
