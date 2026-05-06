@@ -766,7 +766,6 @@ fn SongView(
                             } else {
                                 "display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:#f0ece2;border:1.5px solid #d8d4ca;border-radius:10px;cursor:pointer;font-family:inherit;"
                             };
-                            let icon_s = if is_base { "font-size:22px;" } else { "font-size:22px;opacity:0.45;" };
                             let lbl_s = if is_base {
                                 "font-size:9px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#f0ece2;"
                             } else {
@@ -798,7 +797,6 @@ fn SongView(
                                 } else {
                                     "display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:#f0ece2;border:1.5px solid #d8d4ca;border-radius:10px;cursor:pointer;font-family:inherit;".to_string()
                                 };
-                                let icon_s = if is_active { "font-size:22px;".to_string() } else { "font-size:22px;opacity:0.45;".to_string() };
                                 let lbl_s = if is_active {
                                     "font-size:9px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#fff;".to_string()
                                 } else {
@@ -855,7 +853,7 @@ fn SongView(
             } else {
                 // Instrument-specific sheet
                 {
-                    let inst = active_instrument.read().clone().unwrap();
+                    let inst = (*active_instrument.read()).unwrap();
                     let (mut act_song, mut act_capo) = match inst {
                         Instrument::Guitar => (guitar_song, guitar_capo),
                         Instrument::AcousticGuitar => (acoustic_song, acoustic_capo),

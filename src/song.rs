@@ -264,26 +264,6 @@ pub enum Instrument {
 }
 
 impl Instrument {
-    pub fn icon(self) -> &'static str {
-        match self {
-            Instrument::Guitar => "\u{1F3B8}",
-            Instrument::AcousticGuitar => "\u{1FA95}",
-            Instrument::Bass => "\u{1F3B8}",
-            Instrument::Piano => "\u{1F3B9}",
-            Instrument::Drums => "\u{1F941}",
-        }
-    }
-
-    pub fn icon_path(self) -> &'static str {
-        match self {
-            Instrument::Guitar => "/assets/icons/electric.png",
-            Instrument::AcousticGuitar => "/assets/icons/acoustic.png",
-            Instrument::Bass => "/assets/icons/bass.png",
-            Instrument::Piano => "/assets/icons/piano.png",
-            Instrument::Drums => "/assets/icons/drums.png",
-        }
-    }
-
     pub fn label(self) -> &'static str {
         match self {
             Instrument::Guitar => "Electric",
