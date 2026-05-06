@@ -1136,18 +1136,24 @@ fn SongView(
                     let cs  = chord_size() as f32;
                     let cap = capo();
 
-                    // Collect: base sheet + one entry per instrument
-                    let mut exports: Vec<(Song, String)> = Vec::new();
-                    exports.push((s.clone(), s.name.clone()));
+                    // Collect: base sheet + one entry per instrument that has saved overrides.
+                    // Each entry is (song_with_correct_parts, filename, capo_for_that_sheet).
+                    let mut exports: Vec<(Song, String, u8)> = Vec::new();
+                    exports.push((s.clone(), s.name.clone(), cap));
                     for inst in Instrument::all() {
-                        let filename = format!("{}_{}", s.name, inst.label());
-                        exports.push((s.clone(), filename));
+                        if let Some(parts) = s.instrument_parts.get(inst.label()).cloned() {
+                            let inst_cap = *s.instrument_capos.get(inst.label()).unwrap_or(&0);
+                            let mut inst_sheet = s.clone();
+                            inst_sheet.parts = parts;
+                            let filename = format!("{}_{}", s.name, inst.label());
+                            exports.push((inst_sheet, filename, inst_cap));
+                        }
                     }
 
                     #[cfg(not(target_arch = "wasm32"))]
-                    for (sheet, filename) in &exports {
+                    for (sheet, filename, sheet_cap) in &exports {
                         let path = format!("{filename}.pdf");
-                        match pdf::save_pdf(sheet, &path, deg, pns, cs, cap) {
+                        match pdf::save_pdf(sheet, &path, deg, pns, cs, *sheet_cap) {
                             Ok(_)  => println!("✅  PDF saved to {path}"),
                             Err(e) => eprintln!("❌  PDF export failed for {path}: {e}"),
                         }
@@ -1160,7 +1166,7 @@ fn SongView(
                         use web_sys::{Blob, BlobPropertyBag, HtmlAnchorElement, Url};
                         use std::io::Write;
 
-                        // Build a ZIP containing base.pdf + one pdf per instrument.
+                        // Build a ZIP containing base.pdf + one pdf per instrument override.
                         // A single download is the only approach that works in Safari
                         // (which blocks downloads not triggered directly by a user gesture).
                         let mut zip_buf: Vec<u8> = Vec::new();
@@ -1169,8 +1175,8 @@ fn SongView(
                             let opts = zip::write::SimpleFileOptions::default()
                                 .compression_method(zip::CompressionMethod::Deflated);
 
-                            for (sheet, filename) in &exports {
-                                match pdf::generate_pdf_bytes(sheet, deg, pns, cs, cap) {
+                            for (sheet, filename, sheet_cap) in &exports {
+                                match pdf::generate_pdf_bytes(sheet, deg, pns, cs, *sheet_cap) {
                                     Ok(bytes) => {
                                         let _ = zip.start_file(format!("{filename}.pdf"), opts);
                                         let _ = zip.write_all(&bytes);
