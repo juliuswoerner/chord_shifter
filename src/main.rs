@@ -67,6 +67,12 @@ struct StoredSong {
     artist: String,
     key: String,
     parts_json: String,
+    #[serde(default)]
+    instruments_json: String,
+    #[serde(default)]
+    vocals_notes: String,
+    #[serde(default)]
+    user_id: i64,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -115,15 +121,19 @@ impl Db {
         Ok(Self)
     }
 
-    fn save_song(&self, song: &song::Song) -> Result<i64, String> {
+    fn save_song(&self, song: &song::Song, user_id: i64) -> Result<i64, String> {
         let parts_json = serde_json::to_string(&song.parts).map_err(|e| e.to_string())?;
+        let instruments_json =
+            serde_json::to_string(&song.instruments).map_err(|e| e.to_string())?;
         let mut songs = ls_read();
         if let Some(row) = songs
             .iter_mut()
-            .find(|s| s.name == song.name && s.artist == song.artist)
+            .find(|s| s.name == song.name && s.artist == song.artist && s.user_id == user_id)
         {
             row.key = song.key.clone();
             row.parts_json = parts_json;
+            row.instruments_json = instruments_json;
+            row.vocals_notes = song.vocals_notes.clone();
             let id = row.id;
             ls_write(&songs);
             Ok(id)
@@ -135,19 +145,38 @@ impl Db {
                 artist: song.artist.clone(),
                 key: song.key.clone(),
                 parts_json,
+                instruments_json,
+                vocals_notes: song.vocals_notes.clone(),
+                user_id,
             });
             ls_write(&songs);
             Ok(id)
         }
     }
 
-    fn list_songs(&self) -> Result<Vec<SongRow>, String> {
+    fn list_songs(&self, user_id: i64) -> Result<Vec<SongRow>, String> {
+        let users = ls_read_users();
+        let username = users
+            .iter()
+            .find(|u| u.id == user_id)
+            .map(|u| u.username.clone())
+            .unwrap_or_default();
         Ok(ls_read()
             .into_iter()
-            .map(|s| SongRow {
-                id: s.id,
-                name: s.name,
-                artist: s.artist,
+            .filter(|s| s.user_id == user_id)
+            .map(|s| {
+                let instruments = if s.instruments_json.is_empty() {
+                    Vec::new()
+                } else {
+                    serde_json::from_str(&s.instruments_json).unwrap_or_default()
+                };
+                SongRow {
+                    id: s.id,
+                    name: s.name,
+                    artist: s.artist,
+                    instruments,
+                    username: username.clone(),
+                }
             })
             .collect())
     }
@@ -159,11 +188,18 @@ impl Db {
             .ok_or_else(|| format!("Song {id} not found"))
             .and_then(|s| {
                 let parts = serde_json::from_str(&s.parts_json).map_err(|e| e.to_string())?;
+                let instruments = if s.instruments_json.is_empty() {
+                    Vec::new()
+                } else {
+                    serde_json::from_str(&s.instruments_json).unwrap_or_default()
+                };
                 Ok(song::Song {
                     name: s.name,
                     artist: s.artist,
                     key: s.key,
                     parts,
+                    instruments,
+                    vocals_notes: s.vocals_notes,
                 })
             })
     }
@@ -229,9 +265,11 @@ struct SongRow {
     id: i64,
     name: String,
     artist: String,
+    instruments: Vec<song::Instrument>,
+    username: String,
 }
 
-use song::{Chord, ChordQuality, ScaleDegree, Song};
+use song::{Chord, ChordQuality, Instrument, ScaleDegree, Song};
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 #[derive(Routable, Clone, PartialEq)]
@@ -244,6 +282,8 @@ enum Route {
     NewSongPage {},
     #[route("/song/:id")]
     SongPage { id: i64 },
+    #[route("/song/:id/instrument/:instrument")]
+    InstrumentSheetPage { id: i64, instrument: String },
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -329,6 +369,7 @@ fn SongView(
     song: Signal<Song>,
     db: Signal<Option<Db>>,
     mut current_user: Signal<Option<User>>,
+    song_id: Option<i64>,
 ) -> Element {
     let nav = use_navigator();
     let mut show_degrees = use_signal(|| false);
@@ -345,6 +386,7 @@ fn SongView(
     };
 
     let mut transpose_root = use_signal(|| "C".to_string());
+    let mut capo = use_signal(|| 0_u8);
     let mut part_name_size = use_signal(|| 9_u32);
     let mut chord_size = use_signal(|| 18_u32);
 
@@ -550,11 +592,96 @@ fn SongView(
                         "Transpose"
                     }
                 }
+
+                // Capo row
+                div {
+                    style: "margin-top: 14px; display: flex; align-items: center; gap: 10px;",
+                    span {
+                        style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;",
+                        "Capo:"
+                    }
+                    button {
+                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                        onclick: move |_| { if capo() > 0 { *capo.write() -= 1; } },
+                        "−"
+                    }
+                    span {
+                        style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #1a1a2e;",
+                        if capo() == 0 { "Off" } else { "{capo()}" }
+                    }
+                    button {
+                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                        onclick: move |_| { if capo() < 12 { *capo.write() += 1; } },
+                        "+"
+                    }
+                    if capo() > 0 {
+                        span {
+                            style: "font-size: 11px; color: #888; font-style: italic;",
+                            "→ play in {song.read().apply_capo(capo()).key}"
+                        }
+                    }
+                }
+
+                // ── Instrument picker ─────────────────────────────────────────
+                div {
+                    style: "margin-top: 18px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;",
+                    span {
+                        style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;",
+                        "Instruments:"
+                    }
+                    div {
+                        style: "display: flex; gap: 8px; flex-wrap: wrap;",
+                        for inst in Instrument::all() {
+                            {
+                                let is_active = song.read().instruments.contains(&inst);
+                                let btn_style = if is_active {
+                                    "display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:#1a1a2e;border:none;border-radius:10px;cursor:pointer;font-family:inherit;"
+                                } else {
+                                    "display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:#f0ece2;border:1.5px solid #d8d4ca;border-radius:10px;cursor:pointer;font-family:inherit;"
+                                };
+                                let icon_style = if is_active {
+                                    "font-size:22px;"
+                                } else {
+                                    "font-size:22px;opacity:0.35;"
+                                };
+                                let label_style = if is_active {
+                                    "font-size:9px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#f0ece2;"
+                                } else {
+                                    "font-size:9px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#888;"
+                                };
+                                rsx! {
+                                    button {
+                                        key: "{inst.label()}",
+                                        style: "{btn_style}",
+                                        title: "{inst.label()}",
+                                        onclick: move |_| {
+                                            if let Some(id) = song_id {
+                                                nav.push(Route::InstrumentSheetPage {
+                                                    id,
+                                                    instrument: inst.label().to_string(),
+                                                });
+                                            } else {
+                                                let mut s = song.write();
+                                                if s.instruments.contains(&inst) {
+                                                    s.instruments.retain(|i| i != &inst);
+                                                } else {
+                                                    s.instruments.push(inst);
+                                                }
+                                            }
+                                        },
+                                        span { style: "{icon_style}", "{inst.icon()}" }
+                                        span { style: "{label_style}", "{inst.label()}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // ── Parts ─────────────────────────────────────────────────────────
             for part_index in 0..song.read().parts.len() {
-                PartView { key: "{part_index}", song, part_index, show_degrees }
+                PartView { key: "{part_index}", song, part_index, show_degrees, capo }
             }
 
             // ── Add part button ───────────────────────────────────────────────
@@ -579,6 +706,51 @@ fn SongView(
                     );
                 },
                 "+ Add Part"
+            }
+
+            // ── Vocals / notes ────────────────────────────────────────────────
+            div {
+                style: "
+                    margin-bottom: 24px;
+                    border: 1.5px solid #e8e4da;
+                    border-radius: 12px;
+                    overflow: hidden;
+                ",
+                div {
+                    style: "
+                        display: flex;
+                        align-items: center;
+                        gap: 8px;
+                        padding: 10px 16px;
+                        background: #f7f5f0;
+                        border-bottom: 1.5px solid #e8e4da;
+                    ",
+                    span { style: "font-size: 18px; line-height: 1;", "\u{1F3A4}" }
+                    span {
+                        style: "font-size: 11px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: 1.2px;",
+                        "Vocals / Notes"
+                    }
+                }
+                textarea {
+                    style: "
+                        display: block;
+                        width: 100%;
+                        min-height: 90px;
+                        padding: 12px 16px;
+                        font-size: 14px;
+                        color: #444;
+                        background: #fff;
+                        border: none;
+                        outline: none;
+                        font-family: inherit;
+                        resize: vertical;
+                        box-sizing: border-box;
+                        line-height: 1.6;
+                    ",
+                    placeholder: "Add lyrics, vocal notes, cues\u{2026}",
+                    value: "{song.read().vocals_notes}",
+                    oninput: move |e| song.write().vocals_notes = e.value(),
+                }
             }
 
             // ── PDF font sizes ────────────────────────────────────────────────
@@ -672,15 +844,16 @@ fn SongView(
                     let deg = show_degrees();
                     let pns = part_name_size() as f32;
                     let cs  = chord_size() as f32;
+                    let cap = capo();
 
                     #[cfg(not(target_arch = "wasm32"))]
-                    match pdf::save_pdf(&s, "chord_sheet.pdf", deg, pns, cs) {
+                    match pdf::save_pdf(&s, "chord_sheet.pdf", deg, pns, cs, cap) {
                         Ok(_)  => println!("✅  PDF saved to chord_sheet.pdf"),
                         Err(e) => eprintln!("❌  PDF export failed: {e}"),
                     }
 
                     #[cfg(target_arch = "wasm32")]
-                    match pdf::generate_pdf_bytes(&s, deg, pns, cs) {
+                    match pdf::generate_pdf_bytes(&s, deg, pns, cs, cap) {
                         Ok(bytes) => trigger_download(bytes, &s.name),
                         Err(e)    => web_sys::console::error_1(
                             &format!("PDF export failed: {e}").into(),
@@ -707,16 +880,18 @@ fn SongView(
                     font-family: inherit;
                 ",
                 onclick: move |_| {
-                    let s   = song.read().clone();
-                    let deg = show_degrees();
-                    let pns = part_name_size() as f32;
-                    let cs  = chord_size() as f32;
+                    let s       = song.read().clone();
+                    let deg     = show_degrees();
+                    let pns     = part_name_size() as f32;
+                    let cs      = chord_size() as f32;
+                    let cap     = capo();
+                    let user_id = current_user.read().as_ref().map(|u| u.id).unwrap_or(0);
                     if let Some(db_ref) = db.read().as_ref() {
-                        match db_ref.save_song(&s) {
+                        match db_ref.save_song(&s, user_id) {
                             Ok(song_id) => {
                                 println!("✅  Song saved (id={song_id})");
                                 // Also generate and store the current PDF
-                                match pdf::generate_pdf_bytes(&s, deg, pns, cs) {
+                                match pdf::generate_pdf_bytes(&s, deg, pns, cs, cap) {
                                     Ok(bytes) => match db_ref.save_pdf(song_id, &bytes) {
                                         Ok(pdf_id) => println!("✅  PDF stored (id={pdf_id})"),
                                         Err(e) => eprintln!("❌  PDF store failed: {e}"),
@@ -884,7 +1059,12 @@ fn LoginScreen(db: Signal<Option<Db>>, mut current_user: Signal<Option<User>>) -
 // ── Part block ────────────────────────────────────────────────────────────────
 
 #[component]
-fn PartView(song: Signal<Song>, part_index: usize, show_degrees: Signal<bool>) -> Element {
+fn PartView(
+    song: Signal<Song>,
+    part_index: usize,
+    show_degrees: Signal<bool>,
+    capo: Signal<u8>,
+) -> Element {
     let chord_count = song
         .read()
         .parts
@@ -964,7 +1144,7 @@ fn PartView(song: Signal<Song>, part_index: usize, show_degrees: Signal<bool>) -
                 style: "display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start;",
 
                 for chord_index in 0..chord_count {
-                    ChordEditor { key: "{chord_index}", song, part_index, chord_index, show_degrees }
+                    ChordEditor { key: "{chord_index}", song, part_index, chord_index, show_degrees, capo }
                 }
 
                 // Add chord button
@@ -1010,8 +1190,9 @@ fn LibraryPage() -> Element {
     let mut status: Signal<String> = use_signal(String::new);
 
     use_effect(move || {
+        let user_id = current_user.read().as_ref().map(|u| u.id).unwrap_or(0);
         if let Some(db_ref) = db.read().as_ref() {
-            match db_ref.list_songs() {
+            match db_ref.list_songs(user_id) {
                 Ok(list) => *rows.write() = list,
                 Err(e) => *status.write() = format!("Load error: {e}"),
             }
@@ -1143,6 +1324,24 @@ fn LibraryPage() -> Element {
                                         style: "font-size: 12px; color: #777; margin-top: 2px;",
                                         "{row.artist}"
                                     }
+                                    // Instruments + username chips
+                                    div {
+                                        style: "display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 7px;",
+                                        for inst in row.instruments.iter().cloned() {
+                                            span {
+                                                key: "{inst.label()}",
+                                                style: "display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600; background: #f0ece2; border: 1px solid #d8d4ca; border-radius: 6px; padding: 2px 7px; color: #555;",
+                                                span { style: "font-size: 13px;", "{inst.icon()}" }
+                                                "{inst.label()}"
+                                            }
+                                        }
+                                        if !row.username.is_empty() {
+                                            span {
+                                                style: "display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600; background: #e8f0e8; border: 1px solid #c8d8c8; border-radius: 6px; padding: 2px 7px; color: #2d6a4f;",
+                                                "👤  {row.username}"
+                                            }
+                                        }
+                                    }
                                 }
 
                                 button {
@@ -1159,9 +1358,10 @@ fn LibraryPage() -> Element {
                                     title: "Delete",
                                     onclick: move |e| {
                                         e.stop_propagation();
+                                        let uid = current_user.read().as_ref().map(|u| u.id).unwrap_or(0);
                                         if let Some(db_ref) = db.read().as_ref() {
                                             let _ = db_ref.delete_song(row_id);
-                                            match db_ref.list_songs() {
+                                            match db_ref.list_songs(uid) {
                                                 Ok(list) => *rows.write() = list,
                                                 Err(err) => *status.write() = format!("Error: {err}"),
                                             }
@@ -1195,7 +1395,7 @@ fn SongPage(id: i64) -> Element {
     rsx! {
         div {
             style: "display: flex; align-items: flex-start; justify-content: center; padding: 48px 20px;",
-            SongView { song, db, current_user }
+            SongView { song, db, current_user, song_id: Some(id) }
         }
     }
 }
@@ -1212,7 +1412,209 @@ fn NewSongPage() -> Element {
     rsx! {
         div {
             style: "display: flex; align-items: flex-start; justify-content: center; padding: 48px 20px;",
-            SongView { song, db, current_user }
+            SongView { song, db, current_user, song_id: None }
+        }
+    }
+}
+
+// ── Instrument sheet page ───────────────────────────────────────────────────────────────
+
+#[component]
+fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
+    let db: Signal<Option<Db>> = use_context();
+    let mut current_user: Signal<Option<User>> = use_context();
+    let nav = use_navigator();
+
+    let song: Signal<Song> = use_signal(move || {
+        db.read()
+            .as_ref()
+            .and_then(|d| d.load_song(id).ok())
+            .unwrap_or_else(example_song)
+    });
+
+    let inst = Instrument::from_label(&instrument);
+    let accent = inst.map(|i| i.accent_color()).unwrap_or("#1a1a2e");
+    let inst_icon = inst.map(|i| i.icon()).unwrap_or("🎵");
+    let inst_label = inst
+        .map(|i| i.label())
+        .unwrap_or_else(|| instrument.as_str());
+
+    let mut capo = use_signal(|| 0_u8);
+
+    rsx! {
+        div {
+            style: "display: flex; align-items: flex-start; justify-content: center; padding: 48px 20px;",
+
+            div {
+                style: "
+                    background: #ffffff;
+                    border-radius: 14px;
+                    padding: 48px 52px;
+                    box-shadow: 0 4px 32px rgba(0,0,0,0.10);
+                    max-width: 720px;
+                    width: 100%;
+                ",
+
+                // ── Page header ───────────────────────────────────────────────────────────────
+                div {
+                    style: "border-bottom: 2px solid #e8e4da; padding-bottom: 28px; margin-bottom: 36px;",
+
+                    // Top nav: back + user + logout
+                    div {
+                        style: "display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 20px;",
+                        button {
+                            style: "padding: 4px 12px; background: transparent; border: 1px solid #ccc; border-radius: 8px; font-size: 11px; font-weight: 700; cursor: pointer; font-family: inherit; color: #888;",
+                            onclick: move |_| { nav.push(Route::SongPage { id }); },
+                            "←  Full Sheet"
+                        }
+                        div {
+                            style: "display: flex; align-items: center; gap: 10px;",
+                            if let Some(user) = current_user.read().as_ref() {
+                                span {
+                                    style: "font-size: 12px; color: #888; font-weight: 600;",
+                                    "👤  {user.username}"
+                                }
+                            }
+                            button {
+                                style: "padding: 4px 12px; background: transparent; border: 1px solid #ccc; border-radius: 8px; font-size: 11px; font-weight: 700; cursor: pointer; font-family: inherit; color: #888;",
+                                onclick: move |_| *current_user.write() = None,
+                                "Log out"
+                            }
+                        }
+                    }
+
+                    // Instrument badge
+                    div {
+                        style: "display: inline-flex; align-items: center; gap: 10px; background: {accent}; color: #fff; border-radius: 12px; padding: 10px 20px; margin-bottom: 22px;",
+                        span { style: "font-size: 28px; line-height: 1;", "{inst_icon}" }
+                        span { style: "font-size: 16px; font-weight: 800; letter-spacing: 0.5px;", "{inst_label}" }
+                    }
+
+                    // Song title + artist
+                    h1 {
+                        style: "margin: 0 0 6px; font-size: 38px; font-weight: 800; color: #1a1a2e; letter-spacing: -0.5px;",
+                        "{song.read().name}"
+                    }
+                    p {
+                        style: "margin: 0 0 14px; font-size: 17px; color: #666; font-style: italic;",
+                        "{song.read().artist}"
+                    }
+
+                    // Key pill
+                    span {
+                        style: "display: inline-block; background: {accent}; color: #fff; border-radius: 20px; padding: 5px 16px; font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;",
+                        "Key: {song.read().key}"
+                    }
+
+                    // Capo control
+                    div {
+                        style: "margin-top: 14px; display: flex; align-items: center; gap: 10px;",
+                        span {
+                            style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;",
+                            "Capo:"
+                        }
+                        button {
+                            style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                            onclick: move |_| { if capo() > 0 { *capo.write() -= 1; } },
+                            "−"
+                        }
+                        span {
+                            style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #1a1a2e;",
+                            if capo() == 0 { "Off" } else { "{capo()}" }
+                        }
+                        button {
+                            style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                            onclick: move |_| { if capo() < 12 { *capo.write() += 1; } },
+                            "+"
+                        }
+                        if capo() > 0 {
+                            span {
+                                style: "font-size: 11px; color: #888; font-style: italic;",
+                                "→ play in {song.read().apply_capo(capo()).key}"
+                            }
+                        }
+                    }
+                }
+
+                // ── Chord parts (read-only) ──────────────────────────────────────────────────
+                for part_index in 0..song.read().parts.len() {{
+                    let part_name = song
+                        .read()
+                        .parts
+                        .get(part_index)
+                        .map(|p| p.name.clone())
+                        .unwrap_or_default();
+                    let chord_count = song
+                        .read()
+                        .parts
+                        .get(part_index)
+                        .map(|p| p.chords.len())
+                        .unwrap_or(0);
+                    rsx! {
+                        div {
+                            key: "{part_index}",
+                            style: "margin-bottom: 32px; border: 1px solid #ece8df; border-radius: 12px; padding: 18px 20px 16px;",
+                            p {
+                                style: "margin: 0 0 14px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 3px; color: #aaa;",
+                                "{part_name}"
+                            }
+                            div {
+                                style: "display: flex; flex-wrap: wrap; gap: 10px;",
+                                for chord_index in 0..chord_count {{
+                                    let chord = song
+                                        .read()
+                                        .parts
+                                        .get(part_index)
+                                        .and_then(|p| p.chords.get(chord_index))
+                                        .cloned()
+                                        .unwrap_or_else(|| Chord::new("C", ChordQuality::Major));
+                                    let capo_label = if capo() > 0 {
+                                        format!("{}{}", song::shift_note(&chord.root, capo()), chord.quality.symbol())
+                                    } else {
+                                        chord.display()
+                                    };
+                                    rsx! {
+                                        div {
+                                            key: "{chord_index}",
+                                            style: "
+                                                background: #f5f2ea;
+                                                border: 2px solid {accent};
+                                                border-radius: 12px;
+                                                padding: 14px 18px;
+                                                min-width: 72px;
+                                                text-align: center;
+                                            ",
+                                            span {
+                                                style: "font-size: 36px; font-weight: 800; color: #1a1a2e; letter-spacing: -1px; line-height: 1; display: block;",
+                                                "{capo_label}"
+                                            }
+                                        }
+                                    }
+                                }}
+                            }
+                        }
+                    }
+                }}
+
+                // ── Vocals / notes (read-only) ─────────────────────────────────────────────
+                if !song.read().vocals_notes.is_empty() {
+                    div {
+                        style: "border: 1.5px solid #e8e4da; border-radius: 12px; overflow: hidden;",
+                        div {
+                            style: "display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: #f7f5f0; border-bottom: 1.5px solid #e8e4da;",
+                            span { style: "font-size: 18px; line-height: 1;", "🎤" }
+                            span {
+                                style: "font-size: 11px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: 1.2px;",
+                                "Vocals / Notes"
+                            }
+                        }
+                        div {
+                            style: "padding: 14px 16px; font-size: 14px; color: #444; line-height: 1.6; white-space: pre-wrap;",
+                            "{song.read().vocals_notes}"
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -1225,6 +1627,7 @@ fn ChordEditor(
     part_index: usize,
     chord_index: usize,
     show_degrees: Signal<bool>,
+    capo: Signal<u8>,
 ) -> Element {
     let chord = song
         .read()
@@ -1236,6 +1639,13 @@ fn ChordEditor(
 
     let display_label = if show_degrees() {
         chord.degree_display()
+    } else if capo() > 0 {
+        // Show the chord shape the player needs to play with the capo.
+        format!(
+            "{}{}",
+            song::shift_note(&chord.root, capo()),
+            chord.quality.symbol()
+        )
     } else {
         chord.display()
     };
