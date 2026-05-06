@@ -907,12 +907,29 @@ fn SongView(
                     }
 
                     #[cfg(target_arch = "wasm32")]
-                    for (sheet, filename) in exports {
-                        match pdf::generate_pdf_bytes(&sheet, deg, pns, cs, cap) {
-                            Ok(bytes) => trigger_download(bytes, &filename),
-                            Err(e)    => web_sys::console::error_1(
-                                &format!("PDF export failed for {filename}: {e}").into(),
-                            ),
+                    {
+                        use wasm_bindgen::closure::Closure;
+                        use wasm_bindgen::JsCast;
+                        for (i, (sheet, filename)) in exports.into_iter().enumerate() {
+                            match pdf::generate_pdf_bytes(&sheet, deg, pns, cs, cap) {
+                                Ok(bytes) => {
+                                    // Stagger each download by 300 ms so the browser
+                                    // doesn't suppress subsequent ones.
+                                    let delay = (i as i32) * 300;
+                                    let cb = Closure::once(move || trigger_download(bytes, &filename));
+                                    web_sys::window()
+                                        .unwrap()
+                                        .set_timeout_with_callback_and_timeout_and_arguments_0(
+                                            cb.as_ref().unchecked_ref(),
+                                            delay,
+                                        )
+                                        .ok();
+                                    cb.forget();
+                                }
+                                Err(e) => web_sys::console::error_1(
+                                    &format!("PDF export failed for {filename}: {e}").into(),
+                                ),
+                            }
                         }
                     }
                 },
