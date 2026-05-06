@@ -468,9 +468,82 @@ fn SongView(
     let mut chord_size = use_signal(|| 18_u32);
     // None = base sheet; Some(inst) = that instrument's sheet
     let mut active_instrument: Signal<Option<Instrument>> = use_signal(|| None);
-    // Working copy used when an instrument tab is active
-    let mut inst_song: Signal<Song> = use_signal(|| song.read().clone());
-    let mut inst_capo: Signal<u8> = use_signal(|| 0_u8);
+    // Per-instrument working copies — each instrument has its own isolated signal
+    let guitar_song = {
+        let s = song.read();
+        let parts = s
+            .instrument_parts
+            .get("Electric")
+            .cloned()
+            .unwrap_or_else(|| s.parts.clone());
+        let sc = s.clone();
+        drop(s);
+        use_signal(move || Song { parts, ..sc })
+    };
+    let guitar_capo = {
+        let cap = *song.read().instrument_capos.get("Electric").unwrap_or(&0);
+        use_signal(move || cap)
+    };
+    let acoustic_song = {
+        let s = song.read();
+        let parts = s
+            .instrument_parts
+            .get("Acoustic")
+            .cloned()
+            .unwrap_or_else(|| s.parts.clone());
+        let sc = s.clone();
+        drop(s);
+        use_signal(move || Song { parts, ..sc })
+    };
+    let acoustic_capo = {
+        let cap = *song.read().instrument_capos.get("Acoustic").unwrap_or(&0);
+        use_signal(move || cap)
+    };
+    let bass_song = {
+        let s = song.read();
+        let parts = s
+            .instrument_parts
+            .get("Bass")
+            .cloned()
+            .unwrap_or_else(|| s.parts.clone());
+        let sc = s.clone();
+        drop(s);
+        use_signal(move || Song { parts, ..sc })
+    };
+    let bass_capo = {
+        let cap = *song.read().instrument_capos.get("Bass").unwrap_or(&0);
+        use_signal(move || cap)
+    };
+    let piano_song = {
+        let s = song.read();
+        let parts = s
+            .instrument_parts
+            .get("Piano")
+            .cloned()
+            .unwrap_or_else(|| s.parts.clone());
+        let sc = s.clone();
+        drop(s);
+        use_signal(move || Song { parts, ..sc })
+    };
+    let piano_capo = {
+        let cap = *song.read().instrument_capos.get("Piano").unwrap_or(&0);
+        use_signal(move || cap)
+    };
+    let drums_song = {
+        let s = song.read();
+        let parts = s
+            .instrument_parts
+            .get("Drums")
+            .cloned()
+            .unwrap_or_else(|| s.parts.clone());
+        let sc = s.clone();
+        drop(s);
+        use_signal(move || Song { parts, ..sc })
+    };
+    let drums_capo = {
+        let cap = *song.read().instrument_capos.get("Drums").unwrap_or(&0);
+        use_signal(move || cap)
+    };
     let mut inst_save_msg: Signal<Option<&'static str>> = use_signal(|| None);
 
     rsx! {
@@ -771,19 +844,6 @@ fn SongView(
                                                 *active_instrument.write() = None;
                                                 *inst_save_msg.write() = None;
                                             } else {
-                                                let s = song.read();
-                                                let parts = s
-                                                    .instrument_parts
-                                                    .get(inst.label())
-                                                    .cloned()
-                                                    .unwrap_or_else(|| s.parts.clone());
-                                                let saved_capo = *s
-                                                    .instrument_capos
-                                                    .get(inst.label())
-                                                    .unwrap_or(&0);
-                                                *inst_song.write() = Song { parts, ..s.clone() };
-                                                drop(s);
-                                                *inst_capo.write() = saved_capo;
                                                 *active_instrument.write() = Some(inst);
                                                 *inst_save_msg.write() = None;
                                             }
@@ -826,6 +886,13 @@ fn SongView(
                 // Instrument-specific sheet
                 {
                     let inst = active_instrument.read().clone().unwrap();
+                    let (mut act_song, mut act_capo) = match inst {
+                        Instrument::Guitar => (guitar_song, guitar_capo),
+                        Instrument::AcousticGuitar => (acoustic_song, acoustic_capo),
+                        Instrument::Bass => (bass_song, bass_capo),
+                        Instrument::Piano => (piano_song, piano_capo),
+                        Instrument::Drums => (drums_song, drums_capo),
+                    };
                     let accent = inst.accent_color();
                     let inst_label = inst.label();
                     rsx! {
@@ -844,28 +911,28 @@ fn SongView(
                             }
                             button {
                                 style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
-                                onclick: move |_| { if inst_capo() > 0 { *inst_capo.write() -= 1; } },
+                                onclick: move |_| { if act_capo() > 0 { *act_capo.write() -= 1; } },
                                 "−"
                             }
                             span {
                                 style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #1a1a2e;",
-                                if inst_capo() == 0 { "Off" } else { "{inst_capo()}" }
+                                if act_capo() == 0 { "Off" } else { "{act_capo()}" }
                             }
                             button {
                                 style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
-                                onclick: move |_| { if inst_capo() < 12 { *inst_capo.write() += 1; } },
+                                onclick: move |_| { if act_capo() < 12 { *act_capo.write() += 1; } },
                                 "+"
                             }
-                            if inst_capo() > 0 {
+                            if act_capo() > 0 {
                                 span {
                                     style: "font-size: 11px; color: #888; font-style: italic;",
-                                    "→ play in {inst_song.read().apply_capo(inst_capo()).key}"
+                                    "→ play in {act_song.read().apply_capo(act_capo()).key}"
                                 }
                             }
                         }
                         // Editable chord parts
-                        for part_index in 0..inst_song.read().parts.len() {
-                            PartView { key: "{part_index}", song: inst_song, part_index, show_degrees, capo: inst_capo }
+                        for part_index in 0..act_song.read().parts.len() {
+                            PartView { key: "{part_index}", song: act_song, part_index, show_degrees, capo: act_capo }
                         }
                         button {
                             style: "
@@ -882,7 +949,7 @@ fn SongView(
                                 font-family: inherit;
                                 width: 100%;
                             ",
-                            onclick: move |_| { inst_song.write().parts.push(crate::song::SongPart::new("New Part")); },
+                            onclick: move |_| { act_song.write().parts.push(crate::song::SongPart::new("New Part")); },
                             "+ Add Part"
                         }
                         // Save instrument sheet
@@ -902,8 +969,8 @@ fn SongView(
                                 ",
                                 onclick: move |_| {
                                     let label = inst.label().to_string();
-                                    let inst_parts = inst_song.read().parts.clone();
-                                    let cap = inst_capo();
+                                    let inst_parts = act_song.read().parts.clone();
+                                    let cap = act_capo();
                                     let mut updated = song.read().clone();
                                     updated.instrument_parts.insert(label.clone(), inst_parts);
                                     updated.instrument_capos.insert(label, cap);
