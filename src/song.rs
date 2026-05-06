@@ -274,6 +274,16 @@ impl Instrument {
         }
     }
 
+    pub fn icon_path(self) -> &'static str {
+        match self {
+            Instrument::Guitar => "/assets/icons/electric.png",
+            Instrument::AcousticGuitar => "/assets/icons/acoustic.png",
+            Instrument::Bass => "/assets/icons/bass.png",
+            Instrument::Piano => "/assets/icons/piano.png",
+            Instrument::Drums => "/assets/icons/drums.png",
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Instrument::Guitar => "Electric",

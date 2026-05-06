@@ -716,7 +716,7 @@ fn SongView(
                                         *active_instrument.write() = None;
                                         *inst_save_msg.write() = None;
                                     },
-                                    span { style: "{icon_s}", "🎵" }
+                                    img { src: "/assets/icons/base.png", style: "width: 28px; height: 28px; object-fit: contain;", alt: "Base" }
                                     span { style: "{lbl_s}", "Base" }
                                 }
                             }
@@ -768,7 +768,7 @@ fn SongView(
                                                 *inst_save_msg.write() = None;
                                             }
                                         },
-                                        span { style: "{icon_s}", "{inst.icon()}" }
+                                        img { src: "{inst.icon_path()}", style: "width: 28px; height: 28px; object-fit: contain;", alt: "{inst.label()}" }
                                         span { style: "{lbl_s}", "{inst.label()}" }
                                     }
                                 }
@@ -812,7 +812,7 @@ fn SongView(
                         // Info banner
                         div {
                             style: "margin-bottom: 18px; background: #fff8e1; border: 1px solid #ffe082; border-radius: 8px; padding: 10px 16px; font-size: 12px; color: #795548; display: flex; align-items: center; gap: 8px;",
-                            span { style: "font-size: 18px;", "{inst.icon()}" }
+                            img { src: "{inst.icon_path()}", style: "width: 22px; height: 22px; object-fit: contain;", alt: "{inst_label}" }
                             span { "✏️  " strong { "{inst_label}" } " sheet — edits apply to this instrument only" }
                         }
                         // Instrument capo control
@@ -1586,7 +1586,7 @@ fn LibraryPage() -> Element {
                                             span {
                                                 key: "{inst.label()}",
                                                 style: "display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600; background: #f0ece2; border: 1px solid #d8d4ca; border-radius: 6px; padding: 2px 7px; color: #555;",
-                                                span { style: "font-size: 13px;", "{inst.icon()}" }
+                                                img { src: "{inst.icon_path()}", style: "width: 16px; height: 16px; object-fit: contain;", alt: "{inst.label()}" }
                                                 "{inst.label()}"
                                             }
                                         }
@@ -1689,7 +1689,9 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
 
     let inst = Instrument::from_label(&instrument);
     let accent = inst.map(|i| i.accent_color()).unwrap_or("#1a1a2e");
-    let inst_icon = inst.map(|i| i.icon()).unwrap_or("🎵");
+    let inst_icon_path = inst
+        .map(|i| i.icon_path())
+        .unwrap_or("/assets/icons/base.png");
     let inst_label = inst
         .map(|i| i.label())
         .unwrap_or_else(|| instrument.as_str());
@@ -1741,7 +1743,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                     // Instrument badge
                     div {
                         style: "display: inline-flex; align-items: center; gap: 10px; background: {accent}; color: #fff; border-radius: 12px; padding: 10px 20px; margin-bottom: 22px;",
-                        span { style: "font-size: 28px; line-height: 1;", "{inst_icon}" }
+                        img { src: "{inst_icon_path}", style: "width: 36px; height: 36px; object-fit: contain;", alt: "{inst_label}" }
                         span { style: "font-size: 16px; font-weight: 800; letter-spacing: 0.5px;", "{inst_label}" }
                     }
 
