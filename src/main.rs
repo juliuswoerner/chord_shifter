@@ -908,29 +908,51 @@ fn SongView(
 
                     #[cfg(target_arch = "wasm32")]
                     {
-                        use wasm_bindgen::closure::Closure;
+                        use js_sys::Uint8Array;
                         use wasm_bindgen::JsCast;
-                        for (i, (sheet, filename)) in exports.into_iter().enumerate() {
-                            match pdf::generate_pdf_bytes(&sheet, deg, pns, cs, cap) {
-                                Ok(bytes) => {
-                                    // Stagger each download by 300 ms so the browser
-                                    // doesn't suppress subsequent ones.
-                                    let delay = (i as i32) * 300;
-                                    let cb = Closure::once(move || trigger_download(bytes, &filename));
-                                    web_sys::window()
-                                        .unwrap()
-                                        .set_timeout_with_callback_and_timeout_and_arguments_0(
-                                            cb.as_ref().unchecked_ref(),
-                                            delay,
-                                        )
-                                        .ok();
-                                    cb.forget();
+                        use web_sys::{Blob, BlobPropertyBag, HtmlAnchorElement, Url};
+                        use std::io::Write;
+
+                        // Build a ZIP containing base.pdf + one pdf per instrument.
+                        // A single download is the only approach that works in Safari
+                        // (which blocks downloads not triggered directly by a user gesture).
+                        let mut zip_buf: Vec<u8> = Vec::new();
+                        {
+                            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buf));
+                            let opts = zip::write::SimpleFileOptions::default()
+                                .compression_method(zip::CompressionMethod::Deflated);
+
+                            for (sheet, filename) in &exports {
+                                match pdf::generate_pdf_bytes(sheet, deg, pns, cs, cap) {
+                                    Ok(bytes) => {
+                                        let _ = zip.start_file(format!("{filename}.pdf"), opts);
+                                        let _ = zip.write_all(&bytes);
+                                    }
+                                    Err(e) => web_sys::console::error_1(
+                                        &format!("PDF generation failed for {filename}: {e}").into(),
+                                    ),
                                 }
-                                Err(e) => web_sys::console::error_1(
-                                    &format!("PDF export failed for {filename}: {e}").into(),
-                                ),
                             }
+                            let _ = zip.finish();
                         }
+
+                        let array = Uint8Array::from(zip_buf.as_slice());
+                        let parts = js_sys::Array::new();
+                        parts.push(&array);
+                        let opts = BlobPropertyBag::new();
+                        opts.set_type("application/zip");
+                        let blob =
+                            Blob::new_with_u8_array_sequence_and_options(&parts, &opts).expect("blob");
+                        let url = Url::create_object_url_with_blob(&blob).expect("url");
+                        let window = web_sys::window().expect("window");
+                        let document = window.document().expect("document");
+                        let a: HtmlAnchorElement = document
+                            .create_element("a").expect("a")
+                            .dyn_into().expect("cast");
+                        a.set_href(&url);
+                        a.set_download(&format!("{}.zip", s.name));
+                        a.click();
+                        let _ = Url::revoke_object_url(&url);
                     }
                 },
                 "📄  Export as PDF"
