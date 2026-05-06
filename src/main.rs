@@ -846,18 +846,31 @@ fn SongView(
                     let cs  = chord_size() as f32;
                     let cap = capo();
 
+                    // Collect: base sheet + one entry per selected instrument
+                    let mut exports: Vec<(Song, String)> = Vec::new();
+                    exports.push((s.clone(), s.name.clone()));
+                    for inst in &s.instruments {
+                        let filename = format!("{}_{}", s.name, inst.label());
+                        exports.push((s.clone(), filename));
+                    }
+
                     #[cfg(not(target_arch = "wasm32"))]
-                    match pdf::save_pdf(&s, "chord_sheet.pdf", deg, pns, cs, cap) {
-                        Ok(_)  => println!("✅  PDF saved to chord_sheet.pdf"),
-                        Err(e) => eprintln!("❌  PDF export failed: {e}"),
+                    for (sheet, filename) in &exports {
+                        let path = format!("{filename}.pdf");
+                        match pdf::save_pdf(sheet, &path, deg, pns, cs, cap) {
+                            Ok(_)  => println!("✅  PDF saved to {path}"),
+                            Err(e) => eprintln!("❌  PDF export failed for {path}: {e}"),
+                        }
                     }
 
                     #[cfg(target_arch = "wasm32")]
-                    match pdf::generate_pdf_bytes(&s, deg, pns, cs, cap) {
-                        Ok(bytes) => trigger_download(bytes, &s.name),
-                        Err(e)    => web_sys::console::error_1(
-                            &format!("PDF export failed: {e}").into(),
-                        ),
+                    for (sheet, filename) in exports {
+                        match pdf::generate_pdf_bytes(&sheet, deg, pns, cs, cap) {
+                            Ok(bytes) => trigger_download(bytes, &filename),
+                            Err(e)    => web_sys::console::error_1(
+                                &format!("PDF export failed for {filename}: {e}").into(),
+                            ),
+                        }
                     }
                 },
                 "📄  Export as PDF"
