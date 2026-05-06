@@ -846,10 +846,10 @@ fn SongView(
                     let cs  = chord_size() as f32;
                     let cap = capo();
 
-                    // Collect: base sheet + one entry per selected instrument
+                    // Collect: base sheet + one entry per instrument
                     let mut exports: Vec<(Song, String)> = Vec::new();
                     exports.push((s.clone(), s.name.clone()));
-                    for inst in &s.instruments {
+                    for inst in Instrument::all() {
                         let filename = format!("{}_{}", s.name, inst.label());
                         exports.push((s.clone(), filename));
                     }
