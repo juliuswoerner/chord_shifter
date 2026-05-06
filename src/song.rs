@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 // ── Chord quality ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -333,6 +335,12 @@ pub struct Song {
     /// Free-form vocals / lyrics notes.
     #[serde(default)]
     pub vocals_notes: String,
+    /// Per-instrument chord overrides. Key = Instrument::label().
+    #[serde(default)]
+    pub instrument_parts: HashMap<String, Vec<SongPart>>,
+    /// Per-instrument capo settings. Key = Instrument::label().
+    #[serde(default)]
+    pub instrument_capos: HashMap<String, u8>,
 }
 
 impl Song {
@@ -344,6 +352,8 @@ impl Song {
             parts: Vec::new(),
             instruments: Vec::new(),
             vocals_notes: String::new(),
+            instrument_parts: HashMap::new(),
+            instrument_capos: HashMap::new(),
         }
     }
 
@@ -391,6 +401,21 @@ impl Song {
         } else {
             format!("{} {}", new_root, mode)
         };
+        // Also transpose instrument-specific overrides.
+        for parts in self.instrument_parts.values_mut() {
+            for part in parts.iter_mut() {
+                for chord in &mut part.chords {
+                    if let Some(degree) = chord.degree {
+                        let d = degree.get() as usize;
+                        if (1..=7).contains(&d) {
+                            let semitones = MAJOR_INTERVALS[d - 1];
+                            let note_idx = (root_idx + semitones) % 12;
+                            chord.root = index_to_note(note_idx, prefer_sharps).to_string();
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Return a copy of this song with every chord root shifted **down** by
