@@ -463,7 +463,6 @@ fn SongView(
     };
 
     let mut transpose_root = use_signal(|| "C".to_string());
-    let mut capo = use_signal(|| 0_u8);
     let mut part_name_size = use_signal(|| 9_u32);
     let mut chord_size = use_signal(|| 18_u32);
     // None = base sheet; Some(inst) = that instrument's sheet
@@ -749,35 +748,6 @@ fn SongView(
                     }
                 }
 
-                // Capo row
-                div {
-                    style: "margin-top: 14px; display: flex; align-items: center; gap: 10px;",
-                    span {
-                        style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;",
-                        "Capo:"
-                    }
-                    button {
-                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
-                        onclick: move |_| { if capo() > 0 { *capo.write() -= 1; } },
-                        "−"
-                    }
-                    span {
-                        style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #1a1a2e;",
-                        if capo() == 0 { "Off" } else { "{capo()}" }
-                    }
-                    button {
-                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
-                        onclick: move |_| { if capo() < 12 { *capo.write() += 1; } },
-                        "+"
-                    }
-                    if capo() > 0 {
-                        span {
-                            style: "font-size: 11px; color: #888; font-style: italic;",
-                            "→ play in {song.read().apply_capo(capo()).key}"
-                        }
-                    }
-                }
-
                 // ── Instrument tabs ─────────────────────────────────────────
                 div {
                     style: "margin-top: 18px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;",
@@ -862,7 +832,7 @@ fn SongView(
             if active_instrument.read().is_none() {
                 // Base sheet
                 for part_index in 0..song.read().parts.len() {
-                    PartView { key: "{part_index}", song, part_index, show_degrees, capo }
+                    PartView { key: "{part_index}", song, part_index, show_degrees, capo: use_signal(|| 0_u8) }
                 }
                 button {
                     style: "
@@ -1134,7 +1104,7 @@ fn SongView(
                     let deg = show_degrees();
                     let pns = part_name_size() as f32;
                     let cs  = chord_size() as f32;
-                    let cap = capo();
+                    let cap = 0_u8;
 
                     // Collect: base sheet + one entry per instrument that has saved overrides.
                     // Each entry is (song_with_correct_parts, filename, capo_for_that_sheet).
@@ -1232,7 +1202,7 @@ fn SongView(
                     let deg     = show_degrees();
                     let pns     = part_name_size() as f32;
                     let cs      = chord_size() as f32;
-                    let cap     = capo();
+                    let cap     = 0_u8;
                     let user_id = current_user.read().as_ref().map(|u| u.id).unwrap_or(0);
                     if let Some(db_ref) = db.read().as_ref() {
                         match db_ref.save_song(&s, user_id) {
