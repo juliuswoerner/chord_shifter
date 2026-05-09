@@ -24,10 +24,10 @@
   <component name="MacroExpansionManager">
     <option name="directoryName" value="A6zUmntl" />
   </component>
-  <component name="ProjectColorInfo"><![CDATA[{
-  "associatedIndex": 7,
-  "fromUser": false
-}]]></component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 7,
+  &quot;fromUser&quot;: false
+}</component>
   <component name="ProjectId" id="3DMUe5tfq7L1a2CF0sSRyc2TEXe" />
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
@@ -43,7 +43,7 @@
     "RunOnceActivity.typescript.service.memoryLimit.init": "true",
     "codeWithMe.voiceChat.enabledByDefault": "false",
     "com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1": "true",
-    "git-widget-placeholder": "add__instrument__representation",
+    "git-widget-placeholder": "fix__base__behavior",
     "junie.onboarding.icon.badge.shown": "true",
     "last_opened_file_path": "/Users/juliusworner/juliuswoerner/source/chord_shifter",
     "node.js.detected.package.eslint": "true",
