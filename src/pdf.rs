@@ -181,21 +181,6 @@ pub fn generate_pdf_bytes(
     Ok(buf)
 }
 
-/// Save the PDF to disk. Only compiled on non-WASM targets.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn save_pdf(
-    song: &Song,
-    path: &str,
-    use_degrees: bool,
-    part_name_size: f32,
-    chord_size: f32,
-    capo: u8,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let bytes = generate_pdf_bytes(song, use_degrees, part_name_size, chord_size, capo)?;
-    std::fs::write(path, bytes)?;
-    Ok(())
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
