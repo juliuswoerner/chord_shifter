@@ -95,6 +95,8 @@ struct StoredSong {
     user_id: i64,
     #[serde(default)]
     instrument_parts_json: String,
+    #[serde(default)]
+    instrument_capos_json: String,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -182,6 +184,7 @@ impl Db {
                 vocals_notes: String::new(),
                 user_id: 0, // sentinel: visible to all users
                 instrument_parts_json: "{}".to_string(),
+                instrument_capos_json: "{}".to_string(),
             }]);
         }
         Ok(Self)
@@ -193,6 +196,8 @@ impl Db {
             serde_json::to_string(&song.instruments).map_err(|e| e.to_string())?;
         let instrument_parts_json =
             serde_json::to_string(&song.instrument_parts).map_err(|e| e.to_string())?;
+        let instrument_capos_json =
+            serde_json::to_string(&song.instrument_capos).map_err(|e| e.to_string())?;
         let mut songs = ls_read();
         if let Some(row) = songs
             .iter_mut()
@@ -203,6 +208,7 @@ impl Db {
             row.instruments_json = instruments_json;
             row.vocals_notes = song.vocals_notes.clone();
             row.instrument_parts_json = instrument_parts_json;
+            row.instrument_capos_json = instrument_capos_json;
             let id = row.id;
             ls_write(&songs);
             Ok(id)
@@ -218,6 +224,7 @@ impl Db {
                 vocals_notes: song.vocals_notes.clone(),
                 user_id,
                 instrument_parts_json,
+                instrument_capos_json,
             });
             ls_write(&songs);
             Ok(id)
@@ -268,6 +275,11 @@ impl Db {
                 } else {
                     serde_json::from_str(&s.instrument_parts_json).unwrap_or_default()
                 };
+                let instrument_capos = if s.instrument_capos_json.is_empty() {
+                    Default::default()
+                } else {
+                    serde_json::from_str(&s.instrument_capos_json).unwrap_or_default()
+                };
                 Ok(song::Song {
                     name: s.name,
                     artist: s.artist,
@@ -276,7 +288,7 @@ impl Db {
                     instruments,
                     vocals_notes: s.vocals_notes,
                     instrument_parts,
-                    instrument_capos: Default::default(),
+                    instrument_capos,
                 })
             })
     }
@@ -565,6 +577,22 @@ fn SongView(
         }
         if !overrides.contains_key("Drums") {
             drums_song.write().parts = base.clone();
+        }
+    });
+
+    // Keep instrument_capos in song in sync with the capo signals so the
+    // values are persisted even without an explicit "Save instrument" click.
+    use_effect(move || {
+        let caps = [
+            ("Electric", guitar_capo()),
+            ("Acoustic", acoustic_capo()),
+            ("Bass", bass_capo()),
+            ("Piano", piano_capo()),
+            ("Drums", drums_capo()),
+        ];
+        let mut s = song.write();
+        for (label, cap) in caps {
+            s.instrument_capos.insert(label.to_string(), cap);
         }
     });
 
@@ -858,7 +886,7 @@ fn SongView(
                 button {
                     style: "
                         margin-top: 8px;
-                        margin-bottom: 24px;
+                        margin-bottom: 12px;
                         padding: 10px 20px;
                         background: transparent;
                         color: #999;
@@ -872,6 +900,41 @@ fn SongView(
                     ",
                     onclick: move |_| { song.write().parts.push(crate::song::SongPart::new("New Part")); },
                     "+ Add Part"
+                }
+
+                // Copy base → all instruments
+                button {
+                    style: "
+                        margin-bottom: 24px;
+                        padding: 10px 20px;
+                        background: transparent;
+                        color: #6a7fa6;
+                        border: 1.5px solid #a0b4cc;
+                        border-radius: 10px;
+                        font-size: 13px;
+                        font-weight: 600;
+                        cursor: pointer;
+                        font-family: inherit;
+                        width: 100%;
+                    ",
+                    onclick: move |_| {
+                        let base_parts = song.read().parts.clone();
+                        // Push base parts to every instrument signal.
+                        guitar_song.write().parts = base_parts.clone();
+                        acoustic_song.write().parts = base_parts.clone();
+                        bass_song.write().parts = base_parts.clone();
+                        piano_song.write().parts = base_parts.clone();
+                        drums_song.write().parts = base_parts.clone();
+                        // Also overwrite saved overrides so the changes persist
+                        // when the user saves an instrument sheet.
+                        let mut s = song.write();
+                        for label in ["Electric", "Acoustic", "Bass", "Piano", "Drums"] {
+                            if s.instrument_parts.contains_key(label) {
+                                s.instrument_parts.insert(label.to_string(), base_parts.clone());
+                            }
+                        }
+                    },
+                    "⬇ Copy base to all instruments"
                 }
             } else {
                 // Instrument-specific sheet
@@ -1980,10 +2043,16 @@ fn ChordEditor(
         chord.degree_display()
     } else if capo() > 0 {
         // Show the chord shape the player needs to play with the capo.
+        let shifted_root = song::shift_note(&chord.root, capo());
+        let shifted_bass = chord
+            .bass_note
+            .as_deref()
+            .map(|b| format!("/{}", song::shift_note(b, capo())));
         format!(
-            "{}{}",
-            song::shift_note(&chord.root, capo()),
-            chord.quality.symbol()
+            "{}{}{}",
+            shifted_root,
+            chord.quality.symbol(),
+            shifted_bass.unwrap_or_default()
         )
     } else {
         chord.display()
@@ -2108,6 +2177,33 @@ fn ChordEditor(
                             value: "{q.symbol()}",
                             selected: q == chord.quality,
                             "{q.label()}"
+                        }
+                    }
+                }
+
+                // Bass note input (slash chord, e.g. G/B)
+                input {
+                    style: "
+                        width: 70px;
+                        font-size: 13px;
+                        font-weight: 600;
+                        color: #1a1a2e;
+                        text-align: center;
+                        border: 1px solid #d0cbc0;
+                        border-radius: 6px;
+                        background: #fff;
+                        outline: none;
+                        padding: 4px 6px;
+                        font-family: inherit;
+                    ",
+                    value: chord.bass_note.clone().unwrap_or_default(),
+                    placeholder: "/ Bass",
+                    oninput: move |e: Event<FormData>| {
+                        if let Some(part) = song.write().parts.get_mut(part_index) {
+                            if let Some(c) = part.chords.get_mut(chord_index) {
+                                let v = e.value();
+                                c.bass_note = if v.is_empty() { None } else { Some(v) };
+                            }
                         }
                     }
                 }

@@ -56,6 +56,7 @@ impl Db {
                 instruments_json      TEXT    NOT NULL DEFAULT '[]',
                 vocals_notes          TEXT    NOT NULL DEFAULT '',
                 instrument_parts_json TEXT    NOT NULL DEFAULT '{}',
+                instrument_capos_json TEXT    NOT NULL DEFAULT '{}',
                 user_id               INTEGER REFERENCES users(id) ON DELETE SET NULL,
                 UNIQUE(name, artist, user_id)
             );
@@ -119,13 +120,14 @@ impl Db {
                     instruments_json      TEXT    NOT NULL DEFAULT '[]',
                     vocals_notes          TEXT    NOT NULL DEFAULT '',
                     instrument_parts_json TEXT    NOT NULL DEFAULT '{{}}',
+                    instrument_capos_json TEXT    NOT NULL DEFAULT '{{}}',
                     user_id               INTEGER REFERENCES users(id) ON DELETE SET NULL,
                     UNIQUE(name, artist, user_id)
                 );
                 INSERT INTO songs_new
-                    (id, name, artist, key, parts_json, instruments_json, vocals_notes, instrument_parts_json, user_id)
+                    (id, name, artist, key, parts_json, instruments_json, vocals_notes, instrument_parts_json, instrument_capos_json, user_id)
                     SELECT id, name, artist, key, parts_json,
-                        {sel_instruments}, {sel_vocals}, '{{}}', NULL
+                        {sel_instruments}, {sel_vocals}, '{{}}', '{{}}', NULL
                     FROM songs;
                 DROP TABLE songs;
                 ALTER TABLE songs_new RENAME TO songs;
@@ -137,6 +139,10 @@ impl Db {
         // but were created before this column existed.
         let _ = self.conn.execute(
             "ALTER TABLE songs ADD COLUMN instrument_parts_json TEXT NOT NULL DEFAULT '{}'",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE songs ADD COLUMN instrument_capos_json TEXT NOT NULL DEFAULT '{}'",
             [],
         );
 
@@ -280,17 +286,20 @@ impl Db {
             serde_json::to_string(&song.instruments).expect("Instruments are always serialisable");
         let instrument_parts_json = serde_json::to_string(&song.instrument_parts)
             .expect("instrument_parts always serialisable");
+        let instrument_capos_json = serde_json::to_string(&song.instrument_capos)
+            .expect("instrument_capos always serialisable");
 
         // Upsert by (name, artist, user_id)
         self.conn.execute(
-            "INSERT INTO songs (name, artist, key, parts_json, instruments_json, vocals_notes, instrument_parts_json, user_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "INSERT INTO songs (name, artist, key, parts_json, instruments_json, vocals_notes, instrument_parts_json, instrument_capos_json, user_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(name, artist, user_id) DO UPDATE SET
                  key                   = excluded.key,
                  parts_json            = excluded.parts_json,
                  instruments_json      = excluded.instruments_json,
                  vocals_notes          = excluded.vocals_notes,
-                 instrument_parts_json = excluded.instrument_parts_json",
+                 instrument_parts_json = excluded.instrument_parts_json,
+                 instrument_capos_json = excluded.instrument_capos_json",
             params![
                 song.name,
                 song.artist,
@@ -299,6 +308,7 @@ impl Db {
                 instruments_json,
                 song.vocals_notes,
                 instrument_parts_json,
+                instrument_capos_json,
                 user_id
             ],
         )?;
@@ -345,7 +355,7 @@ impl Db {
     /// Load the full `Song` for a given id.
     pub fn load_song(&self, id: i64) -> Result<Song> {
         self.conn.query_row(
-            "SELECT name, artist, key, parts_json, instruments_json, vocals_notes, instrument_parts_json
+            "SELECT name, artist, key, parts_json, instruments_json, vocals_notes, instrument_parts_json, instrument_capos_json
              FROM songs WHERE id = ?1",
             params![id],
             |row| {
@@ -356,6 +366,7 @@ impl Db {
                 let instruments_json: String = row.get(4)?;
                 let vocals_notes: String = row.get(5)?;
                 let instrument_parts_json: String = row.get(6)?;
+                let instrument_capos_json: String = row.get(7).unwrap_or_default();
 
                 let parts = serde_json::from_str(&parts_json).map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
@@ -367,6 +378,8 @@ impl Db {
                 let instruments = serde_json::from_str(&instruments_json).unwrap_or_default();
                 let instrument_parts =
                     serde_json::from_str(&instrument_parts_json).unwrap_or_default();
+                let instrument_capos =
+                    serde_json::from_str(&instrument_capos_json).unwrap_or_default();
 
                 Ok(Song {
                     name,
@@ -376,7 +389,7 @@ impl Db {
                     instruments,
                     vocals_notes,
                     instrument_parts,
-                    instrument_capos: Default::default(),
+                    instrument_capos,
                 })
             },
         )
