@@ -184,6 +184,7 @@ impl Db {
                 vocals_notes: String::new(),
                 user_id: 0, // sentinel: visible to all users
                 instrument_parts_json: "{}".to_string(),
+                instrument_capos_json: "{}".to_string(),
             }]);
         }
         Ok(Self)
