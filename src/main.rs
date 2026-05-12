@@ -568,6 +568,22 @@ fn SongView(
         }
     });
 
+    // Keep instrument_capos in song in sync with the capo signals so the
+    // values are persisted even without an explicit "Save instrument" click.
+    use_effect(move || {
+        let caps = [
+            ("Electric", guitar_capo()),
+            ("Acoustic", acoustic_capo()),
+            ("Bass", bass_capo()),
+            ("Piano", piano_capo()),
+            ("Drums", drums_capo()),
+        ];
+        let mut s = song.write();
+        for (label, cap) in caps {
+            s.instrument_capos.insert(label.to_string(), cap);
+        }
+    });
+
     rsx! {
         div {
             style: "
