@@ -122,10 +122,17 @@ pub fn generate_pdf_bytes(
                 chord.root.clone()
             };
             let quality = chord.quality.symbol();
+            // Slash bass note, e.g. "/B" for G/B
+            let bass_suffix: String = chord
+                .bass_note
+                .as_deref()
+                .map(|b| format!("/{}", b))
+                .unwrap_or_default();
 
             let root_w = root.len() as f32 * root_char_w;
             let qual_w = quality.len() as f32 * qual_char_w;
-            let total_w = root_w + sup_offset + qual_w;
+            let bass_w = bass_suffix.len() as f32 * root_char_w;
+            let total_w = root_w + sup_offset + qual_w + bass_w;
 
             if x + total_w > RIGHT {
                 x = MARGIN;
@@ -145,6 +152,17 @@ pub fn generate_pdf_bytes(
                     qual_size,
                     Mm(x + root_w + sup_offset),
                     Mm(y + 1.5 + raise_mm),
+                    &font_bold,
+                );
+            }
+
+            // Bass note suffix at root size (e.g. "/B")
+            if !bass_suffix.is_empty() {
+                layer.use_text(
+                    &bass_suffix,
+                    chord_size,
+                    Mm(x + root_w + sup_offset + qual_w),
+                    Mm(y + 1.5),
                     &font_bold,
                 );
             }
