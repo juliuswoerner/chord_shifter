@@ -27,6 +27,7 @@ mod pdf;
 mod song;
 
 // ── Trigger a browser PDF download ───────────────────────────────────────────
+#[allow(dead_code)]
 fn trigger_download(bytes: Vec<u8>, filename: &str) {
     use js_sys::Uint8Array;
     use wasm_bindgen::JsCast;
