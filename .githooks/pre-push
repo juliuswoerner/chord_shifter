@@ -12,7 +12,7 @@ fail() { echo -e "${RED}✘${RESET}  $1"; }
 echo -e "\n${BOLD}Running pre-push checks…${RESET}\n"
 
 # ── cargo clippy ──────────────────────────────────────────────────────────────
-if ! cargo clippy --features desktop --all-targets -- -D warnings 2>&1; then
+if ! cargo clippy --all-targets -- -D warnings 2>&1; then
     fail "Clippy reported warnings or errors. Fix them before pushing."
     exit 1
 fi
