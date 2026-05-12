@@ -474,10 +474,13 @@ impl Song {
                 format!("{} {}", new_root, mode)
             };
         }
-        // Shift every chord root.
+        // Shift every chord root and bass note.
         for part in &mut result.parts {
             for chord in &mut part.chords {
                 chord.root = shift_note(&chord.root, capo);
+                if let Some(bass) = &chord.bass_note {
+                    chord.bass_note = Some(shift_note(bass, capo));
+                }
             }
         }
         result
