@@ -468,7 +468,7 @@ fn SongView(
     // None = base sheet; Some(inst) = that instrument's sheet
     let mut active_instrument: Signal<Option<Instrument>> = use_signal(|| None);
     // Per-instrument working copies — each instrument has its own isolated signal
-    let guitar_song = {
+    let mut guitar_song = {
         let s = song.read();
         let parts = s
             .instrument_parts
@@ -483,7 +483,7 @@ fn SongView(
         let cap = *song.read().instrument_capos.get("Electric").unwrap_or(&0);
         use_signal(move || cap)
     };
-    let acoustic_song = {
+    let mut acoustic_song = {
         let s = song.read();
         let parts = s
             .instrument_parts
@@ -498,7 +498,7 @@ fn SongView(
         let cap = *song.read().instrument_capos.get("Acoustic").unwrap_or(&0);
         use_signal(move || cap)
     };
-    let bass_song = {
+    let mut bass_song = {
         let s = song.read();
         let parts = s
             .instrument_parts
@@ -513,7 +513,7 @@ fn SongView(
         let cap = *song.read().instrument_capos.get("Bass").unwrap_or(&0);
         use_signal(move || cap)
     };
-    let piano_song = {
+    let mut piano_song = {
         let s = song.read();
         let parts = s
             .instrument_parts
@@ -528,7 +528,7 @@ fn SongView(
         let cap = *song.read().instrument_capos.get("Piano").unwrap_or(&0);
         use_signal(move || cap)
     };
-    let drums_song = {
+    let mut drums_song = {
         let s = song.read();
         let parts = s
             .instrument_parts
@@ -544,6 +544,29 @@ fn SongView(
         use_signal(move || cap)
     };
     let mut inst_save_msg: Signal<Option<&'static str>> = use_signal(|| None);
+
+    // Propagate base-sheet edits to any instrument that has no saved override.
+    // Runs automatically whenever `song` changes (e.g. chord edits, transpose).
+    use_effect(move || {
+        let s = song.read();
+        let base = s.parts.clone();
+        let overrides = &s.instrument_parts;
+        if !overrides.contains_key("Electric") {
+            guitar_song.write().parts = base.clone();
+        }
+        if !overrides.contains_key("Acoustic") {
+            acoustic_song.write().parts = base.clone();
+        }
+        if !overrides.contains_key("Bass") {
+            bass_song.write().parts = base.clone();
+        }
+        if !overrides.contains_key("Piano") {
+            piano_song.write().parts = base.clone();
+        }
+        if !overrides.contains_key("Drums") {
+            drums_song.write().parts = base.clone();
+        }
+    });
 
     rsx! {
         div {
