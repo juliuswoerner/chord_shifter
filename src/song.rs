@@ -74,84 +74,24 @@ impl ChordQuality {
     }
 }
 
-// ── Scale degree ──────────────────────────────────────────────────────────────
-
-/// Scale degree (1–7) of a chord relative to the song's key.
-///
-/// Examples in C Major:
-///   C → 1 (I),  D → 2 (II),  E → 3 (III),  F → 4 (IV),
-///   G → 5 (V),  A → 6 (VI),  B → 7 (VII)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[allow(dead_code)]
-pub struct ScaleDegree(pub u8);
-
-#[allow(dead_code)]
-impl ScaleDegree {
-    /// Returns `Some(ScaleDegree)` for values 1–7, `None` otherwise.
-    pub fn new(degree: u8) -> Option<Self> {
-        if (1..=7).contains(&degree) {
-            Some(Self(degree))
-        } else {
-            None
-        }
-    }
-
-    /// The raw degree number (1–7).
-    pub fn get(self) -> u8 {
-        self.0
-    }
-
-    /// Upper-case Roman numeral, e.g. `"IV"`.
-    pub fn roman(self) -> &'static str {
-        match self.0 {
-            1 => "I",
-            2 => "II",
-            3 => "III",
-            4 => "IV",
-            5 => "V",
-            6 => "VI",
-            7 => "VII",
-            _ => "?",
-        }
-    }
-}
-
-impl std::fmt::Display for ScaleDegree {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.roman())
-    }
-}
-
 // ── Chord ─────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Chord {
     pub root: String,
     pub quality: ChordQuality,
-    /// Scale degree of this chord relative to the song's key (1–7).
-    /// `None` means the degree hasn't been set yet.
-    pub degree: Option<ScaleDegree>,
     /// Optional bass note for slash chord notation, e.g. `G/B`.
     #[serde(default)]
     pub bass_note: Option<String>,
 }
 
 impl Chord {
-    /// Create a chord without a scale degree assigned.
     pub fn new(root: impl Into<String>, quality: ChordQuality) -> Self {
         Self {
             root: root.into(),
             quality,
-            degree: None,
             bass_note: None,
         }
-    }
-
-    /// Builder helper – assign a scale degree (1–7) to the chord.
-    #[allow(dead_code)]
-    pub fn with_degree(mut self, degree: u8) -> Self {
-        self.degree = ScaleDegree::new(degree);
-        self
     }
 
     /// Human-readable chord name, e.g. `"Am"`, `"G7"`, `"Fmaj7"`, `"G/B"`.
@@ -159,19 +99,6 @@ impl Chord {
         match &self.bass_note {
             Some(b) => format!("{}{}/{}", self.root, self.quality.symbol(), b),
             None => format!("{}{}", self.root, self.quality.symbol()),
-        }
-    }
-
-    /// Scale-degree display: roman numeral + quality symbol (e.g. `"IVm"`, `"Imaj7"`).
-    /// Falls back to `display()` if no degree has been assigned yet.
-    pub fn degree_display(&self) -> String {
-        let base = match self.degree {
-            Some(d) => format!("{}{}", d.roman(), self.quality.symbol()),
-            None => format!("{}{}", self.root, self.quality.symbol()),
-        };
-        match &self.bass_note {
-            Some(b) => format!("{}/{}", base, b),
-            None => base,
         }
     }
 }
@@ -195,9 +122,6 @@ impl SongPart {
 }
 
 // ── Music-theory helpers ────────────────────────────────────────────────────
-
-/// Semitone offsets of scale degrees 1–7 in a major scale.
-const MAJOR_INTERVALS: [u8; 7] = [0, 2, 4, 5, 7, 9, 11];
 
 /// Returns the chromatic index (0 = C … 11 = B) for a note name, or `None`.
 fn note_to_index(note: &str) -> Option<u8> {
@@ -369,38 +293,58 @@ impl Song {
 
     /// Transpose all chords to a new key root (e.g. `"G"`, `"Bb"`, `"F#"`).
     ///
-    /// Only chords that have a `degree` assigned are moved; chords without a
-    /// degree are left unchanged.  The song's `key` field is updated to
-    /// `"<new_root> <mode>"`, preserving whatever mode suffix was there before.
+    /// All chord roots are shifted by the same semitone interval between the
+    /// current key root and `new_root`. The song's `key` field is updated.
     pub fn transpose_to(&mut self, new_root: &str) {
-        let root_idx = match note_to_index(new_root) {
+        let new_idx = match note_to_index(new_root) {
             Some(i) => i,
             None => return,
         };
+        let old_root = self.key.split_whitespace().next().unwrap_or("C");
+        let old_idx = match note_to_index(old_root) {
+            Some(i) => i,
+            None => return,
+        };
+        let interval = (new_idx + 12 - old_idx) % 12;
+        if interval == 0 {
+            // Update key label even if no shift needed.
+            let mode = self
+                .key
+                .split_whitespace()
+                .skip(1)
+                .collect::<Vec<_>>()
+                .join(" ");
+            self.key = if mode.is_empty() {
+                new_root.to_string()
+            } else {
+                format!("{} {}", new_root, mode)
+            };
+            return;
+        }
         let prefer_sharps = matches!(new_root, "C" | "G" | "D" | "A" | "E" | "B" | "F#" | "C#");
+        let shift_chord = |chord: &mut Chord| {
+            if let Some(root_idx) = note_to_index(&chord.root) {
+                chord.root = index_to_note((root_idx + interval) % 12, prefer_sharps).to_string();
+            }
+            if let Some(bass) = &chord.bass_note {
+                if let Some(bass_idx) = note_to_index(bass) {
+                    chord.bass_note =
+                        Some(index_to_note((bass_idx + interval) % 12, prefer_sharps).to_string());
+                }
+            }
+        };
         for part in &mut self.parts {
             for chord in &mut part.chords {
-                if let Some(degree) = chord.degree {
-                    let d = degree.get() as usize;
-                    if (1..=7).contains(&d) {
-                        let semitones = MAJOR_INTERVALS[d - 1];
-                        let note_idx = (root_idx + semitones) % 12;
-                        chord.root = index_to_note(note_idx, prefer_sharps).to_string();
-                    }
-                }
-                if let Some(bass) = &chord.bass_note {
-                    if let Some(bass_idx) = note_to_index(bass) {
-                        // Shift bass note by the same interval as the root.
-                        let old_root_idx = note_to_index(&chord.root).unwrap_or(0);
-                        let interval = (root_idx + 12 - old_root_idx) % 12;
-                        let new_bass_idx = (bass_idx + interval) % 12;
-                        chord.bass_note =
-                            Some(index_to_note(new_bass_idx, prefer_sharps).to_string());
-                    }
+                shift_chord(chord);
+            }
+        }
+        for parts in self.instrument_parts.values_mut() {
+            for part in parts.iter_mut() {
+                for chord in &mut part.chords {
+                    shift_chord(chord);
                 }
             }
         }
-        // Preserve mode suffix ("Major", "Minor", …) from the old key string.
         let mode = self
             .key
             .split_whitespace()
@@ -412,30 +356,6 @@ impl Song {
         } else {
             format!("{} {}", new_root, mode)
         };
-        // Also transpose instrument-specific overrides.
-        for parts in self.instrument_parts.values_mut() {
-            for part in parts.iter_mut() {
-                for chord in &mut part.chords {
-                    if let Some(degree) = chord.degree {
-                        let d = degree.get() as usize;
-                        if (1..=7).contains(&d) {
-                            let semitones = MAJOR_INTERVALS[d - 1];
-                            let note_idx = (root_idx + semitones) % 12;
-                            chord.root = index_to_note(note_idx, prefer_sharps).to_string();
-                        }
-                    }
-                    if let Some(bass) = &chord.bass_note {
-                        if let Some(bass_idx) = note_to_index(bass) {
-                            let old_root_idx = note_to_index(&chord.root).unwrap_or(0);
-                            let interval = (root_idx + 12 - old_root_idx) % 12;
-                            let new_bass_idx = (bass_idx + interval) % 12;
-                            chord.bass_note =
-                                Some(index_to_note(new_bass_idx, prefer_sharps).to_string());
-                        }
-                    }
-                }
-            }
-        }
     }
 
     /// Return a copy of this song with every chord root shifted **down** by
@@ -517,39 +437,6 @@ mod tests {
         assert_eq!(ChordQuality::all().len(), 9);
     }
 
-    // ── ScaleDegree ──────────────────────────────────────────────────────────
-
-    #[test]
-    fn scale_degree_valid_range() {
-        for d in 1u8..=7 {
-            assert!(ScaleDegree::new(d).is_some());
-        }
-    }
-
-    #[test]
-    fn scale_degree_out_of_range() {
-        assert!(ScaleDegree::new(0).is_none());
-        assert!(ScaleDegree::new(8).is_none());
-    }
-
-    #[test]
-    fn scale_degree_roman_numerals() {
-        let expected = ["I", "II", "III", "IV", "V", "VI", "VII"];
-        for (i, &roman) in expected.iter().enumerate() {
-            assert_eq!(ScaleDegree(i as u8 + 1).roman(), roman);
-        }
-    }
-
-    #[test]
-    fn scale_degree_display_uses_roman() {
-        assert_eq!(format!("{}", ScaleDegree(4)), "IV");
-    }
-
-    #[test]
-    fn scale_degree_get_returns_raw_value() {
-        assert_eq!(ScaleDegree(5).get(), 5);
-    }
-
     // ── Chord ────────────────────────────────────────────────────────────────
 
     #[test]
@@ -568,36 +455,6 @@ mod tests {
     fn chord_display_complex_quality() {
         let c = Chord::new("F", ChordQuality::Major7);
         assert_eq!(c.display(), "Fmaj7");
-    }
-
-    #[test]
-    fn chord_new_has_no_degree() {
-        let c = Chord::new("C", ChordQuality::Major);
-        assert!(c.degree.is_none());
-    }
-
-    #[test]
-    fn chord_with_degree_sets_degree() {
-        let c = Chord::new("C", ChordQuality::Major).with_degree(1);
-        assert_eq!(c.degree, Some(ScaleDegree(1)));
-    }
-
-    #[test]
-    fn chord_with_degree_out_of_range_leaves_none() {
-        let c = Chord::new("C", ChordQuality::Major).with_degree(0);
-        assert!(c.degree.is_none());
-    }
-
-    #[test]
-    fn chord_degree_display_with_degree() {
-        let c = Chord::new("A", ChordQuality::Minor).with_degree(6);
-        assert_eq!(c.degree_display(), "VIm");
-    }
-
-    #[test]
-    fn chord_degree_display_falls_back_without_degree() {
-        let c = Chord::new("A", ChordQuality::Minor);
-        assert_eq!(c.degree_display(), "Am");
     }
 
     // ── Song / SongPart ──────────────────────────────────────────────────────
@@ -630,10 +487,10 @@ mod tests {
         Song::new("Test", "C Major", "Artist").with_part(
             "Verse",
             vec![
-                Chord::new("C", ChordQuality::Major).with_degree(1),
-                Chord::new("G", ChordQuality::Major).with_degree(5),
-                Chord::new("A", ChordQuality::Minor).with_degree(6),
-                Chord::new("F", ChordQuality::Major).with_degree(4),
+                Chord::new("C", ChordQuality::Major),
+                Chord::new("G", ChordQuality::Major),
+                Chord::new("A", ChordQuality::Minor),
+                Chord::new("F", ChordQuality::Major),
             ],
         )
     }
@@ -659,7 +516,6 @@ mod tests {
             .iter()
             .map(|c| c.root.as_str())
             .collect();
-        // F major: I=F, V=C, VI=D, IV=Bb
         assert_eq!(roots, ["F", "C", "D", "Bb"]);
     }
 
@@ -688,17 +544,6 @@ mod tests {
     }
 
     #[test]
-    fn transpose_skips_chords_without_degree() {
-        let mut song = Song::new("S", "C Major", "A").with_part(
-            "Verse",
-            vec![Chord::new("C", ChordQuality::Major)], // no degree
-        );
-        song.transpose_to("G");
-        // root should be unchanged because no degree was set
-        assert_eq!(song.parts[0].chords[0].root, "C");
-    }
-
-    #[test]
     fn transpose_invalid_root_is_noop() {
         let mut song = c_major_song();
         song.transpose_to("Z"); // not a valid note
@@ -710,7 +555,6 @@ mod tests {
     fn transpose_c_to_bb_uses_flats() {
         let mut song = c_major_song();
         song.transpose_to("Bb");
-        // Bb major: I=Bb, V=F, VI=G, IV=Eb
         let roots: Vec<&str> = song.parts[0]
             .chords
             .iter()
@@ -723,7 +567,6 @@ mod tests {
     fn transpose_c_to_fsharp_uses_sharps() {
         let mut song = c_major_song();
         song.transpose_to("F#");
-        // F# major: I=F#, V=C#, VI=D#, IV=B
         let roots: Vec<&str> = song.parts[0]
             .chords
             .iter()
@@ -734,8 +577,6 @@ mod tests {
 
     #[test]
     fn transpose_same_key_is_noop() {
-        // Transposing to the same root should leave all chord roots unchanged.
-        // This verifies that the interval calculation wraps correctly at 0 semitones.
         let mut song = c_major_song();
         song.transpose_to("C");
         let roots: Vec<&str> = song.parts[0]
