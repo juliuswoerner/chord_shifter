@@ -858,7 +858,7 @@ fn SongView(
                 button {
                     style: "
                         margin-top: 8px;
-                        margin-bottom: 24px;
+                        margin-bottom: 12px;
                         padding: 10px 20px;
                         background: transparent;
                         color: #999;
@@ -872,6 +872,41 @@ fn SongView(
                     ",
                     onclick: move |_| { song.write().parts.push(crate::song::SongPart::new("New Part")); },
                     "+ Add Part"
+                }
+
+                // Copy base → all instruments
+                button {
+                    style: "
+                        margin-bottom: 24px;
+                        padding: 10px 20px;
+                        background: transparent;
+                        color: #6a7fa6;
+                        border: 1.5px solid #a0b4cc;
+                        border-radius: 10px;
+                        font-size: 13px;
+                        font-weight: 600;
+                        cursor: pointer;
+                        font-family: inherit;
+                        width: 100%;
+                    ",
+                    onclick: move |_| {
+                        let base_parts = song.read().parts.clone();
+                        // Push base parts to every instrument signal.
+                        guitar_song.write().parts = base_parts.clone();
+                        acoustic_song.write().parts = base_parts.clone();
+                        bass_song.write().parts = base_parts.clone();
+                        piano_song.write().parts = base_parts.clone();
+                        drums_song.write().parts = base_parts.clone();
+                        // Also overwrite saved overrides so the changes persist
+                        // when the user saves an instrument sheet.
+                        let mut s = song.write();
+                        for label in ["Electric", "Acoustic", "Bass", "Piano", "Drums"] {
+                            if s.instrument_parts.contains_key(label) {
+                                s.instrument_parts.insert(label.to_string(), base_parts.clone());
+                            }
+                        }
+                    },
+                    "⬇ Copy base to all instruments"
                 }
             } else {
                 // Instrument-specific sheet
