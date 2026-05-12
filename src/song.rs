@@ -131,6 +131,9 @@ pub struct Chord {
     /// Scale degree of this chord relative to the song's key (1–7).
     /// `None` means the degree hasn't been set yet.
     pub degree: Option<ScaleDegree>,
+    /// Optional bass note for slash chord notation, e.g. `G/B`.
+    #[serde(default)]
+    pub bass_note: Option<String>,
 }
 
 impl Chord {
@@ -140,6 +143,7 @@ impl Chord {
             root: root.into(),
             quality,
             degree: None,
+            bass_note: None,
         }
     }
 
@@ -150,17 +154,24 @@ impl Chord {
         self
     }
 
-    /// Human-readable chord name, e.g. `"Am"`, `"G7"`, `"Fmaj7"`.
+    /// Human-readable chord name, e.g. `"Am"`, `"G7"`, `"Fmaj7"`, `"G/B"`.
     pub fn display(&self) -> String {
-        format!("{}{}", self.root, self.quality.symbol())
+        match &self.bass_note {
+            Some(b) => format!("{}{}/{}", self.root, self.quality.symbol(), b),
+            None => format!("{}{}", self.root, self.quality.symbol()),
+        }
     }
 
     /// Scale-degree display: roman numeral + quality symbol (e.g. `"IVm"`, `"Imaj7"`).
     /// Falls back to `display()` if no degree has been assigned yet.
     pub fn degree_display(&self) -> String {
-        match self.degree {
+        let base = match self.degree {
             Some(d) => format!("{}{}", d.roman(), self.quality.symbol()),
-            None => self.display(),
+            None => format!("{}{}", self.root, self.quality.symbol()),
+        };
+        match &self.bass_note {
+            Some(b) => format!("{}/{}", base, b),
+            None => base,
         }
     }
 }
@@ -377,6 +388,16 @@ impl Song {
                         chord.root = index_to_note(note_idx, prefer_sharps).to_string();
                     }
                 }
+                if let Some(bass) = &chord.bass_note {
+                    if let Some(bass_idx) = note_to_index(bass) {
+                        // Shift bass note by the same interval as the root.
+                        let old_root_idx = note_to_index(&chord.root).unwrap_or(0);
+                        let interval = (root_idx + 12 - old_root_idx) % 12;
+                        let new_bass_idx = (bass_idx + interval) % 12;
+                        chord.bass_note =
+                            Some(index_to_note(new_bass_idx, prefer_sharps).to_string());
+                    }
+                }
             }
         }
         // Preserve mode suffix ("Major", "Minor", …) from the old key string.
@@ -401,6 +422,15 @@ impl Song {
                             let semitones = MAJOR_INTERVALS[d - 1];
                             let note_idx = (root_idx + semitones) % 12;
                             chord.root = index_to_note(note_idx, prefer_sharps).to_string();
+                        }
+                    }
+                    if let Some(bass) = &chord.bass_note {
+                        if let Some(bass_idx) = note_to_index(bass) {
+                            let old_root_idx = note_to_index(&chord.root).unwrap_or(0);
+                            let interval = (root_idx + 12 - old_root_idx) % 12;
+                            let new_bass_idx = (bass_idx + interval) % 12;
+                            chord.bass_note =
+                                Some(index_to_note(new_bass_idx, prefer_sharps).to_string());
                         }
                     }
                 }

@@ -1980,10 +1980,16 @@ fn ChordEditor(
         chord.degree_display()
     } else if capo() > 0 {
         // Show the chord shape the player needs to play with the capo.
+        let shifted_root = song::shift_note(&chord.root, capo());
+        let shifted_bass = chord
+            .bass_note
+            .as_deref()
+            .map(|b| format!("/{}", song::shift_note(b, capo())));
         format!(
-            "{}{}",
-            song::shift_note(&chord.root, capo()),
-            chord.quality.symbol()
+            "{}{}{}",
+            shifted_root,
+            chord.quality.symbol(),
+            shifted_bass.unwrap_or_default()
         )
     } else {
         chord.display()
@@ -2108,6 +2114,33 @@ fn ChordEditor(
                             value: "{q.symbol()}",
                             selected: q == chord.quality,
                             "{q.label()}"
+                        }
+                    }
+                }
+
+                // Bass note input (slash chord, e.g. G/B)
+                input {
+                    style: "
+                        width: 70px;
+                        font-size: 13px;
+                        font-weight: 600;
+                        color: #1a1a2e;
+                        text-align: center;
+                        border: 1px solid #d0cbc0;
+                        border-radius: 6px;
+                        background: #fff;
+                        outline: none;
+                        padding: 4px 6px;
+                        font-family: inherit;
+                    ",
+                    value: chord.bass_note.clone().unwrap_or_default(),
+                    placeholder: "/ Bass",
+                    oninput: move |e: Event<FormData>| {
+                        if let Some(part) = song.write().parts.get_mut(part_index) {
+                            if let Some(c) = part.chords.get_mut(chord_index) {
+                                let v = e.value();
+                                c.bass_note = if v.is_empty() { None } else { Some(v) };
+                            }
                         }
                     }
                 }
