@@ -132,27 +132,27 @@ impl Db {
                 .with_part(
                     "Verse",
                     vec![
-                        Chord::new("C", ChordQuality::Major).with_degree(1),
-                        Chord::new("G", ChordQuality::Major).with_degree(5),
-                        Chord::new("A", ChordQuality::Minor).with_degree(6),
-                        Chord::new("F", ChordQuality::Major).with_degree(4),
+                        Chord::new("C", ChordQuality::Major),
+                        Chord::new("G", ChordQuality::Major),
+                        Chord::new("A", ChordQuality::Minor),
+                        Chord::new("F", ChordQuality::Major),
                     ],
                 )
                 .with_part(
                     "Chorus",
                     vec![
-                        Chord::new("F", ChordQuality::Major).with_degree(4),
-                        Chord::new("C", ChordQuality::Major).with_degree(1),
-                        Chord::new("G", ChordQuality::Major).with_degree(5),
-                        Chord::new("F", ChordQuality::Major).with_degree(4),
+                        Chord::new("F", ChordQuality::Major),
+                        Chord::new("C", ChordQuality::Major),
+                        Chord::new("G", ChordQuality::Major),
+                        Chord::new("F", ChordQuality::Major),
                     ],
                 )
                 .with_part(
                     "Bridge",
                     vec![
-                        Chord::new("G", ChordQuality::Major).with_degree(5),
-                        Chord::new("F", ChordQuality::Major).with_degree(4),
-                        Chord::new("C", ChordQuality::Major).with_degree(1),
+                        Chord::new("G", ChordQuality::Major),
+                        Chord::new("F", ChordQuality::Major),
+                        Chord::new("C", ChordQuality::Major),
                     ],
                 );
             let parts_json = serde_json::to_string(&s.parts).unwrap_or_default();
@@ -339,7 +339,7 @@ struct SongRow {
     username: String,
 }
 
-use song::{Chord, ChordQuality, ScaleDegree, Song};
+use song::{Chord, ChordQuality, Song};
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 #[derive(Routable, Clone, PartialEq)]
@@ -369,27 +369,27 @@ fn example_song() -> Song {
         .with_part(
             "Verse",
             vec![
-                Chord::new("C", ChordQuality::Major).with_degree(1),
-                Chord::new("G", ChordQuality::Major).with_degree(5),
-                Chord::new("A", ChordQuality::Minor).with_degree(6),
-                Chord::new("F", ChordQuality::Major).with_degree(4),
+                Chord::new("C", ChordQuality::Major),
+                Chord::new("G", ChordQuality::Major),
+                Chord::new("A", ChordQuality::Minor),
+                Chord::new("F", ChordQuality::Major),
             ],
         )
         .with_part(
             "Chorus",
             vec![
-                Chord::new("F", ChordQuality::Major).with_degree(4),
-                Chord::new("C", ChordQuality::Major).with_degree(1),
-                Chord::new("G", ChordQuality::Major).with_degree(5),
-                Chord::new("F", ChordQuality::Major).with_degree(4),
+                Chord::new("F", ChordQuality::Major),
+                Chord::new("C", ChordQuality::Major),
+                Chord::new("G", ChordQuality::Major),
+                Chord::new("F", ChordQuality::Major),
             ],
         )
         .with_part(
             "Bridge",
             vec![
-                Chord::new("G", ChordQuality::Major).with_degree(5),
-                Chord::new("F", ChordQuality::Major).with_degree(4),
-                Chord::new("C", ChordQuality::Major).with_degree(1),
+                Chord::new("G", ChordQuality::Major),
+                Chord::new("F", ChordQuality::Major),
+                Chord::new("C", ChordQuality::Major),
             ],
         )
 }
@@ -442,19 +442,6 @@ fn SongView(
     song_id: Option<i64>,
 ) -> Element {
     let nav = use_navigator();
-    let mut show_degrees = use_signal(|| false);
-
-    let chords_btn_style = if !show_degrees() {
-        "padding: 5px 16px; border-radius: 16px; border: none; font-size: 12px; font-weight: 700; font-family: inherit; cursor: pointer; background: #1a1a2e; color: #f0ece2;"
-    } else {
-        "padding: 5px 16px; border-radius: 16px; border: none; font-size: 12px; font-weight: 700; font-family: inherit; cursor: pointer; background: transparent; color: #aaa;"
-    };
-    let degrees_btn_style = if show_degrees() {
-        "padding: 5px 16px; border-radius: 16px; border: none; font-size: 12px; font-weight: 700; font-family: inherit; cursor: pointer; background: #1a1a2e; color: #f0ece2;"
-    } else {
-        "padding: 5px 16px; border-radius: 16px; border: none; font-size: 12px; font-weight: 700; font-family: inherit; cursor: pointer; background: transparent; color: #aaa;"
-    };
-
     let mut transpose_root = use_signal(|| "C".to_string());
     let mut part_name_size = use_signal(|| 9_u32);
     let mut chord_size = use_signal(|| 18_u32);
@@ -712,28 +699,6 @@ fn SongView(
                     }
                 }
 
-                // Display mode toggle
-                div {
-                    style: "margin-top: 16px; display: flex; align-items: center; gap: 10px;",
-                    span {
-                        style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;",
-                        "Show:"
-                    }
-                    div {
-                        style: "display: flex; background: #f0ece2; border-radius: 20px; padding: 3px; border: 1px solid #e0dbd0;",
-                        button {
-                            style: "{chords_btn_style}",
-                            onclick: move |_| *show_degrees.write() = false,
-                            "Chords"
-                        }
-                        button {
-                            style: "{degrees_btn_style}",
-                            onclick: move |_| *show_degrees.write() = true,
-                            "Degrees"
-                        }
-                    }
-                }
-
                 // Transpose row
                 div {
                     style: "margin-top: 14px; display: flex; align-items: center; gap: 10px;",
@@ -862,7 +827,7 @@ fn SongView(
             if active_instrument.read().is_none() {
                 // Base sheet
                 for part_index in 0..song.read().parts.len() {
-                    PartView { key: "{part_index}", song, part_index, show_degrees, capo: use_signal(|| 0_u8) }
+                    PartView { key: "{part_index}", song, part_index, capo: use_signal(|| 0_u8) }
                 }
                 button {
                     style: "
@@ -967,7 +932,7 @@ fn SongView(
                         }
                         // Editable chord parts
                         for part_index in 0..act_song.read().parts.len() {
-                            PartView { key: "{part_index}", song: act_song, part_index, show_degrees, capo: act_capo }
+                            PartView { key: "{part_index}", song: act_song, part_index, capo: act_capo }
                         }
                         button {
                             style: "
@@ -1166,7 +1131,6 @@ fn SongView(
                 ",
                 onclick: move |_| {
                     let s   = song.read().clone();
-                    let deg = show_degrees();
                     let pns = part_name_size() as f32;
                     let cs  = chord_size() as f32;
                     let cap = 0_u8;
@@ -1201,7 +1165,7 @@ fn SongView(
                                 .compression_method(zip::CompressionMethod::Deflated);
 
                             for (sheet, filename, sheet_cap) in &exports {
-                                match pdf::generate_pdf_bytes(sheet, deg, pns, cs, *sheet_cap) {
+                                match pdf::generate_pdf_bytes(sheet, pns, cs, *sheet_cap) {
                                     Ok(bytes) => {
                                         let _ = zip.start_file(format!("{filename}.pdf"), opts);
                                         let _ = zip.write_all(&bytes);
@@ -1254,7 +1218,6 @@ fn SongView(
                 ",
                 onclick: move |_| {
                     let s       = song.read().clone();
-                    let deg     = show_degrees();
                     let pns     = part_name_size() as f32;
                     let cs      = chord_size() as f32;
                     let cap     = 0_u8;
@@ -1264,7 +1227,7 @@ fn SongView(
                             Ok(song_id) => {
                                 println!("✅  Song saved (id={song_id})");
                                 // Also generate and store the current PDF
-                                match pdf::generate_pdf_bytes(&s, deg, pns, cs, cap) {
+                                match pdf::generate_pdf_bytes(&s, pns, cs, cap) {
                                     Ok(bytes) => match db_ref.save_pdf(song_id, &bytes) {
                                         Ok(pdf_id) => println!("✅  PDF stored (id={pdf_id})"),
                                         Err(e) => eprintln!("❌  PDF store failed: {e}"),
@@ -1432,12 +1395,7 @@ fn LoginScreen(db: Signal<Option<Db>>, mut current_user: Signal<Option<User>>) -
 // ── Part block ────────────────────────────────────────────────────────────────
 
 #[component]
-fn PartView(
-    song: Signal<Song>,
-    part_index: usize,
-    show_degrees: Signal<bool>,
-    capo: Signal<u8>,
-) -> Element {
+fn PartView(song: Signal<Song>, part_index: usize, capo: Signal<u8>) -> Element {
     let chord_count = song
         .read()
         .parts
@@ -1517,7 +1475,7 @@ fn PartView(
                 style: "display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start;",
 
                 for chord_index in 0..chord_count {
-                    ChordEditor { key: "{chord_index}", song, part_index, chord_index, show_degrees, capo }
+                    ChordEditor { key: "{chord_index}", song, part_index, chord_index, capo }
                 }
 
                 // Add chord button
@@ -1999,7 +1957,6 @@ fn ChordEditor(
     song: Signal<Song>,
     part_index: usize,
     chord_index: usize,
-    show_degrees: Signal<bool>,
     capo: Signal<u8>,
 ) -> Element {
     let chord = song
@@ -2010,9 +1967,7 @@ fn ChordEditor(
         .cloned()
         .unwrap_or_else(|| Chord::new("C", ChordQuality::Major));
 
-    let display_label = if show_degrees() {
-        chord.degree_display()
-    } else if capo() > 0 {
+    let display_label = if capo() > 0 {
         // Show the chord shape the player needs to play with the capo.
         let shifted_root = song::shift_note(&chord.root, capo());
         let shifted_bass = chord
@@ -2174,36 +2129,6 @@ fn ChordEditor(
                             if let Some(c) = part.chords.get_mut(chord_index) {
                                 let v = e.value();
                                 c.bass_note = if v.is_empty() { None } else { Some(v) };
-                            }
-                        }
-                    }
-                }
-
-                // Degree input
-                input {
-                    r#type: "number",
-                    min: "1",
-                    max: "7",
-                    style: "
-                        width: 70px;
-                        font-size: 13px;
-                        font-weight: 600;
-                        color: #1a1a2e;
-                        text-align: center;
-                        border: 1px solid #d0cbc0;
-                        border-radius: 6px;
-                        background: #fff;
-                        outline: none;
-                        padding: 4px 6px;
-                        font-family: inherit;
-                    ",
-                    value: chord.degree.map(|d| d.get().to_string()).unwrap_or_default(),
-                    placeholder: "Degree",
-                    oninput: move |e: Event<FormData>| {
-                        if let Some(part) = song.write().parts.get_mut(part_index) {
-                            if let Some(c) = part.chords.get_mut(chord_index) {
-                                c.degree = e.value().parse::<u8>().ok()
-                                    .and_then(ScaleDegree::new);
                             }
                         }
                     }

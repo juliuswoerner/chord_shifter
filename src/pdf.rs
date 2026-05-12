@@ -9,14 +9,12 @@ const MARGIN: f32 = 22.0;
 const RIGHT: f32 = PAGE_W - MARGIN;
 
 /// Render `song` into a PDF and return the raw bytes.
-/// `use_degrees`    – when `true`, chords are shown as roman-numeral scale degrees.
 /// `part_name_size` – font size in pt for part labels (default 9).
 /// `chord_size`     – font size in pt for chord roots (default 18).
 /// `capo`           – capo fret (0 = no capo); chord roots are shifted accordingly.
 /// Works on every target (desktop and WASM).
 pub fn generate_pdf_bytes(
     song: &Song,
-    use_degrees: bool,
     part_name_size: f32,
     chord_size: f32,
     capo: u8,
@@ -115,15 +113,7 @@ pub fn generate_pdf_bytes(
         let bass_char_w: f32 = root_char_w * (bass_size / chord_size);
 
         for chord in &part.chords {
-            // In degrees mode use the roman numeral; fall back to root name if no degree set.
-            let root: String = if use_degrees {
-                chord
-                    .degree
-                    .map(|d| d.roman().to_string())
-                    .unwrap_or_else(|| chord.root.clone())
-            } else {
-                chord.root.clone()
-            };
+            let root = chord.root.clone();
             let quality = chord.quality.symbol();
             // Slash bass note, e.g. "/B" for G/B
             let bass_suffix: String = chord
@@ -145,7 +135,7 @@ pub fn generate_pdf_bytes(
                 }
             }
 
-            // Root note (or roman numeral)
+            // Root note
             layer.use_text(&root, chord_size, Mm(x), Mm(y + 1.5), &font_bold);
 
             // Quality as superscript (smaller, raised)
@@ -192,10 +182,10 @@ mod tests {
         Song::new("Test Song", "G Major", "Test Artist").with_part(
             "Verse",
             vec![
-                Chord::new("G", ChordQuality::Major).with_degree(1),
-                Chord::new("E", ChordQuality::Minor).with_degree(6),
-                Chord::new("C", ChordQuality::Major).with_degree(4),
-                Chord::new("D", ChordQuality::Major).with_degree(5),
+                Chord::new("G", ChordQuality::Major),
+                Chord::new("E", ChordQuality::Minor),
+                Chord::new("C", ChordQuality::Major),
+                Chord::new("D", ChordQuality::Major),
             ],
         )
     }
@@ -203,35 +193,28 @@ mod tests {
     #[test]
     fn generate_pdf_returns_non_empty_bytes() {
         let song = sample_song();
-        let bytes = generate_pdf_bytes(&song, false, 9.0, 18.0, 0).unwrap();
+        let bytes = generate_pdf_bytes(&song, 9.0, 18.0, 0).unwrap();
         assert!(!bytes.is_empty());
     }
 
     #[test]
     fn generate_pdf_starts_with_pdf_header() {
         let song = sample_song();
-        let bytes = generate_pdf_bytes(&song, false, 9.0, 18.0, 0).unwrap();
+        let bytes = generate_pdf_bytes(&song, 9.0, 18.0, 0).unwrap();
         assert!(bytes.starts_with(b"%PDF-"), "output should be a valid PDF");
-    }
-
-    #[test]
-    fn generate_pdf_degrees_mode_also_produces_valid_pdf() {
-        let song = sample_song();
-        let bytes = generate_pdf_bytes(&song, true, 9.0, 18.0, 0).unwrap();
-        assert!(bytes.starts_with(b"%PDF-"));
     }
 
     #[test]
     fn generate_pdf_custom_font_sizes_produce_valid_pdf() {
         let song = sample_song();
-        let bytes = generate_pdf_bytes(&song, false, 14.0, 24.0, 0).unwrap();
+        let bytes = generate_pdf_bytes(&song, 14.0, 24.0, 0).unwrap();
         assert!(bytes.starts_with(b"%PDF-"));
     }
 
     #[test]
     fn generate_pdf_empty_song_produces_valid_pdf() {
         let song = Song::new("Empty", "C", "Nobody");
-        let bytes = generate_pdf_bytes(&song, false, 9.0, 18.0, 0).unwrap();
+        let bytes = generate_pdf_bytes(&song, 9.0, 18.0, 0).unwrap();
         assert!(bytes.starts_with(b"%PDF-"));
     }
 
@@ -239,9 +222,8 @@ mod tests {
     fn generate_pdf_with_capo_shows_shifted_key() {
         // G Major, capo 2 → chord shapes in F Major
         let song = sample_song();
-        let bytes = generate_pdf_bytes(&song, false, 9.0, 18.0, 2).unwrap();
+        let bytes = generate_pdf_bytes(&song, 9.0, 18.0, 2).unwrap();
         assert!(bytes.starts_with(b"%PDF-"));
-        // The raw PDF stream contains the text we printed.
         assert!(
             bytes.windows(1).count() > 0,
             "non-empty PDF produced with capo"
