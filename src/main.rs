@@ -95,6 +95,8 @@ struct StoredSong {
     user_id: i64,
     #[serde(default)]
     instrument_parts_json: String,
+    #[serde(default)]
+    instrument_capos_json: String,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -193,6 +195,8 @@ impl Db {
             serde_json::to_string(&song.instruments).map_err(|e| e.to_string())?;
         let instrument_parts_json =
             serde_json::to_string(&song.instrument_parts).map_err(|e| e.to_string())?;
+        let instrument_capos_json =
+            serde_json::to_string(&song.instrument_capos).map_err(|e| e.to_string())?;
         let mut songs = ls_read();
         if let Some(row) = songs
             .iter_mut()
@@ -203,6 +207,7 @@ impl Db {
             row.instruments_json = instruments_json;
             row.vocals_notes = song.vocals_notes.clone();
             row.instrument_parts_json = instrument_parts_json;
+            row.instrument_capos_json = instrument_capos_json;
             let id = row.id;
             ls_write(&songs);
             Ok(id)
@@ -218,6 +223,7 @@ impl Db {
                 vocals_notes: song.vocals_notes.clone(),
                 user_id,
                 instrument_parts_json,
+                instrument_capos_json,
             });
             ls_write(&songs);
             Ok(id)
@@ -268,6 +274,11 @@ impl Db {
                 } else {
                     serde_json::from_str(&s.instrument_parts_json).unwrap_or_default()
                 };
+                let instrument_capos = if s.instrument_capos_json.is_empty() {
+                    Default::default()
+                } else {
+                    serde_json::from_str(&s.instrument_capos_json).unwrap_or_default()
+                };
                 Ok(song::Song {
                     name: s.name,
                     artist: s.artist,
@@ -276,7 +287,7 @@ impl Db {
                     instruments,
                     vocals_notes: s.vocals_notes,
                     instrument_parts,
-                    instrument_capos: Default::default(),
+                    instrument_capos,
                 })
             })
     }
