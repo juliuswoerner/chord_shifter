@@ -108,7 +108,7 @@ pub fn generate_pdf_bytes(
         let qual_size: f32 = chord_size * (10.0 / 18.0);
         let raise_mm: f32 = chord_size * (3.8 / 18.0);
         let drop_mm: f32 = chord_size * (2.5 / 18.0);
-        let bass_size: f32 = qual_size;
+        let bass_size: f32 = chord_size * (14.0 / 18.0);
         let sup_offset: f32 = 1.0;
         let root_char_w: f32 = chord_size * (3.5 / 18.0);
         let qual_char_w: f32 = root_char_w * (qual_size / chord_size);
