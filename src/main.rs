@@ -23,13 +23,10 @@ fn inst_icon(inst: Instrument) -> Asset {
 }
 
 mod auth;
-#[cfg(not(target_arch = "wasm32"))]
-mod db;
 mod pdf;
 mod song;
 
-// ── Web-only: trigger a browser PDF download ──────────────────────────────────
-#[cfg(target_arch = "wasm32")]
+// ── Trigger a browser PDF download ───────────────────────────────────────────
 fn trigger_download(bytes: Vec<u8>, filename: &str) {
     use js_sys::Uint8Array;
     use wasm_bindgen::JsCast;
@@ -59,19 +56,11 @@ fn trigger_download(bytes: Vec<u8>, filename: &str) {
     let _ = Url::revoke_object_url(&url);
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-use db::{Db, SongRow, User};
+// ── Web storage backend (localStorage) ───────────────────────────────────────
 
-// ── Web storage backend (localStorage, wasm32 only) ──────────────────────────
-// Desktop uses SQLite via db.rs; the browser uses localStorage so the Library
-// panel works the same way on both platforms.
-
-#[cfg(target_arch = "wasm32")]
 const LS_SONGS_KEY: &str = "chord_shifter_songs";
-#[cfg(target_arch = "wasm32")]
 const LS_USERS_KEY: &str = "chord_shifter_users";
 
-#[cfg(target_arch = "wasm32")]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct StoredUser {
     id: i64,
@@ -79,7 +68,6 @@ struct StoredUser {
     password_hash: String,
 }
 
-#[cfg(target_arch = "wasm32")]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct StoredSong {
     id: i64,
@@ -99,7 +87,6 @@ struct StoredSong {
     instrument_capos_json: String,
 }
 
-#[cfg(target_arch = "wasm32")]
 fn ls_read_users() -> Vec<StoredUser> {
     web_sys::window()
         .and_then(|w| w.local_storage().ok().flatten())
@@ -108,7 +95,6 @@ fn ls_read_users() -> Vec<StoredUser> {
         .unwrap_or_default()
 }
 
-#[cfg(target_arch = "wasm32")]
 fn ls_write_users(users: &[StoredUser]) {
     if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
         if let Ok(json) = serde_json::to_string(users) {
@@ -117,7 +103,6 @@ fn ls_write_users(users: &[StoredUser]) {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
 fn ls_read() -> Vec<StoredSong> {
     web_sys::window()
         .and_then(|w| w.local_storage().ok().flatten())
@@ -126,7 +111,6 @@ fn ls_read() -> Vec<StoredSong> {
         .unwrap_or_default()
 }
 
-#[cfg(target_arch = "wasm32")]
 fn ls_write(songs: &[StoredSong]) {
     if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
         if let Ok(json) = serde_json::to_string(songs) {
@@ -135,11 +119,9 @@ fn ls_write(songs: &[StoredSong]) {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
 #[derive(Clone)]
 struct Db;
 
-#[cfg(target_arch = "wasm32")]
 impl Db {
     fn open(_: &str) -> Result<Self, String> {
         // Seed the example song into localStorage on first run.
@@ -341,14 +323,12 @@ impl Db {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
 #[derive(Clone, Debug)]
 struct User {
     id: i64,
     username: String,
 }
 
-#[cfg(target_arch = "wasm32")]
 #[derive(Clone, Debug)]
 struct SongRow {
     id: i64,
@@ -1204,16 +1184,6 @@ fn SongView(
                         }
                     }
 
-                    #[cfg(not(target_arch = "wasm32"))]
-                    for (sheet, filename, sheet_cap) in &exports {
-                        let path = format!("{filename}.pdf");
-                        match pdf::save_pdf(sheet, &path, deg, pns, cs, *sheet_cap) {
-                            Ok(_)  => println!("✅  PDF saved to {path}"),
-                            Err(e) => eprintln!("❌  PDF export failed for {path}: {e}"),
-                        }
-                    }
-
-                    #[cfg(target_arch = "wasm32")]
                     {
                         use js_sys::Uint8Array;
                         use wasm_bindgen::JsCast;
