@@ -74,6 +74,40 @@ impl ChordQuality {
     }
 }
 
+// ── Notation ─────────────────────────────────────────────────────────────────
+
+/// Which note-naming convention to use when displaying chords.
+///
+/// | Name    | B natural | B-flat |
+/// |---------|-----------|--------|
+/// | English | B         | B♭     |
+/// | German  | H         | B      |
+/// | Custom  | H         | B♭     |
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum Notation {
+    #[default]
+    English,
+    German,
+    Custom,
+}
+
+/// Apply a notation convention to a single note name.
+/// A# is always left as A# regardless of convention — only Bb is renamed.
+pub fn apply_notation(note: &str, notation: Notation) -> String {
+    match notation {
+        Notation::English => note.to_string(),
+        Notation::German => match note {
+            "B" => "H".to_string(),
+            "Bb" => "B".to_string(),
+            _ => note.to_string(),
+        },
+        Notation::Custom => match note {
+            "B" => "H".to_string(),
+            _ => note.to_string(), // Bb stays Bb, A# stays A#
+        },
+    }
+}
+
 // ── Chord ─────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -95,10 +129,25 @@ impl Chord {
     }
 
     /// Human-readable chord name, e.g. `"Am"`, `"G7"`, `"Fmaj7"`, `"G/B"`.
+    #[allow(dead_code)]
     pub fn display(&self) -> String {
         match &self.bass_note {
             Some(b) => format!("{}{}/{}", self.root, self.quality.symbol(), b),
             None => format!("{}{}", self.root, self.quality.symbol()),
+        }
+    }
+
+    /// Chord name with the given notation convention applied to root and bass.
+    pub fn display_with_notation(&self, notation: Notation) -> String {
+        let root = apply_notation(&self.root, notation);
+        match &self.bass_note {
+            Some(b) => format!(
+                "{}{}/{}",
+                root,
+                self.quality.symbol(),
+                apply_notation(b, notation)
+            ),
+            None => format!("{}{}", root, self.quality.symbol()),
         }
     }
 }
@@ -167,20 +216,47 @@ fn index_to_note(index: u8, prefer_sharps: bool) -> &'static str {
     }
 }
 
-/// Shift a note root down by `semitones` chromatically.
-/// Chooses sharps or flats based on which side of the circle the result falls on.
+/// Returns whether `root` is conventionally written with sharps in a major or minor key.
+/// Major sharp keys:  C  G  D  A  E  B  F#  C#
+/// Minor sharp keys:  A  E  B  F#  C#  G#  D#  (relative minors of the major sharp keys)
+pub fn prefer_sharps_for_key(root: &str, is_minor: bool) -> bool {
+    if is_minor {
+        matches!(root, "A" | "E" | "B" | "F#" | "C#" | "G#" | "D#")
+    } else {
+        matches!(root, "C" | "G" | "D" | "A" | "E" | "B" | "F#" | "C#")
+    }
+}
+
+/// Shift a note root up by `semitones` chromatically.
+/// `is_minor` selects minor-key vs major-key sharp/flat conventions.
 /// Returns the original string unchanged if it cannot be parsed.
-pub fn shift_note(root: &str, semitones_down: u8) -> String {
+pub fn shift_note_up(root: &str, semitones_up: u8, is_minor: bool) -> String {
+    if semitones_up == 0 {
+        return root.to_string();
+    }
+    note_to_index(root)
+        .map(|idx| {
+            let new_idx = ((idx as u16) + (semitones_up as u16)) % 12;
+            // Determine the canonical note name in sharps first, then check preference.
+            let sharp_name = index_to_note(new_idx as u8, true);
+            let prefer_sharps = prefer_sharps_for_key(sharp_name, is_minor);
+            index_to_note(new_idx as u8, prefer_sharps).to_string()
+        })
+        .unwrap_or_else(|| root.to_string())
+}
+
+/// Shift a note root down by `semitones` chromatically.
+/// `is_minor` selects minor-key vs major-key sharp/flat conventions.
+/// Returns the original string unchanged if it cannot be parsed.
+pub fn shift_note(root: &str, semitones_down: u8, is_minor: bool) -> String {
     if semitones_down == 0 {
         return root.to_string();
     }
     note_to_index(root)
         .map(|idx| {
             let new_idx = ((idx as i16) - (semitones_down as i16)).rem_euclid(12) as u8;
-            let prefer_sharps = matches!(
-                index_to_note(new_idx, true),
-                "C" | "G" | "D" | "A" | "E" | "B" | "F#" | "C#"
-            );
+            let sharp_name = index_to_note(new_idx, true);
+            let prefer_sharps = prefer_sharps_for_key(sharp_name, is_minor);
             index_to_note(new_idx, prefer_sharps).to_string()
         })
         .unwrap_or_else(|| root.to_string())
@@ -321,7 +397,8 @@ impl Song {
             };
             return;
         }
-        let prefer_sharps = matches!(new_root, "C" | "G" | "D" | "A" | "E" | "B" | "F#" | "C#");
+        let is_minor = self.key.to_lowercase().contains("minor");
+        let prefer_sharps = prefer_sharps_for_key(new_root, is_minor);
         let shift_chord = |chord: &mut Chord| {
             if let Some(root_idx) = note_to_index(&chord.root) {
                 chord.root = index_to_note((root_idx + interval) % 12, prefer_sharps).to_string();
@@ -395,11 +472,15 @@ impl Song {
             };
         }
         // Shift every chord root and bass note.
+        // apply_capo shifts down (for display), preserve the current key's sharp/flat preference.
+        let is_minor = result.key.to_lowercase().contains("minor");
+        let key_root = result.key.split_whitespace().next().unwrap_or("C");
+        let _prefer = prefer_sharps_for_key(key_root, is_minor);
         for part in &mut result.parts {
             for chord in &mut part.chords {
-                chord.root = shift_note(&chord.root, capo);
+                chord.root = shift_note(&chord.root, capo, is_minor);
                 if let Some(bass) = &chord.bass_note {
-                    chord.bass_note = Some(shift_note(bass, capo));
+                    chord.bass_note = Some(shift_note(bass, capo, is_minor));
                 }
             }
         }

@@ -339,7 +339,7 @@ struct SongRow {
     username: String,
 }
 
-use song::{Chord, ChordQuality, Song};
+use song::{apply_notation, Chord, ChordQuality, Notation, Song};
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 #[derive(Routable, Clone, PartialEq)]
@@ -442,9 +442,9 @@ fn SongView(
     song_id: Option<i64>,
 ) -> Element {
     let nav = use_navigator();
-    let mut transpose_root = use_signal(|| "C".to_string());
     let mut part_name_size = use_signal(|| 9_u32);
     let mut chord_size = use_signal(|| 18_u32);
+    let mut notation: Signal<Notation> = use_signal(|| Notation::English);
     // None = base sheet; Some(inst) = that instrument's sheet
     let mut active_instrument: Signal<Option<Instrument>> = use_signal(|| None);
     // Per-instrument working copies — each instrument has its own isolated signal
@@ -672,82 +672,150 @@ fn SongView(
                     oninput: move |e| song.write().artist = e.value(),
                 }
 
-                // Key pill with inline input
+                // Key pill with − / + semitone buttons and Major/Minor toggle
                 div {
-                    style: "display: inline-flex; align-items: center; background: #1a1a2e; border-radius: 20px; overflow: hidden;",
-                    span {
-                        style: "color: #f0ece2; padding: 5px 6px 5px 16px; font-size: 12px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; white-space: nowrap;",
-                        "Key:"
+                    style: "display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px;",
+
+                    // ── Key root pill (− root +) ───────────────────────────
+                    div {
+                        style: "display: inline-flex; align-items: center; background: #1a1a2e; border-radius: 20px; overflow: hidden;",
+                        span {
+                            style: "color: #f0ece2; padding: 5px 6px 5px 14px; font-size: 12px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; white-space: nowrap;",
+                            "Key:"
+                        }
+                        // − button
+                        button {
+                            style: "background: rgba(255,255,255,0.10); border: none; color: #f0ece2; font-size: 16px; font-weight: 700; padding: 0 8px; cursor: pointer; font-family: inherit; line-height: 1; height: 30px;",
+                            onclick: move |_| {
+                                let key = song.read().key.clone();
+                                let is_minor = key.to_lowercase().contains("minor");
+                                let root = key.split_whitespace().next().unwrap_or("C").to_string();
+                                let new_root = song::shift_note(&root, 1, is_minor);
+                                song.write().transpose_to(&new_root);
+                            },
+                            "−"
+                        }
+                        // Key root display (read-only)
+                        span {
+                            style: "color: #f0ece2; padding: 5px 6px; font-size: 14px; font-weight: 800; letter-spacing: 0.5px; min-width: 28px; text-align: center;",
+                            {
+                                let k = song.read().key.clone();
+                                k.split_whitespace().next().unwrap_or("C").to_string()
+                            }
+                        }
+                        // + button
+                        button {
+                            style: "background: rgba(255,255,255,0.10); border: none; color: #f0ece2; font-size: 16px; font-weight: 700; padding: 0 8px; cursor: pointer; font-family: inherit; line-height: 1; height: 30px;",
+                            onclick: move |_| {
+                                let key = song.read().key.clone();
+                                let is_minor = key.to_lowercase().contains("minor");
+                                let root = key.split_whitespace().next().unwrap_or("C").to_string();
+                                let new_root = song::shift_note_up(&root, 1, is_minor);
+                                song.write().transpose_to(&new_root);
+                            },
+                            "+"
+                        }
                     }
-                    input {
-                        style: "
-                            color: #f0ece2;
-                            background: transparent;
-                            border: none;
-                            outline: none;
-                            padding: 5px 16px 5px 4px;
-                            font-size: 12px;
-                            font-weight: 700;
-                            letter-spacing: 1.2px;
-                            text-transform: uppercase;
-                            font-family: inherit;
-                            width: 90px;
-                        ",
-                        value: "{song.read().key}",
-                        placeholder: "C Major",
-                        oninput: move |e| song.write().key = e.value(),
+
+                    // ── Major / Minor toggle ───────────────────────────────
+                    {
+                        let key = song.read().key.clone();
+                        let is_minor = key.to_lowercase().contains("minor");
+                        let maj_style = if !is_minor {
+                            "padding: 5px 12px; border-radius: 16px 0 0 16px; border: none; font-size: 11px; font-weight: 700; font-family: inherit; cursor: pointer; background: #1a1a2e; color: #f0ece2;"
+                        } else {
+                            "padding: 5px 12px; border-radius: 16px 0 0 16px; border: 1.5px solid #d9d4c5; border-right: none; font-size: 11px; font-weight: 700; font-family: inherit; cursor: pointer; background: #f0ece2; color: #888;"
+                        };
+                        let min_style = if is_minor {
+                            "padding: 5px 12px; border-radius: 0 16px 16px 0; border: none; font-size: 11px; font-weight: 700; font-family: inherit; cursor: pointer; background: #1a1a2e; color: #f0ece2;"
+                        } else {
+                            "padding: 5px 12px; border-radius: 0 16px 16px 0; border: 1.5px solid #d9d4c5; border-left: none; font-size: 11px; font-weight: 700; font-family: inherit; cursor: pointer; background: #f0ece2; color: #888;"
+                        };
+                        rsx! {
+                            div {
+                                style: "display: inline-flex; align-items: center;",
+                                button {
+                                    style: "{maj_style}",
+                                    onclick: move |_| {
+                                        let key = song.read().key.clone();
+                                        let root = key.split_whitespace().next().unwrap_or("C").to_string();
+                                        song.write().key = format!("{} Major", root);
+                                    },
+                                    "Major"
+                                }
+                                button {
+                                    style: "{min_style}",
+                                    onclick: move |_| {
+                                        let key = song.read().key.clone();
+                                        let root = key.split_whitespace().next().unwrap_or("C").to_string();
+                                        song.write().key = format!("{} Minor", root);
+                                    },
+                                    "Minor"
+                                }
+                            }
+                        }
                     }
                 }
 
-                // Transpose row
-                div {
-                    style: "margin-top: 14px; display: flex; align-items: center; gap: 10px;",
-                    span {
-                        style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;",
-                        "Transpose to:"
-                    }
-                    select {
-                        style: "
-                            font-size: 13px;
-                            font-weight: 700;
-                            color: #1a1a2e;
-                            background: #f0ece2;
-                            border: 1px solid #d9d4c5;
-                            border-radius: 8px;
-                            padding: 5px 10px;
-                            outline: none;
-                            cursor: pointer;
-                            font-family: inherit;
-                        ",
-                        onchange: move |e| *transpose_root.write() = e.value(),
-                        for root in ["C","C#","D","Eb","E","F","F#","G","Ab","A","Bb","B"] {
-                            option { value: "{root}", "{root}" }
+                // ── Set key without transposing ────────────────────────────
+                {
+                    let key = song.read().key.clone();
+                    let _is_minor = key.to_lowercase().contains("minor");
+                    let current_root = key.split_whitespace().next().unwrap_or("C").to_string();
+                    let notes = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+                    rsx! {
+                        div {
+                            style: "display: inline-flex; align-items: center; gap: 8px; margin-top: 28px;",
+                            span {
+                                style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px; white-space: nowrap;",
+                                "Set key:"
+                            }
+                            select {
+                                style: "font-size: 13px; font-weight: 700; color: #1a1a2e; background: #f0ece2; border: 1.5px solid #d9d4c5; border-radius: 10px; padding: 4px 10px; outline: none; cursor: pointer; font-family: inherit;",
+                                title: "Change key without transposing chords",
+                                onchange: move |e| {
+                                    let key = song.read().key.clone();
+                                    let is_minor = key.to_lowercase().contains("minor");
+                                    let mode = if is_minor { "Minor" } else { "Major" };
+                                    song.write().key = format!("{} {}", e.value(), mode);
+                                },
+                                for note in notes {
+                                    option {
+                                        value: "{note}",
+                                        selected: current_root == note,
+                                        "{note}"
+                                    }
+                                }
+                            }
                         }
                     }
-                    button {
-                        style: "
-                            padding: 5px 18px;
-                            background: #1a1a2e;
-                            color: #f0ece2;
-                            border: none;
-                            border-radius: 8px;
-                            font-size: 12px;
-                            font-weight: 700;
-                            letter-spacing: 0.5px;
-                            cursor: pointer;
-                            font-family: inherit;
-                        ",
-                        onclick: move |_| {
-                            let root = transpose_root.read().clone();
-                            song.write().transpose_to(&root);
+                }
+
+                // ── Notation ────────────────────────────────────────────────
+                div {
+                    style: "display: inline-flex; align-items: center; gap: 8px; margin-top: 14px;",
+                    span {
+                        style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px; white-space: nowrap;",
+                        "Notation:"
+                    }
+                    select {
+                        style: "font-size: 13px; font-weight: 700; color: #1a1a2e; background: #f0ece2; border: 1.5px solid #d9d4c5; border-radius: 10px; padding: 4px 10px; outline: none; cursor: pointer; font-family: inherit;",
+                        onchange: move |e| {
+                            *notation.write() = match e.value().as_str() {
+                                "german" => Notation::German,
+                                "custom" => Notation::Custom,
+                                _        => Notation::English,
+                            };
                         },
-                        "Transpose"
+                        option { value: "english", selected: notation() == Notation::English, "English  (B / B♭)" }
+                        option { value: "german",  selected: notation() == Notation::German,  "German  (H / B)" }
+                        option { value: "custom",  selected: notation() == Notation::Custom,  "Custom  (H / B♭)" }
                     }
                 }
 
                 // ── Instrument tabs ─────────────────────────────────────────
                 div {
-                    style: "margin-top: 18px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;",
+                    style: "margin-top: 28px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;",
                     span {
                         style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;",
                         "Sheet:"
@@ -827,7 +895,7 @@ fn SongView(
             if active_instrument.read().is_none() {
                 // Base sheet
                 for part_index in 0..song.read().parts.len() {
-                    PartView { key: "{part_index}", song, part_index, capo: use_signal(|| 0_u8) }
+                    PartView { key: "{part_index}", song, part_index, notation, capo: use_signal(|| 0_u8) }
                 }
                 button {
                     style: "
@@ -932,7 +1000,7 @@ fn SongView(
                         }
                         // Editable chord parts
                         for part_index in 0..act_song.read().parts.len() {
-                            PartView { key: "{part_index}", song: act_song, part_index, capo: act_capo }
+                            PartView { key: "{part_index}", song: act_song, part_index, notation, capo: act_capo }
                         }
                         button {
                             style: "
@@ -1134,6 +1202,7 @@ fn SongView(
                     let pns = part_name_size() as f32;
                     let cs  = chord_size() as f32;
                     let cap = 0_u8;
+                    let note = notation();
 
                     // Collect: base sheet + one entry per instrument that has saved overrides.
                     // Each entry is (song_with_correct_parts, filename, capo_for_that_sheet).
@@ -1165,7 +1234,7 @@ fn SongView(
                                 .compression_method(zip::CompressionMethod::Deflated);
 
                             for (sheet, filename, sheet_cap) in &exports {
-                                match pdf::generate_pdf_bytes(sheet, pns, cs, *sheet_cap) {
+                                match pdf::generate_pdf_bytes(sheet, note, pns, cs, *sheet_cap) {
                                     Ok(bytes) => {
                                         let _ = zip.start_file(format!("{filename}.pdf"), opts);
                                         let _ = zip.write_all(&bytes);
@@ -1221,13 +1290,14 @@ fn SongView(
                     let pns     = part_name_size() as f32;
                     let cs      = chord_size() as f32;
                     let cap     = 0_u8;
+                    let note    = notation();
                     let user_id = current_user.read().as_ref().map(|u| u.id).unwrap_or(0);
                     if let Some(db_ref) = db.read().as_ref() {
                         match db_ref.save_song(&s, user_id) {
                             Ok(song_id) => {
                                 println!("✅  Song saved (id={song_id})");
                                 // Also generate and store the current PDF
-                                match pdf::generate_pdf_bytes(&s, pns, cs, cap) {
+                                match pdf::generate_pdf_bytes(&s, note, pns, cs, cap) {
                                     Ok(bytes) => match db_ref.save_pdf(song_id, &bytes) {
                                         Ok(pdf_id) => println!("✅  PDF stored (id={pdf_id})"),
                                         Err(e) => eprintln!("❌  PDF store failed: {e}"),
@@ -1395,7 +1465,12 @@ fn LoginScreen(db: Signal<Option<Db>>, mut current_user: Signal<Option<User>>) -
 // ── Part block ────────────────────────────────────────────────────────────────
 
 #[component]
-fn PartView(song: Signal<Song>, part_index: usize, capo: Signal<u8>) -> Element {
+fn PartView(
+    song: Signal<Song>,
+    part_index: usize,
+    notation: Signal<Notation>,
+    capo: Signal<u8>,
+) -> Element {
     let chord_count = song
         .read()
         .parts
@@ -1475,7 +1550,7 @@ fn PartView(song: Signal<Song>, part_index: usize, capo: Signal<u8>) -> Element 
                 style: "display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start;",
 
                 for chord_index in 0..chord_count {
-                    ChordEditor { key: "{chord_index}", song, part_index, chord_index, capo }
+                    ChordEditor { key: "{chord_index}", song, part_index, chord_index, notation, capo }
                 }
 
                 // Add chord button
@@ -1771,6 +1846,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
         .unwrap_or_else(|| instrument.as_str());
 
     let mut capo = use_signal(|| 0_u8);
+    let notation: Signal<Notation> = use_signal(|| Notation::English);
 
     rsx! {
         div {
@@ -1900,9 +1976,13 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                                         .cloned()
                                         .unwrap_or_else(|| Chord::new("C", ChordQuality::Major));
                                     let capo_label = if capo() > 0 {
-                                        format!("{}{}", song::shift_note(&chord.root, capo()), chord.quality.symbol())
+                                        let is_minor = song.read().key.to_lowercase().contains("minor");
+                                        let shifted = song::shift_note(&chord.root, capo(), is_minor);
+                                        let note = notation();
+                                        format!("{}{}", apply_notation(&shifted, note), chord.quality.symbol())
                                     } else {
-                                        chord.display()
+                                        let note = notation();
+                                        chord.display_with_notation(note)
                                     };
                                     rsx! {
                                         div {
@@ -1957,6 +2037,7 @@ fn ChordEditor(
     song: Signal<Song>,
     part_index: usize,
     chord_index: usize,
+    notation: Signal<Notation>,
     capo: Signal<u8>,
 ) -> Element {
     let chord = song
@@ -1969,11 +2050,15 @@ fn ChordEditor(
 
     let display_label = if capo() > 0 {
         // Show the chord shape the player needs to play with the capo.
-        let shifted_root = song::shift_note(&chord.root, capo());
-        let shifted_bass = chord
-            .bass_note
-            .as_deref()
-            .map(|b| format!("/{}", song::shift_note(b, capo())));
+        let is_minor = song.read().key.to_lowercase().contains("minor");
+        let shifted_root =
+            apply_notation(&song::shift_note(&chord.root, capo(), is_minor), notation());
+        let shifted_bass = chord.bass_note.as_deref().map(|b| {
+            format!(
+                "/{}",
+                apply_notation(&song::shift_note(b, capo(), is_minor), notation())
+            )
+        });
         format!(
             "{}{}{}",
             shifted_root,
@@ -1981,7 +2066,7 @@ fn ChordEditor(
             shifted_bass.unwrap_or_default()
         )
     } else {
-        chord.display()
+        chord.display_with_notation(notation())
     };
 
     rsx! {
