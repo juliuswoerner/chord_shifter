@@ -1,7 +1,7 @@
 use printpdf::*;
 use std::io::BufWriter;
 
-use crate::song::Song;
+use crate::song::{apply_notation, Notation, Song};
 
 const PAGE_W: f32 = 210.0;
 const PAGE_H: f32 = 297.0;
@@ -9,12 +9,14 @@ const MARGIN: f32 = 22.0;
 const RIGHT: f32 = PAGE_W - MARGIN;
 
 /// Render `song` into a PDF and return the raw bytes.
-/// `part_name_size` – font size in pt for part labels (default 9).
-/// `chord_size`     – font size in pt for chord roots (default 18).
-/// `capo`           – capo fret (0 = no capo); chord roots are shifted accordingly.
+/// `notation`        – note-naming convention (English / German / Custom).
+/// `part_name_size`  – font size in pt for part labels (default 9).
+/// `chord_size`      – font size in pt for chord roots (default 18).
+/// `capo`            – capo fret (0 = no capo); chord roots are shifted accordingly.
 /// Works on every target (desktop and WASM).
 pub fn generate_pdf_bytes(
     song: &Song,
+    notation: Notation,
     part_name_size: f32,
     chord_size: f32,
     capo: u8,
@@ -113,13 +115,13 @@ pub fn generate_pdf_bytes(
         let bass_char_w: f32 = root_char_w * (bass_size / chord_size);
 
         for chord in &part.chords {
-            let root = chord.root.clone();
+            let root = apply_notation(&chord.root, notation);
             let quality = chord.quality.symbol();
             // Slash bass note, e.g. "/B" for G/B
             let bass_suffix: String = chord
                 .bass_note
                 .as_deref()
-                .map(|b| format!("/{}", b))
+                .map(|b| format!("/{}", apply_notation(b, notation)))
                 .unwrap_or_default();
 
             let root_w = root.len() as f32 * root_char_w;
@@ -176,7 +178,7 @@ pub fn generate_pdf_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::song::{Chord, ChordQuality, Song};
+    use crate::song::{Chord, ChordQuality, Notation, Song};
 
     fn sample_song() -> Song {
         Song::new("Test Song", "G Major", "Test Artist").with_part(
@@ -193,28 +195,28 @@ mod tests {
     #[test]
     fn generate_pdf_returns_non_empty_bytes() {
         let song = sample_song();
-        let bytes = generate_pdf_bytes(&song, 9.0, 18.0, 0).unwrap();
+        let bytes = generate_pdf_bytes(&song, Notation::English, 9.0, 18.0, 0).unwrap();
         assert!(!bytes.is_empty());
     }
 
     #[test]
     fn generate_pdf_starts_with_pdf_header() {
         let song = sample_song();
-        let bytes = generate_pdf_bytes(&song, 9.0, 18.0, 0).unwrap();
+        let bytes = generate_pdf_bytes(&song, Notation::English, 9.0, 18.0, 0).unwrap();
         assert!(bytes.starts_with(b"%PDF-"), "output should be a valid PDF");
     }
 
     #[test]
     fn generate_pdf_custom_font_sizes_produce_valid_pdf() {
         let song = sample_song();
-        let bytes = generate_pdf_bytes(&song, 14.0, 24.0, 0).unwrap();
+        let bytes = generate_pdf_bytes(&song, Notation::English, 14.0, 24.0, 0).unwrap();
         assert!(bytes.starts_with(b"%PDF-"));
     }
 
     #[test]
     fn generate_pdf_empty_song_produces_valid_pdf() {
         let song = Song::new("Empty", "C", "Nobody");
-        let bytes = generate_pdf_bytes(&song, 9.0, 18.0, 0).unwrap();
+        let bytes = generate_pdf_bytes(&song, Notation::English, 9.0, 18.0, 0).unwrap();
         assert!(bytes.starts_with(b"%PDF-"));
     }
 
@@ -222,11 +224,18 @@ mod tests {
     fn generate_pdf_with_capo_shows_shifted_key() {
         // G Major, capo 2 → chord shapes in F Major
         let song = sample_song();
-        let bytes = generate_pdf_bytes(&song, 9.0, 18.0, 2).unwrap();
+        let bytes = generate_pdf_bytes(&song, Notation::English, 9.0, 18.0, 2).unwrap();
         assert!(bytes.starts_with(b"%PDF-"));
         assert!(
             bytes.windows(1).count() > 0,
             "non-empty PDF produced with capo"
         );
+    }
+
+    #[test]
+    fn generate_pdf_german_notation_produces_valid_pdf() {
+        let song = sample_song();
+        let bytes = generate_pdf_bytes(&song, Notation::German, 9.0, 18.0, 0).unwrap();
+        assert!(bytes.starts_with(b"%PDF-"));
     }
 }
