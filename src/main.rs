@@ -950,12 +950,12 @@ fn SongView(
                                 }
                                 button {
                                     style: "padding: 2px 10px; background: transparent; color: #5c7a5c; border: 1.5px dashed #8fba8f; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit; white-space: nowrap;",
-                                    title: "Insert riff here",
+                                    title: "Insert tab here",
                                     onclick: move |_| {
                                         let mut s = song.write();
                                         s.parts.insert(insert_index, crate::song::SongPart::new_riff("Riff"));
                                     },
-                                    "~ Riff"
+                                    "~ Tab"
                                 }
                                 div { style: "flex: 1; height: 1px; background: #ddd;" }
                             }
@@ -997,7 +997,7 @@ fn SongView(
                         width: 100%;
                     ",
                     onclick: move |_| { song.write().parts.push(crate::song::SongPart::new_riff("Riff")); },
-                    "~ Add Riff / Tab"
+                    "+ Add Tab"
                 }
                 button {
                     style: "
@@ -1102,12 +1102,12 @@ fn SongView(
                                         }
                                         button {
                                             style: "padding: 2px 10px; background: transparent; color: #5c7a5c; border: 1.5px dashed #8fba8f; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit; white-space: nowrap;",
-                                            title: "Insert riff here",
+                                            title: "Insert tab here",
                                             onclick: move |_| {
                                                 let mut s = act_song.write();
                                                 s.parts.insert(insert_index, crate::song::SongPart::new_riff("Riff"));
                                             },
-                                            "~ Riff"
+                                            "~ Tab"
                                         }
                                         div { style: "flex: 1; height: 1px; background: #ddd;" }
                                     }
@@ -1148,7 +1148,7 @@ fn SongView(
                                 width: 100%;
                             ",
                             onclick: move |_| { act_song.write().parts.push(crate::song::SongPart::new_riff("Riff")); },
-                            "~ Add Riff / Tab"
+                            "+ Add Tab"
                         }
                         div {
                             style: "margin-bottom: 24px; display: flex; align-items: center; gap: 16px;",
