@@ -123,34 +123,50 @@ pub fn generate_pdf_bytes(
                 }
                 PartItem::Repeat { times } => {
                     let label = if *times > 0 {
-                        format!("\u{2016}: x{}", times)
+                        format!("||: x{}", times)
                     } else {
-                        "\u{2016}:".to_string()
+                        "||:".to_string()
                     };
                     let w = label.len() as f32 * root_char_w;
                     if x + w > RIGHT {
                         x = MARGIN;
                         y -= row_h + gap;
                     }
-                    layer.use_text(&label, chord_size * 0.75, Mm(x), Mm(y + 1.5), &font_bold);
+                    layer.use_text(&label, chord_size, Mm(x), Mm(y + 1.5), &font_bold);
                     x += w + gap;
                 }
                 PartItem::VoltaBracketStart { label } => {
-                    let w = label.len() as f32 * root_char_w + 4.0;
+                    let bracket_size = chord_size * 1.5;
+                    let label_size = chord_size * 0.55;
+                    let bracket_w = root_char_w * 1.5;
+                    let label_w = label.len() as f32 * root_char_w * 0.55 + 2.0;
+                    let w = bracket_w + label_w + 3.0;
                     if x + w > RIGHT {
                         x = MARGIN;
                         y -= row_h + gap;
                     }
+                    // Large bracket
+                    layer.use_text("[", bracket_size, Mm(x), Mm(y + 1.5), &font_bold);
+                    // Small superscript label
                     layer.use_text(
-                        label,
-                        chord_size * 0.65,
-                        Mm(x + 1.5),
-                        Mm(y + 1.5 + raise_mm),
-                        &font_regular,
+                        label.as_str(),
+                        label_size,
+                        Mm(x + bracket_w + 1.0),
+                        Mm(y + 1.5 + row_h * 0.45),
+                        &font_bold,
                     );
                     x += w;
                 }
-                PartItem::VoltaBracketEnd => { /* no visual needed in PDF */ }
+                PartItem::VoltaBracketEnd => {
+                    let bracket_size = chord_size * 1.5;
+                    let w = root_char_w * 1.5 + 3.0;
+                    if x + w > RIGHT {
+                        x = MARGIN;
+                        y -= row_h + gap;
+                    }
+                    layer.use_text("]", bracket_size, Mm(x), Mm(y + 1.5), &font_bold);
+                    x += w;
+                }
                 PartItem::Chord(chord) => {
                     let root = apply_notation(&chord.root, notation);
                     let quality = chord.quality.symbol();

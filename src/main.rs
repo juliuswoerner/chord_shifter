@@ -444,6 +444,8 @@ fn SongView(
     let nav = use_navigator();
     let mut part_name_size = use_signal(|| 9_u32);
     let mut chord_size = use_signal(|| 18_u32);
+    let mut preview_open = use_signal(|| false);
+    let mut preview_url: Signal<String> = use_signal(|| String::new());
     let mut notation: Signal<Notation> = use_signal(|| Notation::English);
     // None = base sheet; Some(inst) = that instrument's sheet
     let mut active_instrument: Signal<Option<Instrument>> = use_signal(|| None);
@@ -1214,6 +1216,49 @@ fn SongView(
                 }
             }
 
+            // ── Preview button ────────────────────────────────────────────────
+            button {
+                style: "
+                    margin-top: 24px;
+                    width: 100%;
+                    padding: 14px;
+                    background: #f5f2ea;
+                    color: #1a1a2e;
+                    border: 2px solid #d9d4c5;
+                    border-radius: 10px;
+                    font-size: 15px;
+                    font-weight: 700;
+                    letter-spacing: 0.6px;
+                    cursor: pointer;
+                    font-family: inherit;
+                ",
+                onclick: move |_| {
+                    let s    = song.read().clone();
+                    let pns  = part_name_size() as f32;
+                    let cs   = chord_size() as f32;
+                    let note = notation();
+                    use js_sys::Uint8Array;
+                    use web_sys::{Blob, BlobPropertyBag, Url};
+                    match pdf::generate_pdf_bytes(&s, note, pns, cs, 0) {
+                        Ok(bytes) => {
+                            let array = Uint8Array::from(bytes.as_slice());
+                            let parts = js_sys::Array::new();
+                            parts.push(&array);
+                            let opts = BlobPropertyBag::new();
+                            opts.set_type("application/pdf");
+                            if let Ok(blob) = Blob::new_with_u8_array_sequence_and_options(&parts, &opts) {
+                                if let Ok(url) = Url::create_object_url_with_blob(&blob) {
+                                    *preview_url.write() = url;
+                                    *preview_open.write() = true;
+                                }
+                            }
+                        }
+                        Err(e) => web_sys::console::error_1(&format!("Preview failed: {e}").into()),
+                    }
+                },
+                "🔍  Preview PDF"
+            }
+
             // ── Export button ─────────────────────────────────────────────────
             button {
                 style: "
@@ -1343,6 +1388,82 @@ fn SongView(
                     }
                 },
                 "💾  Save to Library"
+            }
+
+            // ── PDF Preview modal ─────────────────────────────────────────
+            if preview_open() {
+                div {
+                    style: "
+                        position: fixed;
+                        inset: 0;
+                        background: rgba(0,0,0,0.65);
+                        z-index: 1000;
+                        display: flex;
+                        flex-direction: column;
+                        align-items: center;
+                        justify-content: center;
+                        padding: 24px;
+                    ",
+                    onclick: move |_| *preview_open.write() = false,
+
+                    div {
+                        style: "
+                            background: #fff;
+                            border-radius: 14px;
+                            width: min(92vw, 860px);
+                            height: min(90vh, 1100px);
+                            display: flex;
+                            flex-direction: column;
+                            overflow: hidden;
+                            box-shadow: 0 24px 64px rgba(0,0,0,0.45);
+                        ",
+                        onclick: move |e| e.stop_propagation(),
+
+                        // Header bar
+                        div {
+                            style: "
+                                display: flex;
+                                align-items: center;
+                                justify-content: space-between;
+                                padding: 14px 20px;
+                                border-bottom: 1px solid #ece8df;
+                                flex-shrink: 0;
+                            ",
+                            span {
+                                style: "font-size: 15px; font-weight: 700; color: #1a1a2e; font-family: inherit;",
+                                "PDF Preview"
+                            }
+                            button {
+                                style: "
+                                    background: none;
+                                    border: none;
+                                    font-size: 22px;
+                                    color: #888;
+                                    cursor: pointer;
+                                    line-height: 1;
+                                    padding: 0 4px;
+                                    font-family: inherit;
+                                ",
+                                onclick: move |_| {
+                                    use web_sys::Url;
+                                    let url = preview_url.read().clone();
+                                    if !url.is_empty() {
+                                        let _ = Url::revoke_object_url(&url);
+                                    }
+                                    *preview_url.write() = String::new();
+                                    *preview_open.write() = false;
+                                },
+                                "\u{2715}"
+                            }
+                        }
+
+                        // PDF iframe
+                        iframe {
+                            style: "flex: 1; border: none; width: 100%;",
+                            src: "{preview_url}",
+                        }
+                    }
+                }
             }
         }
     }
