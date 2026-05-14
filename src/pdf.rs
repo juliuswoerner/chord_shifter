@@ -114,55 +114,106 @@ pub fn generate_pdf_bytes(
         let qual_char_w: f32 = root_char_w * (qual_size / chord_size);
         let bass_char_w: f32 = root_char_w * (bass_size / chord_size);
 
-        for chord in &part.chords {
-            let root = apply_notation(&chord.root, notation);
-            let quality = chord.quality.symbol();
-            // Slash bass note, e.g. "/B" for G/B
-            let bass_suffix: String = chord
-                .bass_note
-                .as_deref()
-                .map(|b| format!("/{}", apply_notation(b, notation)))
-                .unwrap_or_default();
+        for item in &part.items {
+            use crate::song::PartItem;
+            match item {
+                PartItem::LineBreak => {
+                    x = MARGIN;
+                    y -= row_h + gap;
+                }
+                PartItem::Repeat { times } => {
+                    let label = if *times > 0 {
+                        format!("||: x{}", times)
+                    } else {
+                        "||:".to_string()
+                    };
+                    let w = label.len() as f32 * root_char_w;
+                    if x + w > RIGHT {
+                        x = MARGIN;
+                        y -= row_h + gap;
+                    }
+                    layer.use_text(&label, chord_size, Mm(x), Mm(y + 1.5), &font_bold);
+                    x += w + gap;
+                }
+                PartItem::VoltaBracketStart { label } => {
+                    let bracket_size = chord_size * 1.5;
+                    let label_size = chord_size * 0.55;
+                    let bracket_w = root_char_w * 1.5;
+                    let label_w = label.len() as f32 * root_char_w * 0.55 + 2.0;
+                    let w = bracket_w + label_w + 3.0;
+                    if x + w > RIGHT {
+                        x = MARGIN;
+                        y -= row_h + gap;
+                    }
+                    // Large bracket
+                    layer.use_text("[", bracket_size, Mm(x), Mm(y + 1.5), &font_bold);
+                    // Small superscript label
+                    layer.use_text(
+                        label.as_str(),
+                        label_size,
+                        Mm(x + bracket_w + 1.0),
+                        Mm(y + 1.5 + row_h * 0.45),
+                        &font_bold,
+                    );
+                    x += w;
+                }
+                PartItem::VoltaBracketEnd => {
+                    let bracket_size = chord_size * 1.5;
+                    let w = root_char_w * 1.5 + 3.0;
+                    if x + w > RIGHT {
+                        x = MARGIN;
+                        y -= row_h + gap;
+                    }
+                    layer.use_text("]", bracket_size, Mm(x), Mm(y + 1.5), &font_bold);
+                    x += w;
+                }
+                PartItem::Chord(chord) => {
+                    let root = apply_notation(&chord.root, notation);
+                    let quality = chord.quality.symbol();
+                    let bass_suffix: String = chord
+                        .bass_note
+                        .as_deref()
+                        .map(|b| format!("/{}", apply_notation(b, notation)))
+                        .unwrap_or_default();
 
-            let root_w = root.len() as f32 * root_char_w;
-            let qual_w = quality.len() as f32 * qual_char_w;
-            let bass_w = bass_suffix.len() as f32 * bass_char_w;
-            let total_w = root_w + sup_offset + qual_w + bass_w;
+                    let root_w = root.len() as f32 * root_char_w;
+                    let qual_w = quality.len() as f32 * qual_char_w;
+                    let bass_w = bass_suffix.len() as f32 * bass_char_w;
+                    let total_w = root_w + sup_offset + qual_w + bass_w;
 
-            if x + total_w > RIGHT {
-                x = MARGIN;
-                y -= row_h + gap;
-                if y < MARGIN + 10.0 {
-                    break;
+                    if x + total_w > RIGHT {
+                        x = MARGIN;
+                        y -= row_h + gap;
+                        if y < MARGIN + 10.0 {
+                            break;
+                        }
+                    }
+
+                    layer.use_text(&root, chord_size, Mm(x), Mm(y + 1.5), &font_bold);
+
+                    if !quality.is_empty() {
+                        layer.use_text(
+                            quality,
+                            qual_size,
+                            Mm(x + root_w + sup_offset),
+                            Mm(y + 1.5 + raise_mm),
+                            &font_bold,
+                        );
+                    }
+
+                    if !bass_suffix.is_empty() {
+                        layer.use_text(
+                            &bass_suffix,
+                            bass_size,
+                            Mm(x + root_w + sup_offset + qual_w),
+                            Mm(y + 1.5 - drop_mm),
+                            &font_bold,
+                        );
+                    }
+
+                    x += total_w + gap;
                 }
             }
-
-            // Root note
-            layer.use_text(&root, chord_size, Mm(x), Mm(y + 1.5), &font_bold);
-
-            // Quality as superscript (smaller, raised)
-            if !quality.is_empty() {
-                layer.use_text(
-                    quality,
-                    qual_size,
-                    Mm(x + root_w + sup_offset),
-                    Mm(y + 1.5 + raise_mm),
-                    &font_bold,
-                );
-            }
-
-            // Bass note suffix as subscript (smaller, lowered), e.g. "/B"
-            if !bass_suffix.is_empty() {
-                layer.use_text(
-                    &bass_suffix,
-                    bass_size,
-                    Mm(x + root_w + sup_offset + qual_w),
-                    Mm(y + 1.5 - drop_mm),
-                    &font_bold,
-                );
-            }
-
-            x += total_w + gap;
         }
 
         y -= row_h + gap + 8.0;
