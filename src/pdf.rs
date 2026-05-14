@@ -122,8 +122,13 @@ pub fn generate_pdf_bytes(
                 if y < MARGIN + 10.0 {
                     break;
                 }
-                layer.use_text(line, tab_size, Mm(x), Mm(y + 1.5), &font_regular);
-                y -= line_h;
+                if line.is_empty() {
+                    // blank separator between tab blocks — smaller gap
+                    y -= line_h * 0.5;
+                } else {
+                    layer.use_text(line, tab_size, Mm(x), Mm(y + 1.5), &font_regular);
+                    y -= line_h;
+                }
             }
             y -= gap + 6.0;
             continue;

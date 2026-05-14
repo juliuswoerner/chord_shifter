@@ -166,13 +166,15 @@ pub enum TabCell {
     Muted,
 }
 
-/// A single column in a tab grid — either a beat with 6 note cells, or a barline.
+/// A single column in a tab grid — either a beat with 6 note cells, a barline, or a row break.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum TabCol {
     /// Six note cells (one per string), index 0 = high e.
     Notes([TabCell; 6]),
     /// A vertical barline (end-of-bar marker).
     Barline,
+    /// Ends the current row and starts a new one with fresh string labels.
+    LineBreak,
 }
 
 // ── Part kind ─────────────────────────────────────────────────────────────────
@@ -272,8 +274,24 @@ impl SongPart {
         for (i, label) in LABELS.iter().enumerate() {
             rows[i] = format!("{label}|");
         }
+        let mut output = String::new();
         for col in &self.tab_grid {
             match col {
+                TabCol::LineBreak => {
+                    // close current block
+                    for row in &mut rows {
+                        row.push('|');
+                    }
+                    for row in &rows {
+                        output.push_str(row);
+                        output.push('\n');
+                    }
+                    output.push('\n'); // blank separator line
+                                       // start fresh block
+                    for (i, label) in LABELS.iter().enumerate() {
+                        rows[i] = format!("{label}|");
+                    }
+                }
                 TabCol::Barline => {
                     for row in &mut rows {
                         row.push('|');
@@ -293,10 +311,18 @@ impl SongPart {
                 }
             }
         }
+        // close and flush last block
         for row in &mut rows {
             row.push('|');
         }
-        rows.join("\n")
+        for row in &rows {
+            output.push_str(row);
+            output.push('\n');
+        }
+        if output.ends_with('\n') {
+            output.pop();
+        }
+        output
     }
 
     /// Iterate over only the `Chord` items in this part.
