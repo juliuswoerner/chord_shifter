@@ -703,6 +703,39 @@ fn SongView(
                                 k.split_whitespace().next().unwrap_or("C").to_string()
                             }
                         }
+                        // ♭/♯ enharmonic flip button — only active when root has an equivalent
+                        {
+                            let key = song.read().key.clone();
+                            let is_minor = key.to_lowercase().contains("minor");
+                            let root = key.split_whitespace().next().unwrap_or("C").to_string();
+                            let enharmonic: Option<&str> = match root.as_str() {
+                                "C#" => Some("Db"),
+                                "Db" => Some("C#"),
+                                "D#" => Some("Eb"),
+                                "Eb" => Some("D#"),
+                                "F#" => Some("Gb"),
+                                "Gb" => Some("F#"),
+                                "G#" => Some("Ab"),
+                                "Ab" => Some("G#"),
+                                "A#" => Some("Bb"),
+                                "Bb" => Some("A#"),
+                                _    => None,
+                            };
+                            rsx! {
+                                if let Some(enh) = enharmonic {
+                                    button {
+                                        style: "background: rgba(255,255,255,0.18); border: none; color: #f0ece2; font-size: 11px; font-weight: 700; padding: 0 7px; cursor: pointer; font-family: inherit; line-height: 1; height: 30px; white-space: nowrap;",
+                                        title: "Switch to {enh}",
+                                        onclick: move |_| {
+                                            let mode = if is_minor { "Minor" } else { "Major" };
+                                            song.write().transpose_to(enh);
+                                            song.write().key = format!("{} {}", enh, mode);
+                                        },
+                                        if enh.contains('b') { "→♭" } else { "→♯" }
+                                    }
+                                }
+                            }
+                        }
                         // + button
                         button {
                             style: "background: rgba(255,255,255,0.10); border: none; color: #f0ece2; font-size: 16px; font-weight: 700; padding: 0 8px; cursor: pointer; font-family: inherit; line-height: 1; height: 30px;",
@@ -762,7 +795,10 @@ fn SongView(
                     let key = song.read().key.clone();
                     let _is_minor = key.to_lowercase().contains("minor");
                     let current_root = key.split_whitespace().next().unwrap_or("C").to_string();
-                    let notes = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+                    let notes = [
+                        "C", "C#", "Db", "D", "D#", "Eb", "E", "F", "F#", "Gb",
+                        "G", "G#", "Ab", "A", "A#", "Bb", "B",
+                    ];
                     rsx! {
                         div {
                             style: "display: inline-flex; align-items: center; gap: 8px; margin-top: 28px;",
@@ -774,10 +810,7 @@ fn SongView(
                                 style: "font-size: 13px; font-weight: 700; color: #1a1a2e; background: #f0ece2; border: 1.5px solid #d9d4c5; border-radius: 10px; padding: 4px 10px; outline: none; cursor: pointer; font-family: inherit;",
                                 title: "Change key without transposing chords",
                                 onchange: move |e| {
-                                    let key = song.read().key.clone();
-                                    let is_minor = key.to_lowercase().contains("minor");
-                                    let mode = if is_minor { "Minor" } else { "Major" };
-                                    song.write().key = format!("{} {}", e.value(), mode);
+                                    song.write().transpose_to(&e.value());
                                 },
                                 for note in notes {
                                     option {
