@@ -152,21 +152,63 @@ impl Chord {
     }
 }
 
+// ── Part items ────────────────────────────────────────────────────────────────
+
+/// A single item inside a song part — either a chord or a structural marker.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type")]
+pub enum PartItem {
+    /// A regular chord.
+    Chord(Chord),
+    /// Forces a new row in the chord grid.
+    LineBreak,
+    /// A repeat barline (e.g. ‖: … :‖). `times` = 0 means plain repeat with no number.
+    Repeat { times: u8 },
+    /// Start of a volta bracket, e.g. "1." or "2.".
+    VoltaBracketStart { label: String },
+    /// End of a volta bracket.
+    VoltaBracketEnd,
+}
+
 // ── Song part ─────────────────────────────────────────────────────────────────
 
 /// A named section of a song (e.g. "Verse", "Chorus", or anything the user chooses).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SongPart {
     pub name: String,
-    pub chords: Vec<Chord>,
+    /// All items in this part in order.
+    #[serde(alias = "chords")]
+    pub items: Vec<PartItem>,
 }
 
 impl SongPart {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            chords: Vec::new(),
+            items: Vec::new(),
         }
+    }
+
+    /// Iterate mutably over only the `Chord` items in this part.
+    pub fn chords_mut(&mut self) -> impl Iterator<Item = &mut Chord> {
+        self.items.iter_mut().filter_map(|item| {
+            if let PartItem::Chord(c) = item {
+                Some(c)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Iterate over only the `Chord` items in this part.
+    pub fn chords(&self) -> impl Iterator<Item = &Chord> {
+        self.items.iter().filter_map(|item| {
+            if let PartItem::Chord(c) = item {
+                Some(c)
+            } else {
+                None
+            }
+        })
     }
 }
 
@@ -375,7 +417,7 @@ impl Song {
     pub fn with_part(mut self, name: impl Into<String>, chords: Vec<Chord>) -> Self {
         self.parts.push(SongPart {
             name: name.into(),
-            chords,
+            items: chords.into_iter().map(PartItem::Chord).collect(),
         });
         self
     }
@@ -411,13 +453,13 @@ impl Song {
                 }
             };
             for part in &mut self.parts {
-                for chord in &mut part.chords {
+                for chord in part.chords_mut() {
                     respell(chord);
                 }
             }
             for parts in self.instrument_parts.values_mut() {
                 for part in parts.iter_mut() {
-                    for chord in &mut part.chords {
+                    for chord in part.chords_mut() {
                         respell(chord);
                     }
                 }
@@ -449,13 +491,13 @@ impl Song {
             }
         };
         for part in &mut self.parts {
-            for chord in &mut part.chords {
+            for chord in part.chords_mut() {
                 shift_chord(chord);
             }
         }
         for parts in self.instrument_parts.values_mut() {
             for part in parts.iter_mut() {
-                for chord in &mut part.chords {
+                for chord in part.chords_mut() {
                     shift_chord(chord);
                 }
             }
@@ -515,7 +557,7 @@ impl Song {
         let key_root = result.key.split_whitespace().next().unwrap_or("C");
         let _prefer = prefer_sharps_for_key(key_root, is_minor);
         for part in &mut result.parts {
-            for chord in &mut part.chords {
+            for chord in part.chords_mut() {
                 chord.root = shift_note(&chord.root, capo, is_minor);
                 if let Some(bass) = &chord.bass_note {
                     chord.bass_note = Some(shift_note(bass, capo, is_minor));
@@ -597,7 +639,7 @@ mod tests {
     #[test]
     fn song_part_new_has_no_chords() {
         let p = SongPart::new("Bridge");
-        assert!(p.chords.is_empty());
+        assert!(p.items.is_empty());
     }
 
     // ── Transpose ────────────────────────────────────────────────────────────
@@ -618,11 +660,7 @@ mod tests {
     fn transpose_c_to_g_major() {
         let mut song = c_major_song();
         song.transpose_to("G");
-        let roots: Vec<&str> = song.parts[0]
-            .chords
-            .iter()
-            .map(|c| c.root.as_str())
-            .collect();
+        let roots: Vec<&str> = song.parts[0].chords().map(|c| c.root.as_str()).collect();
         assert_eq!(roots, ["G", "D", "E", "C"]);
     }
 
@@ -630,11 +668,7 @@ mod tests {
     fn transpose_c_to_f_uses_flats() {
         let mut song = c_major_song();
         song.transpose_to("F");
-        let roots: Vec<&str> = song.parts[0]
-            .chords
-            .iter()
-            .map(|c| c.root.as_str())
-            .collect();
+        let roots: Vec<&str> = song.parts[0].chords().map(|c| c.root.as_str()).collect();
         assert_eq!(roots, ["F", "C", "D", "Bb"]);
     }
 
@@ -649,8 +683,7 @@ mod tests {
     fn transpose_preserves_qualities() {
         let mut song = c_major_song();
         song.transpose_to("G");
-        let qualities: Vec<&ChordQuality> =
-            song.parts[0].chords.iter().map(|c| &c.quality).collect();
+        let qualities: Vec<&ChordQuality> = song.parts[0].chords().map(|c| &c.quality).collect();
         assert_eq!(
             qualities,
             [
@@ -666,7 +699,10 @@ mod tests {
     fn transpose_invalid_root_is_noop() {
         let mut song = c_major_song();
         song.transpose_to("Z"); // not a valid note
-        assert_eq!(song.parts[0].chords[0].root, "C"); // unchanged
+        assert_eq!(
+            song.parts[0].chords().next().map(|c| c.root.as_str()),
+            Some("C")
+        ); // unchanged
         assert_eq!(song.key, "C Major"); // unchanged
     }
 
@@ -674,11 +710,7 @@ mod tests {
     fn transpose_c_to_bb_uses_flats() {
         let mut song = c_major_song();
         song.transpose_to("Bb");
-        let roots: Vec<&str> = song.parts[0]
-            .chords
-            .iter()
-            .map(|c| c.root.as_str())
-            .collect();
+        let roots: Vec<&str> = song.parts[0].chords().map(|c| c.root.as_str()).collect();
         assert_eq!(roots, ["Bb", "F", "G", "Eb"]);
     }
 
@@ -686,11 +718,7 @@ mod tests {
     fn transpose_c_to_fsharp_uses_sharps() {
         let mut song = c_major_song();
         song.transpose_to("F#");
-        let roots: Vec<&str> = song.parts[0]
-            .chords
-            .iter()
-            .map(|c| c.root.as_str())
-            .collect();
+        let roots: Vec<&str> = song.parts[0].chords().map(|c| c.root.as_str()).collect();
         assert_eq!(roots, ["F#", "C#", "D#", "B"]);
     }
 
@@ -698,11 +726,7 @@ mod tests {
     fn transpose_same_key_is_noop() {
         let mut song = c_major_song();
         song.transpose_to("C");
-        let roots: Vec<&str> = song.parts[0]
-            .chords
-            .iter()
-            .map(|c| c.root.as_str())
-            .collect();
+        let roots: Vec<&str> = song.parts[0].chords().map(|c| c.root.as_str()).collect();
         assert_eq!(roots, ["C", "G", "A", "F"]);
         assert_eq!(song.key, "C Major");
     }
@@ -712,11 +736,7 @@ mod tests {
         let song = c_major_song();
         let result = song.apply_capo(0);
         assert_eq!(result.key, "C Major");
-        let roots: Vec<&str> = result.parts[0]
-            .chords
-            .iter()
-            .map(|c| c.root.as_str())
-            .collect();
+        let roots: Vec<&str> = result.parts[0].chords().map(|c| c.root.as_str()).collect();
         assert_eq!(roots, ["C", "G", "A", "F"]);
     }
 
@@ -726,11 +746,7 @@ mod tests {
         let song = c_major_song();
         let result = song.apply_capo(2);
         assert_eq!(result.key, "Bb Major");
-        let roots: Vec<&str> = result.parts[0]
-            .chords
-            .iter()
-            .map(|c| c.root.as_str())
-            .collect();
+        let roots: Vec<&str> = result.parts[0].chords().map(|c| c.root.as_str()).collect();
         // C→Bb, G→F, A→G, F→Eb
         assert_eq!(roots, ["Bb", "F", "G", "Eb"]);
     }
@@ -741,6 +757,9 @@ mod tests {
         let _shifted = song.apply_capo(5);
         // Original unchanged
         assert_eq!(song.key, "C Major");
-        assert_eq!(song.parts[0].chords[0].root, "C");
+        assert_eq!(
+            song.parts[0].chords().next().map(|c| c.root.as_str()),
+            Some("C")
+        );
     }
 }

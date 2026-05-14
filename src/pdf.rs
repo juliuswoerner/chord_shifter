@@ -114,55 +114,90 @@ pub fn generate_pdf_bytes(
         let qual_char_w: f32 = root_char_w * (qual_size / chord_size);
         let bass_char_w: f32 = root_char_w * (bass_size / chord_size);
 
-        for chord in &part.chords {
-            let root = apply_notation(&chord.root, notation);
-            let quality = chord.quality.symbol();
-            // Slash bass note, e.g. "/B" for G/B
-            let bass_suffix: String = chord
-                .bass_note
-                .as_deref()
-                .map(|b| format!("/{}", apply_notation(b, notation)))
-                .unwrap_or_default();
+        for item in &part.items {
+            use crate::song::PartItem;
+            match item {
+                PartItem::LineBreak => {
+                    x = MARGIN;
+                    y -= row_h + gap;
+                }
+                PartItem::Repeat { times } => {
+                    let label = if *times > 0 {
+                        format!("\u{2016}: x{}", times)
+                    } else {
+                        "\u{2016}:".to_string()
+                    };
+                    let w = label.len() as f32 * root_char_w;
+                    if x + w > RIGHT {
+                        x = MARGIN;
+                        y -= row_h + gap;
+                    }
+                    layer.use_text(&label, chord_size * 0.75, Mm(x), Mm(y + 1.5), &font_bold);
+                    x += w + gap;
+                }
+                PartItem::VoltaBracketStart { label } => {
+                    let w = label.len() as f32 * root_char_w + 4.0;
+                    if x + w > RIGHT {
+                        x = MARGIN;
+                        y -= row_h + gap;
+                    }
+                    layer.use_text(
+                        label,
+                        chord_size * 0.65,
+                        Mm(x + 1.5),
+                        Mm(y + 1.5 + raise_mm),
+                        &font_regular,
+                    );
+                    x += w;
+                }
+                PartItem::VoltaBracketEnd => { /* no visual needed in PDF */ }
+                PartItem::Chord(chord) => {
+                    let root = apply_notation(&chord.root, notation);
+                    let quality = chord.quality.symbol();
+                    let bass_suffix: String = chord
+                        .bass_note
+                        .as_deref()
+                        .map(|b| format!("/{}", apply_notation(b, notation)))
+                        .unwrap_or_default();
 
-            let root_w = root.len() as f32 * root_char_w;
-            let qual_w = quality.len() as f32 * qual_char_w;
-            let bass_w = bass_suffix.len() as f32 * bass_char_w;
-            let total_w = root_w + sup_offset + qual_w + bass_w;
+                    let root_w = root.len() as f32 * root_char_w;
+                    let qual_w = quality.len() as f32 * qual_char_w;
+                    let bass_w = bass_suffix.len() as f32 * bass_char_w;
+                    let total_w = root_w + sup_offset + qual_w + bass_w;
 
-            if x + total_w > RIGHT {
-                x = MARGIN;
-                y -= row_h + gap;
-                if y < MARGIN + 10.0 {
-                    break;
+                    if x + total_w > RIGHT {
+                        x = MARGIN;
+                        y -= row_h + gap;
+                        if y < MARGIN + 10.0 {
+                            break;
+                        }
+                    }
+
+                    layer.use_text(&root, chord_size, Mm(x), Mm(y + 1.5), &font_bold);
+
+                    if !quality.is_empty() {
+                        layer.use_text(
+                            quality,
+                            qual_size,
+                            Mm(x + root_w + sup_offset),
+                            Mm(y + 1.5 + raise_mm),
+                            &font_bold,
+                        );
+                    }
+
+                    if !bass_suffix.is_empty() {
+                        layer.use_text(
+                            &bass_suffix,
+                            bass_size,
+                            Mm(x + root_w + sup_offset + qual_w),
+                            Mm(y + 1.5 - drop_mm),
+                            &font_bold,
+                        );
+                    }
+
+                    x += total_w + gap;
                 }
             }
-
-            // Root note
-            layer.use_text(&root, chord_size, Mm(x), Mm(y + 1.5), &font_bold);
-
-            // Quality as superscript (smaller, raised)
-            if !quality.is_empty() {
-                layer.use_text(
-                    quality,
-                    qual_size,
-                    Mm(x + root_w + sup_offset),
-                    Mm(y + 1.5 + raise_mm),
-                    &font_bold,
-                );
-            }
-
-            // Bass note suffix as subscript (smaller, lowered), e.g. "/B"
-            if !bass_suffix.is_empty() {
-                layer.use_text(
-                    &bass_suffix,
-                    bass_size,
-                    Mm(x + root_w + sup_offset + qual_w),
-                    Mm(y + 1.5 - drop_mm),
-                    &font_bold,
-                );
-            }
-
-            x += total_w + gap;
         }
 
         y -= row_h + gap + 8.0;
