@@ -204,6 +204,10 @@ pub enum PartItem {
     LineBreak,
     /// A repeat barline (e.g. ‖: … :‖). `times` = 0 means plain repeat with no number.
     Repeat { times: u8 },
+    /// Repeat-start barline: ||:
+    RepeatStart,
+    /// Repeat-end barline: :||  
+    RepeatEnd,
     /// Start of a volta bracket, e.g. "1." or "2.".
     VoltaBracketStart { label: String },
     /// End of a volta bracket.

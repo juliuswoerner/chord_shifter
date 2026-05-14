@@ -2247,6 +2247,58 @@ fn PartView(
                                         is_start: false,
                                     }
                                 },
+                                Some(PartItem::RepeatStart) => rsx! {
+                                    div {
+                                        key: "{item_index}",
+                                        style: "
+                                            display: flex; flex-direction: column; align-items: center; gap: 4px;
+                                            padding: 10px 12px 8px;
+                                            background: #eef2fa; border: 2px solid #3a5a8a;
+                                            border-radius: 12px; min-width: 52px; position: relative;
+                                        ",
+                                        button {
+                                            style: "position: absolute; top: 6px; right: 8px; background: none; border: none;
+                                                font-size: 12px; color: #c0bab0; cursor: pointer; padding: 0; font-family: inherit;",
+                                            onclick: move |e: Event<MouseData>| {
+                                                e.stop_propagation();
+                                                if let Some(part) = song.write().parts.get_mut(part_index) {
+                                                    if item_index < part.items.len() { part.items.remove(item_index); }
+                                                }
+                                            },
+                                            "\u{2715}"
+                                        }
+                                        span {
+                                            style: "font-size: 22px; font-weight: 800; color: #3a5a8a; line-height: 1;",
+                                            "||:"
+                                        }
+                                    }
+                                },
+                                Some(PartItem::RepeatEnd) => rsx! {
+                                    div {
+                                        key: "{item_index}",
+                                        style: "
+                                            display: flex; flex-direction: column; align-items: center; gap: 4px;
+                                            padding: 10px 12px 8px;
+                                            background: #eef2fa; border: 2px solid #3a5a8a;
+                                            border-radius: 12px; min-width: 52px; position: relative;
+                                        ",
+                                        button {
+                                            style: "position: absolute; top: 6px; right: 8px; background: none; border: none;
+                                                font-size: 12px; color: #c0bab0; cursor: pointer; padding: 0; font-family: inherit;",
+                                            onclick: move |e: Event<MouseData>| {
+                                                e.stop_propagation();
+                                                if let Some(part) = song.write().parts.get_mut(part_index) {
+                                                    if item_index < part.items.len() { part.items.remove(item_index); }
+                                                }
+                                            },
+                                            "\u{2715}"
+                                        }
+                                        span {
+                                            style: "font-size: 22px; font-weight: 800; color: #3a5a8a; line-height: 1;",
+                                            ":||"
+                                        }
+                                    }
+                                },
                                 None => rsx! { span {} },
                             }
                         }
@@ -2954,6 +3006,40 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                                                 span {
                                                     style: "font-size: 22px; font-weight: 700; color: #5c3d99; line-height: 1; display: block;",
                                                     "]"
+                                                }
+                                            }
+                                        },
+                                        Some(PartItem::RepeatStart) => rsx! {
+                                            div {
+                                                key: "{item_index}",
+                                                style: "
+                                                    background: #eef2fa;
+                                                    border: 2px solid #3a5a8a;
+                                                    border-radius: 12px;
+                                                    padding: 14px 18px;
+                                                    min-width: 64px;
+                                                    text-align: center;
+                                                ",
+                                                span {
+                                                    style: "font-size: 24px; font-weight: 800; color: #3a5a8a; line-height: 1; display: block;",
+                                                    "||:"
+                                                }
+                                            }
+                                        },
+                                        Some(PartItem::RepeatEnd) => rsx! {
+                                            div {
+                                                key: "{item_index}",
+                                                style: "
+                                                    background: #eef2fa;
+                                                    border: 2px solid #3a5a8a;
+                                                    border-radius: 12px;
+                                                    padding: 14px 18px;
+                                                    min-width: 64px;
+                                                    text-align: center;
+                                                ",
+                                                span {
+                                                    style: "font-size: 24px; font-weight: 800; color: #3a5a8a; line-height: 1; display: block;",
+                                                    ":||"
                                                 }
                                             }
                                         },

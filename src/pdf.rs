@@ -470,6 +470,24 @@ pub fn generate_pdf_bytes(
                     layer.use_text("]", bracket_size, Mm(x), Mm(y + 1.5), &font_bold);
                     x += w;
                 }
+                PartItem::RepeatStart => {
+                    let w = root_char_w * 3.0;
+                    if x + w > RIGHT {
+                        x = MARGIN;
+                        y -= row_h + gap;
+                    }
+                    layer.use_text("||:", chord_size, Mm(x), Mm(y + 1.5), &font_bold);
+                    x += w + gap;
+                }
+                PartItem::RepeatEnd => {
+                    let w = root_char_w * 3.0;
+                    if x + w > RIGHT {
+                        x = MARGIN;
+                        y -= row_h + gap;
+                    }
+                    layer.use_text(":|", chord_size, Mm(x), Mm(y + 1.5), &font_bold);
+                    x += w + gap;
+                }
                 PartItem::Chord(chord) => {
                     let root = apply_notation(&chord.root, notation);
                     let quality = chord.quality.symbol();
