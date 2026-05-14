@@ -930,6 +930,37 @@ fn SongView(
             if active_instrument.read().is_none() {
                 // Base sheet
                 for part_index in 0..song.read().parts.len() {
+                    // Insert-between divider
+                    {
+                        let insert_index = part_index;
+                        rsx! {
+                            div {
+                                key: "ins-{part_index}",
+                                style: "display: flex; align-items: center; gap: 6px; margin-bottom: 8px; opacity: 0.45;",
+                                class: "insert-divider",
+                                div { style: "flex: 1; height: 1px; background: #ddd;" }
+                                button {
+                                    style: "padding: 2px 10px; background: transparent; color: #999; border: 1.5px dashed #c8c3b3; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit; white-space: nowrap;",
+                                    title: "Insert part here",
+                                    onclick: move |_| {
+                                        let mut s = song.write();
+                                        s.parts.insert(insert_index, crate::song::SongPart::new("New Part"));
+                                    },
+                                    "+ Part"
+                                }
+                                button {
+                                    style: "padding: 2px 10px; background: transparent; color: #5c7a5c; border: 1.5px dashed #8fba8f; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit; white-space: nowrap;",
+                                    title: "Insert riff here",
+                                    onclick: move |_| {
+                                        let mut s = song.write();
+                                        s.parts.insert(insert_index, crate::song::SongPart::new_riff("Riff"));
+                                    },
+                                    "~ Riff"
+                                }
+                                div { style: "flex: 1; height: 1px; background: #ddd;" }
+                            }
+                        }
+                    }
                     PartView { key: "{part_index}", song, part_index, notation, capo: use_signal(|| 0_u8) }
                 }
                 button {
@@ -1051,6 +1082,37 @@ fn SongView(
                         }
                         // Editable chord parts
                         for part_index in 0..act_song.read().parts.len() {
+                            // Insert-between divider
+                            {
+                                let insert_index = part_index;
+                                rsx! {
+                                    div {
+                                        key: "ins-{part_index}",
+                                        style: "display: flex; align-items: center; gap: 6px; margin-bottom: 8px; opacity: 0.35;",
+                                        class: "insert-divider",
+                                        div { style: "flex: 1; height: 1px; background: #ddd;" }
+                                        button {
+                                            style: "padding: 2px 10px; background: transparent; color: #999; border: 1.5px dashed #c8c3b3; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit; white-space: nowrap;",
+                                            title: "Insert part here",
+                                            onclick: move |_| {
+                                                let mut s = act_song.write();
+                                                s.parts.insert(insert_index, crate::song::SongPart::new("New Part"));
+                                            },
+                                            "+ Part"
+                                        }
+                                        button {
+                                            style: "padding: 2px 10px; background: transparent; color: #5c7a5c; border: 1.5px dashed #8fba8f; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit; white-space: nowrap;",
+                                            title: "Insert riff here",
+                                            onclick: move |_| {
+                                                let mut s = act_song.write();
+                                                s.parts.insert(insert_index, crate::song::SongPart::new_riff("Riff"));
+                                            },
+                                            "~ Riff"
+                                        }
+                                        div { style: "flex: 1; height: 1px; background: #ddd;" }
+                                    }
+                                }
+                            }
                             PartView { key: "{part_index}", song: act_song, part_index, notation, capo: act_capo }
                         }
                         button {
@@ -1696,28 +1758,53 @@ fn PartView(
         div {
             style: "{card_style}",
 
-            // Remove part button
-            button {
-                style: "
-                    position: absolute;
-                    top: 14px;
-                    right: 14px;
-                    background: none;
-                    border: none;
-                    font-size: 13px;
-                    color: #ccc;
-                    cursor: pointer;
-                    padding: 0;
-                    font-family: inherit;
-                    line-height: 1;
-                ",
-                onclick: move |_| {
-                    let mut s = song.write();
-                    if part_index < s.parts.len() {
-                        s.parts.remove(part_index);
-                    }
-                },
-                "\u{2715}"
+            // Part controls (move up / move down / remove)
+            div {
+                style: "position: absolute; top: 12px; right: 12px; display: flex; align-items: center; gap: 4px;",
+
+                // Move up
+                button {
+                    style: "background: none; border: none; font-size: 13px; color: #bbb; cursor: pointer; padding: 0 2px; font-family: inherit; line-height: 1;",
+                    title: "Move up",
+                    disabled: part_index == 0,
+                    onclick: move |_| {
+                        let mut s = song.write();
+                        if part_index > 0 && part_index < s.parts.len() {
+                            s.parts.swap(part_index - 1, part_index);
+                        }
+                    },
+                    "\u{2191}"
+                }
+
+                // Move down
+                button {
+                    style: "background: none; border: none; font-size: 13px; color: #bbb; cursor: pointer; padding: 0 2px; font-family: inherit; line-height: 1;",
+                    title: "Move down",
+                    disabled: {
+                        let len = song.read().parts.len();
+                        part_index + 1 >= len
+                    },
+                    onclick: move |_| {
+                        let mut s = song.write();
+                        if part_index + 1 < s.parts.len() {
+                            s.parts.swap(part_index, part_index + 1);
+                        }
+                    },
+                    "\u{2193}"
+                }
+
+                // Remove
+                button {
+                    style: "background: none; border: none; font-size: 13px; color: #ccc; cursor: pointer; padding: 0 2px; font-family: inherit; line-height: 1;",
+                    title: "Remove part",
+                    onclick: move |_| {
+                        let mut s = song.write();
+                        if part_index < s.parts.len() {
+                            s.parts.remove(part_index);
+                        }
+                    },
+                    "\u{2715}"
+                }
             }
 
             // Editable part name
