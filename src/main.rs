@@ -1748,10 +1748,6 @@ fn TabEditor(song: Signal<Song>, part_index: usize) -> Element {
                 {
                     let seg_cols: Vec<usize> = segments[seg_idx].clone();
                     let seg_len = seg_cols.len();
-                    // Skip empty segments — they produce a blank box above real content.
-                    if seg_len == 0 && seg_idx + 1 < seg_count {
-                        return rsx! { Fragment {} };
-                    }
                     let has_lb_before = seg_idx > 0;
                     let lb_col = if has_lb_before { lb_indices[seg_idx - 1] } else { 0 };
                     let is_last_seg = seg_idx + 1 == seg_count;
@@ -1852,11 +1848,6 @@ fn TabEditor(song: Signal<Song>, part_index: usize) -> Element {
                                             onclick: move |_| {
                                                 if let Some(part) = song.write().parts.get_mut(part_index) {
                                                     part.tab_grid.push(TabCol::LineBreak);
-                                                    // Pre-populate the new row with 4 empty beats so it
-                                                    // always renders below the existing content.
-                                                    for _ in 0..4 {
-                                                        part.tab_grid.push(TabCol::Notes([TabCell::Empty; 6]));
-                                                    }
                                                 }
                                             },
                                             "\u{21b5}"
