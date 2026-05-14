@@ -445,7 +445,7 @@ fn SongView(
     let mut part_name_size = use_signal(|| 9_u32);
     let mut chord_size = use_signal(|| 18_u32);
     let mut preview_open = use_signal(|| false);
-    let mut preview_url: Signal<String> = use_signal(|| String::new());
+    let mut preview_url: Signal<String> = use_signal(String::new);
     let mut notation: Signal<Notation> = use_signal(|| Notation::English);
     // None = base sheet; Some(inst) = that instrument's sheet
     let mut active_instrument: Signal<Option<Instrument>> = use_signal(|| None);

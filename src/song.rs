@@ -201,6 +201,7 @@ impl SongPart {
     }
 
     /// Iterate over only the `Chord` items in this part.
+    #[allow(dead_code)]
     pub fn chords(&self) -> impl Iterator<Item = &Chord> {
         self.items.iter().filter_map(|item| {
             if let PartItem::Chord(c) = item {
