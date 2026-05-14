@@ -2180,13 +2180,13 @@ fn PartView(
                                 .and_then(|p| p.items.get(item_index))
                                 .cloned();
                             let is_line_break = matches!(item, Some(PartItem::LineBreak));
-                            let is_dragging_over = drag_source.read().map_or(false, |src| src != item_index);
+                            let is_dragging_over = drag_source.read().is_some_and(|src| src != item_index);
                             let wrapper_style = if is_line_break {
-                                format!("width: 100%; flex-basis: 100%; cursor: grab;")
+                                "width: 100%; flex-basis: 100%; cursor: grab;".to_string()
                             } else if is_dragging_over {
-                                format!("cursor: grab; border-radius: 10px; outline: 2px dashed #aaa; outline-offset: 2px;")
+                                "cursor: grab; border-radius: 10px; outline: 2px dashed #aaa; outline-offset: 2px;".to_string()
                             } else {
-                                format!("cursor: grab;")
+                                "cursor: grab;".to_string()
                             };
                             rsx! {
                                 div {

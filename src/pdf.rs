@@ -232,10 +232,9 @@ pub fn generate_pdf_bytes(
                         }
                         TabCol::Notes(arr) => {
                             let center_x = cx + beat_w * 0.5;
-                            for local_i in 0..num_strings {
+                            for (local_i, &sy) in string_y.iter().enumerate() {
                                 let str_idx = local_i + str_offset;
                                 let cell = &arr[str_idx];
-                                let sy = string_y[local_i];
                                 match cell {
                                     TabCell::Empty => {}
                                     TabCell::Fret(n) => {
