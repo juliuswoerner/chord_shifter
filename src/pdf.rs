@@ -114,6 +114,249 @@ pub fn generate_pdf_bytes(
         let qual_char_w: f32 = root_char_w * (qual_size / chord_size);
         let bass_char_w: f32 = root_char_w * (bass_size / chord_size);
 
+        // ── Riff / Tab part (graphical renderer) ─────────────────────────
+        if part.kind == crate::song::PartKind::Riff || part.kind == crate::song::PartKind::BassRiff
+        {
+            use crate::song::{TabCell, TabCol};
+
+            let is_bass = part.kind == crate::song::PartKind::BassRiff;
+            let num_strings: usize = if is_bass { 4 } else { 6 };
+            let str_offset: usize = if is_bass { 2 } else { 0 };
+            let string_labels: &[&str] = if is_bass {
+                &["G", "D", "A", "E"]
+            } else {
+                &["e", "B", "G", "D", "A", "E"]
+            };
+
+            // Layout constants
+            let str_gap: f32 = 3.8; // mm between string lines
+            let beat_w: f32 = 6.5; // mm per beat column
+            let barline_w: f32 = 3.0; // mm for a barline column
+            let label_w: f32 = 6.0; // mm for the "e|" string label
+            let tab_font_size: f32 = chord_size * 0.55;
+            let block_h: f32 = str_gap * (num_strings as f32 - 1.0); // height spanning all strings
+            let block_gap: f32 = 8.0; // vertical gap between row-blocks
+
+            // Split the grid into row-segments at LineBreak markers
+            let mut segments: Vec<Vec<&TabCol>> = vec![vec![]];
+            for col in &part.tab_grid {
+                if matches!(col, TabCol::LineBreak) {
+                    segments.push(vec![]);
+                } else {
+                    segments.last_mut().unwrap().push(col);
+                }
+            }
+
+            for seg in &segments {
+                // Skip empty segments (no columns at all) — these have nothing
+                // to render and would just consume vertical space at the top.
+                if seg.is_empty() {
+                    continue;
+                }
+
+                if y < MARGIN + block_h + 2.0 {
+                    break;
+                }
+
+                // Compute total width of this segment
+                let seg_w: f32 = seg
+                    .iter()
+                    .map(|c| match c {
+                        TabCol::Barline => barline_w,
+                        _ => beat_w,
+                    })
+                    .sum::<f32>();
+
+                let x0 = MARGIN + label_w; // where the first string line starts
+                let x_end = x0 + seg_w;
+
+                // y is the TOP of the current segment block (high-e string).
+                // Subsequent strings go downward (y - i * str_gap).
+                let seg_top = y;
+                let string_y: Vec<f32> = (0..num_strings)
+                    .map(|i| seg_top - i as f32 * str_gap)
+                    .collect();
+
+                // ── Draw the 6 horizontal string lines ────────────────────
+                layer.set_outline_thickness(0.35);
+                layer.set_outline_color(Color::Greyscale(Greyscale::new(0.55, None)));
+                for &sy in &string_y {
+                    layer.add_line(Line {
+                        points: vec![
+                            (Point::new(Mm(x0), Mm(sy)), false),
+                            (Point::new(Mm(x_end), Mm(sy)), false),
+                        ],
+                        is_closed: false,
+                    });
+                }
+
+                // ── Draw string labels (e B G D A E) ─────────────────────
+                layer.set_outline_color(Color::Greyscale(Greyscale::new(0.0, None)));
+                for (i, label) in string_labels.iter().enumerate() {
+                    layer.use_text(
+                        *label,
+                        tab_font_size,
+                        Mm(MARGIN),
+                        Mm(string_y[i] - 1.0),
+                        &font_bold,
+                    );
+                }
+
+                // ── Draw notes and barlines ───────────────────────────────
+                let mut cx = x0;
+                for col in seg.iter() {
+                    match col {
+                        TabCol::Barline => {
+                            // Full vertical line through all 6 strings
+                            layer.set_outline_thickness(0.6);
+                            layer.set_outline_color(Color::Greyscale(Greyscale::new(0.25, None)));
+                            layer.add_line(Line {
+                                points: vec![
+                                    (
+                                        Point::new(
+                                            Mm(cx + barline_w * 0.5),
+                                            Mm(*string_y.last().unwrap() - 0.5),
+                                        ),
+                                        false,
+                                    ),
+                                    (
+                                        Point::new(Mm(cx + barline_w * 0.5), Mm(string_y[0] + 0.5)),
+                                        false,
+                                    ),
+                                ],
+                                is_closed: false,
+                            });
+                            layer.set_outline_thickness(0.35);
+                            layer.set_outline_color(Color::Greyscale(Greyscale::new(0.55, None)));
+                            cx += barline_w;
+                        }
+                        TabCol::Notes(arr) => {
+                            let center_x = cx + beat_w * 0.5;
+                            for (local_i, &sy) in string_y.iter().enumerate() {
+                                let str_idx = local_i + str_offset;
+                                let cell = &arr[str_idx];
+                                match cell {
+                                    TabCell::Empty => {}
+                                    TabCell::Fret(n) => {
+                                        let label = n.to_string();
+                                        let box_w = if *n >= 10 { 4.6 } else { 3.0 };
+                                        // white fill box to erase string line behind number
+                                        layer.set_fill_color(Color::Greyscale(Greyscale::new(
+                                            1.0, None,
+                                        )));
+                                        layer.add_polygon(Polygon {
+                                            rings: vec![vec![
+                                                (
+                                                    Point::new(
+                                                        Mm(center_x - box_w * 0.5),
+                                                        Mm(sy - 1.8),
+                                                    ),
+                                                    false,
+                                                ),
+                                                (
+                                                    Point::new(
+                                                        Mm(center_x + box_w * 0.5),
+                                                        Mm(sy - 1.8),
+                                                    ),
+                                                    false,
+                                                ),
+                                                (
+                                                    Point::new(
+                                                        Mm(center_x + box_w * 0.5),
+                                                        Mm(sy + 1.0),
+                                                    ),
+                                                    false,
+                                                ),
+                                                (
+                                                    Point::new(
+                                                        Mm(center_x - box_w * 0.5),
+                                                        Mm(sy + 1.0),
+                                                    ),
+                                                    false,
+                                                ),
+                                            ]],
+                                            mode: PolygonMode::Fill,
+                                            winding_order: WindingOrder::NonZero,
+                                        });
+                                        layer.set_fill_color(Color::Greyscale(Greyscale::new(
+                                            0.0, None,
+                                        )));
+                                        layer.use_text(
+                                            &label,
+                                            tab_font_size,
+                                            Mm(center_x - box_w * 0.4),
+                                            Mm(sy - 1.4),
+                                            &font_bold,
+                                        );
+                                    }
+                                    TabCell::Muted => {
+                                        let box_w = 3.0_f32;
+                                        // white fill box to erase string line behind x
+                                        layer.set_fill_color(Color::Greyscale(Greyscale::new(
+                                            1.0, None,
+                                        )));
+                                        layer.add_polygon(Polygon {
+                                            rings: vec![vec![
+                                                (
+                                                    Point::new(
+                                                        Mm(center_x - box_w * 0.5),
+                                                        Mm(sy - 1.8),
+                                                    ),
+                                                    false,
+                                                ),
+                                                (
+                                                    Point::new(
+                                                        Mm(center_x + box_w * 0.5),
+                                                        Mm(sy - 1.8),
+                                                    ),
+                                                    false,
+                                                ),
+                                                (
+                                                    Point::new(
+                                                        Mm(center_x + box_w * 0.5),
+                                                        Mm(sy + 1.0),
+                                                    ),
+                                                    false,
+                                                ),
+                                                (
+                                                    Point::new(
+                                                        Mm(center_x - box_w * 0.5),
+                                                        Mm(sy + 1.0),
+                                                    ),
+                                                    false,
+                                                ),
+                                            ]],
+                                            mode: PolygonMode::Fill,
+                                            winding_order: WindingOrder::NonZero,
+                                        });
+                                        layer.set_fill_color(Color::Greyscale(Greyscale::new(
+                                            0.0, None,
+                                        )));
+                                        layer.use_text(
+                                            "x",
+                                            tab_font_size,
+                                            Mm(center_x - 1.3),
+                                            Mm(sy - 1.4),
+                                            &font_regular,
+                                        );
+                                    }
+                                }
+                            }
+                            cx += beat_w;
+                        }
+                        TabCol::LineBreak => unreachable!(),
+                    }
+                }
+
+                // Advance y to below this segment's bottom string + gap,
+                // so the next segment is placed below (not above) this one.
+                y = seg_top - block_h - block_gap;
+            }
+
+            y -= gap;
+            continue;
+        }
+
         for item in &part.items {
             use crate::song::PartItem;
             match item {
@@ -155,6 +398,15 @@ pub fn generate_pdf_bytes(
                         Mm(y + 1.5 + row_h * 0.45),
                         &font_bold,
                     );
+                    x += w;
+                }
+                PartItem::RepeatStart => {
+                    let w = root_char_w * 1.5 + 3.0;
+                    if x + w > RIGHT {
+                        x = MARGIN;
+                        y -= row_h + gap;
+                    }
+                    layer.use_text("||", chord_size, Mm(x), Mm(y + 1.5), &font_bold);
                     x += w;
                 }
                 PartItem::VoltaBracketEnd => {

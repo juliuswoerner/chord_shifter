@@ -152,6 +152,44 @@ impl Chord {
     }
 }
 
+// ── Tab grid types ───────────────────────────────────────────────────────────
+
+/// A single note cell in a tab grid column.
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub enum TabCell {
+    /// No note on this string at this beat.
+    #[default]
+    Empty,
+    /// A fretted note (0 = open, 1–24).
+    Fret(u8),
+    /// Muted / dead string (written as "x").
+    Muted,
+}
+
+/// A single column in a tab grid — either a beat with 6 note cells, a barline, or a row break.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum TabCol {
+    /// Six note cells (one per string), index 0 = high e.
+    Notes([TabCell; 6]),
+    /// A vertical barline (end-of-bar marker).
+    Barline,
+    /// Ends the current row and starts a new one with fresh string labels.
+    LineBreak,
+}
+
+// ── Part kind ─────────────────────────────────────────────────────────────────
+
+/// Whether a song part holds chords or a guitar-tab riff.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub enum PartKind {
+    #[default]
+    Chords,
+    /// Free-form guitar tab (stored as a plain string).
+    Riff,
+    /// 4-string bass tab (G, D, A, E — indices 2-5 of the shared TabCol array).
+    BassRiff,
+}
+
 // ── Part items ────────────────────────────────────────────────────────────────
 
 /// A single item inside a song part — either a chord or a structural marker.
@@ -164,6 +202,8 @@ pub enum PartItem {
     LineBreak,
     /// A repeat barline (e.g. ‖: … :‖). `times` = 0 means plain repeat with no number.
     Repeat { times: u8 },
+    /// A plain double barline (||) marking the start of a repeated section.
+    RepeatStart,
     /// Start of a volta bracket, e.g. "1." or "2.".
     VoltaBracketStart { label: String },
     /// End of a volta bracket.
@@ -176,7 +216,17 @@ pub enum PartItem {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SongPart {
     pub name: String,
-    /// All items in this part in order.
+    /// Whether this part holds chords or a tab riff.
+    #[serde(default)]
+    pub kind: PartKind,
+    /// Tab content — only used when `kind == PartKind::Riff`.
+    #[serde(default)]
+    pub tab: String,
+    /// Structured tab grid — 6 strings × N beats. Index 0 = high e.
+    /// Each column is either `Notes([TabCell; 6])` or a `Barline`.
+    #[serde(default)]
+    pub tab_grid: Vec<TabCol>,
+    /// All items in this part in order — only used when `kind == PartKind::Chords`.
     #[serde(alias = "chords")]
     pub items: Vec<PartItem>,
 }
@@ -185,6 +235,29 @@ impl SongPart {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            kind: PartKind::Chords,
+            tab: String::new(),
+            tab_grid: Vec::new(),
+            items: Vec::new(),
+        }
+    }
+
+    pub fn new_riff(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            kind: PartKind::Riff,
+            tab: String::new(),
+            tab_grid: Vec::new(),
+            items: Vec::new(),
+        }
+    }
+
+    pub fn new_bass_riff(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            kind: PartKind::BassRiff,
+            tab: String::new(),
+            tab_grid: Vec::new(),
             items: Vec::new(),
         }
     }
@@ -198,6 +271,79 @@ impl SongPart {
                 None
             }
         })
+    }
+
+    /// Render this riff part as an ASCII-tab string, e.g.
+    /// ```text
+    /// e|--0--2--|
+    /// B|--------|
+    /// ```
+    /// Falls back to `self.tab` when `tab_grid` is empty (legacy free-text).
+    pub fn tab_as_ascii(&self) -> String {
+        if self.tab_grid.is_empty() {
+            return self.tab.clone();
+        }
+        let (labels, string_range): (&[&str], std::ops::Range<usize>) =
+            if self.kind == PartKind::BassRiff {
+                (&["G", "D", "A", "E"], 2..6)
+            } else {
+                (&["e", "B", "G", "D", "A", "E"], 0..6)
+            };
+        let mut rows: Vec<String> = labels.iter().map(|l| format!("{l}|")).collect();
+        let mut output = String::new();
+        let mut block_has_content = false;
+        for col in &self.tab_grid {
+            match col {
+                TabCol::LineBreak => {
+                    // Only flush if the current block has actual content.
+                    if block_has_content {
+                        for row in &mut rows {
+                            row.push('|');
+                        }
+                        for row in &rows {
+                            output.push_str(row);
+                            output.push('\n');
+                        }
+                        output.push('\n'); // blank separator line
+                    }
+                    // start fresh block
+                    rows = labels.iter().map(|l| format!("{l}|")).collect();
+                    block_has_content = false;
+                }
+                TabCol::Barline => {
+                    for row in &mut rows {
+                        row.push('|');
+                    }
+                    block_has_content = true;
+                }
+                TabCol::Notes(arr) => {
+                    for (row_i, str_idx) in string_range.clone().enumerate() {
+                        let cell = &arr[str_idx];
+                        match cell {
+                            TabCell::Fret(f) if *f >= 10 => rows[row_i].push_str(&format!("{f}-")),
+                            TabCell::Fret(f) => rows[row_i].push_str(&format!("-{f}-")),
+                            TabCell::Muted => rows[row_i].push_str("-x-"),
+                            TabCell::Empty => rows[row_i].push_str("---"),
+                        }
+                    }
+                    block_has_content = true;
+                }
+            }
+        }
+        // close and flush last block (only if it has content)
+        if block_has_content {
+            for row in &mut rows {
+                row.push('|');
+            }
+            for row in &rows {
+                output.push_str(row);
+                output.push('\n');
+            }
+        }
+        if output.ends_with('\n') {
+            output.pop();
+        }
+        output
     }
 
     /// Iterate over only the `Chord` items in this part.
@@ -418,6 +564,9 @@ impl Song {
     pub fn with_part(mut self, name: impl Into<String>, chords: Vec<Chord>) -> Self {
         self.parts.push(SongPart {
             name: name.into(),
+            kind: PartKind::Chords,
+            tab: String::new(),
+            tab_grid: Vec::new(),
             items: chords.into_iter().map(PartItem::Chord).collect(),
         });
         self
