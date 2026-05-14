@@ -227,6 +227,19 @@ pub fn prefer_sharps_for_key(root: &str, is_minor: bool) -> bool {
     }
 }
 
+/// When the user *explicitly* picks a note name (e.g. from a dropdown), honour
+/// the spelling they chose: a `#` suffix → sharps, a `b` suffix → flats,
+/// natural notes → defer to the conventional key-signature logic.
+fn explicit_prefer_sharps(root: &str, is_minor: bool) -> bool {
+    if root.ends_with('#') {
+        true
+    } else if root.ends_with('b') && root.len() > 1 {
+        false
+    } else {
+        prefer_sharps_for_key(root, is_minor)
+    }
+}
+
 /// Shift a note root up by `semitones` chromatically.
 /// `is_minor` selects minor-key vs major-key sharp/flat conventions.
 /// Returns the original string unchanged if it cannot be parsed.
@@ -383,7 +396,32 @@ impl Song {
         };
         let interval = (new_idx + 12 - old_idx) % 12;
         if interval == 0 {
-            // Update key label even if no shift needed.
+            // Same pitch, but possibly a different spelling (e.g. A# → Bb).
+            // Re-spell all chord roots to match the new key's accidental preference.
+            let is_minor = self.key.to_lowercase().contains("minor");
+            let prefer_sharps = explicit_prefer_sharps(new_root, is_minor);
+            let respell = |chord: &mut Chord| {
+                if let Some(idx) = note_to_index(&chord.root) {
+                    chord.root = index_to_note(idx, prefer_sharps).to_string();
+                }
+                if let Some(bass) = &chord.bass_note {
+                    if let Some(idx) = note_to_index(bass) {
+                        chord.bass_note = Some(index_to_note(idx, prefer_sharps).to_string());
+                    }
+                }
+            };
+            for part in &mut self.parts {
+                for chord in &mut part.chords {
+                    respell(chord);
+                }
+            }
+            for parts in self.instrument_parts.values_mut() {
+                for part in parts.iter_mut() {
+                    for chord in &mut part.chords {
+                        respell(chord);
+                    }
+                }
+            }
             let mode = self
                 .key
                 .split_whitespace()
@@ -398,7 +436,7 @@ impl Song {
             return;
         }
         let is_minor = self.key.to_lowercase().contains("minor");
-        let prefer_sharps = prefer_sharps_for_key(new_root, is_minor);
+        let prefer_sharps = explicit_prefer_sharps(new_root, is_minor);
         let shift_chord = |chord: &mut Chord| {
             if let Some(root_idx) = note_to_index(&chord.root) {
                 chord.root = index_to_note((root_idx + interval) % 12, prefer_sharps).to_string();
