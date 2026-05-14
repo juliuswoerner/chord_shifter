@@ -186,6 +186,8 @@ pub enum PartKind {
     Chords,
     /// Free-form guitar tab (stored as a plain string).
     Riff,
+    /// 4-string bass tab (G, D, A, E — indices 2-5 of the shared TabCol array).
+    BassRiff,
 }
 
 // ── Part items ────────────────────────────────────────────────────────────────
@@ -200,10 +202,8 @@ pub enum PartItem {
     LineBreak,
     /// A repeat barline (e.g. ‖: … :‖). `times` = 0 means plain repeat with no number.
     Repeat { times: u8 },
-    /// Repeat-start marker: ||
+    /// A plain double barline (||) marking the start of a repeated section.
     RepeatStart,
-    /// Repeat-end marker: ||:
-    RepeatEnd,
     /// Start of a volta bracket, e.g. "1." or "2.".
     VoltaBracketStart { label: String },
     /// End of a volta bracket.
@@ -252,6 +252,16 @@ impl SongPart {
         }
     }
 
+    pub fn new_bass_riff(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            kind: PartKind::BassRiff,
+            tab: String::new(),
+            tab_grid: Vec::new(),
+            items: Vec::new(),
+        }
+    }
+
     /// Iterate mutably over only the `Chord` items in this part.
     pub fn chords_mut(&mut self) -> impl Iterator<Item = &mut Chord> {
         self.items.iter_mut().filter_map(|item| {
@@ -273,13 +283,15 @@ impl SongPart {
         if self.tab_grid.is_empty() {
             return self.tab.clone();
         }
-        const LABELS: [&str; 6] = ["e", "B", "G", "D", "A", "E"];
-        let mut rows: [String; 6] = Default::default();
-        for (i, label) in LABELS.iter().enumerate() {
-            rows[i] = format!("{label}|");
-        }
+        let (labels, string_range): (&[&str], std::ops::Range<usize>) =
+            if self.kind == PartKind::BassRiff {
+                (&["G", "D", "A", "E"], 2..6)
+            } else {
+                (&["e", "B", "G", "D", "A", "E"], 0..6)
+            };
+        let mut rows: Vec<String> = labels.iter().map(|l| format!("{l}|")).collect();
         let mut output = String::new();
-        let mut block_has_content = false; // true once any Notes/Barline seen in current block
+        let mut block_has_content = false;
         for col in &self.tab_grid {
             match col {
                 TabCol::LineBreak => {
@@ -295,9 +307,7 @@ impl SongPart {
                         output.push('\n'); // blank separator line
                     }
                     // start fresh block
-                    for (i, label) in LABELS.iter().enumerate() {
-                        rows[i] = format!("{label}|");
-                    }
+                    rows = labels.iter().map(|l| format!("{l}|")).collect();
                     block_has_content = false;
                 }
                 TabCol::Barline => {
@@ -307,14 +317,13 @@ impl SongPart {
                     block_has_content = true;
                 }
                 TabCol::Notes(arr) => {
-                    for (str_idx, cell) in arr.iter().enumerate() {
+                    for (row_i, str_idx) in string_range.clone().enumerate() {
+                        let cell = &arr[str_idx];
                         match cell {
-                            TabCell::Fret(f) if *f >= 10 => {
-                                rows[str_idx].push_str(&format!("{f}-"))
-                            }
-                            TabCell::Fret(f) => rows[str_idx].push_str(&format!("-{f}-")),
-                            TabCell::Muted => rows[str_idx].push_str("-x-"),
-                            TabCell::Empty => rows[str_idx].push_str("---"),
+                            TabCell::Fret(f) if *f >= 10 => rows[row_i].push_str(&format!("{f}-")),
+                            TabCell::Fret(f) => rows[row_i].push_str(&format!("-{f}-")),
+                            TabCell::Muted => rows[row_i].push_str("-x-"),
+                            TabCell::Empty => rows[row_i].push_str("---"),
                         }
                     }
                     block_has_content = true;

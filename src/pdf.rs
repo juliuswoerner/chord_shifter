@@ -115,8 +115,18 @@ pub fn generate_pdf_bytes(
         let bass_char_w: f32 = root_char_w * (bass_size / chord_size);
 
         // ── Riff / Tab part (graphical renderer) ─────────────────────────
-        if part.kind == crate::song::PartKind::Riff {
+        if part.kind == crate::song::PartKind::Riff || part.kind == crate::song::PartKind::BassRiff
+        {
             use crate::song::{TabCell, TabCol};
+
+            let is_bass = part.kind == crate::song::PartKind::BassRiff;
+            let num_strings: usize = if is_bass { 4 } else { 6 };
+            let str_offset: usize = if is_bass { 2 } else { 0 };
+            let string_labels: &[&str] = if is_bass {
+                &["G", "D", "A", "E"]
+            } else {
+                &["e", "B", "G", "D", "A", "E"]
+            };
 
             // Layout constants
             let str_gap: f32 = 3.8; // mm between string lines
@@ -124,7 +134,7 @@ pub fn generate_pdf_bytes(
             let barline_w: f32 = 3.0; // mm for a barline column
             let label_w: f32 = 6.0; // mm for the "e|" string label
             let tab_font_size: f32 = chord_size * 0.55;
-            let block_h: f32 = str_gap * 5.0; // height of 6 strings (5 gaps)
+            let block_h: f32 = str_gap * (num_strings as f32 - 1.0); // height spanning all strings
             let block_gap: f32 = 8.0; // vertical gap between row-blocks
 
             // Split the grid into row-segments at LineBreak markers
@@ -163,7 +173,9 @@ pub fn generate_pdf_bytes(
                 // y is the TOP of the current segment block (high-e string).
                 // Subsequent strings go downward (y - i * str_gap).
                 let seg_top = y;
-                let string_y: Vec<f32> = (0..6).map(|i| seg_top - i as f32 * str_gap).collect();
+                let string_y: Vec<f32> = (0..num_strings)
+                    .map(|i| seg_top - i as f32 * str_gap)
+                    .collect();
 
                 // ── Draw the 6 horizontal string lines ────────────────────
                 layer.set_outline_thickness(0.35);
@@ -180,8 +192,7 @@ pub fn generate_pdf_bytes(
 
                 // ── Draw string labels (e B G D A E) ─────────────────────
                 layer.set_outline_color(Color::Greyscale(Greyscale::new(0.0, None)));
-                const LABELS: [&str; 6] = ["e", "B", "G", "D", "A", "E"];
-                for (i, label) in LABELS.iter().enumerate() {
+                for (i, label) in string_labels.iter().enumerate() {
                     layer.use_text(
                         *label,
                         tab_font_size,
@@ -221,8 +232,10 @@ pub fn generate_pdf_bytes(
                         }
                         TabCol::Notes(arr) => {
                             let center_x = cx + beat_w * 0.5;
-                            for (str_idx, cell) in arr.iter().enumerate() {
-                                let sy = string_y[str_idx];
+                            for local_i in 0..num_strings {
+                                let str_idx = local_i + str_offset;
+                                let cell = &arr[str_idx];
+                                let sy = string_y[local_i];
                                 match cell {
                                     TabCell::Empty => {}
                                     TabCell::Fret(n) => {
@@ -388,6 +401,15 @@ pub fn generate_pdf_bytes(
                     );
                     x += w;
                 }
+                PartItem::RepeatStart => {
+                    let w = root_char_w * 1.5 + 3.0;
+                    if x + w > RIGHT {
+                        x = MARGIN;
+                        y -= row_h + gap;
+                    }
+                    layer.use_text("||", chord_size, Mm(x), Mm(y + 1.5), &font_bold);
+                    x += w;
+                }
                 PartItem::VoltaBracketEnd => {
                     let bracket_size = chord_size * 1.5;
                     let w = root_char_w * 1.5 + 3.0;
@@ -397,24 +419,6 @@ pub fn generate_pdf_bytes(
                     }
                     layer.use_text("]", bracket_size, Mm(x), Mm(y + 1.5), &font_bold);
                     x += w;
-                }
-                PartItem::RepeatStart => {
-                    let w = root_char_w * 2.5;
-                    if x + w > RIGHT {
-                        x = MARGIN;
-                        y -= row_h + gap;
-                    }
-                    layer.use_text("||", chord_size, Mm(x), Mm(y + 1.5), &font_bold);
-                    x += w + gap;
-                }
-                PartItem::RepeatEnd => {
-                    let w = root_char_w * 3.0;
-                    if x + w > RIGHT {
-                        x = MARGIN;
-                        y -= row_h + gap;
-                    }
-                    layer.use_text("||:", chord_size, Mm(x), Mm(y + 1.5), &font_bold);
-                    x += w + gap;
                 }
                 PartItem::Chord(chord) => {
                     let root = apply_notation(&chord.root, notation);
