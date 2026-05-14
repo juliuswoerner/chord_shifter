@@ -1782,7 +1782,7 @@ fn TabEditor(song: Signal<Song>, part_index: usize) -> Element {
 
                             // Header row: delete buttons + (on last segment) add buttons
                             div {
-                                style: "display: flex; align-items: center; margin-bottom: 2px; padding-left: 34px;",
+                                style: "display: flex; align-items: center; margin-bottom: 2px; padding-left: 6px;",
 
                                 for local_i in 0..seg_len {
                                     {
@@ -1822,10 +1822,12 @@ fn TabEditor(song: Signal<Song>, part_index: usize) -> Element {
                                         style: "display: flex; gap: 4px; margin-left: 6px;",
                                         button {
                                             style: "background: none; border: 1px dashed #8fba8f; border-radius: 4px; font-size: 12px; color: #5c7a5c; cursor: pointer; padding: 1px 7px; font-family: inherit;",
-                                            title: "Add beat",
+                                            title: "Add 4 beats",
                                             onclick: move |_| {
                                                 if let Some(part) = song.write().parts.get_mut(part_index) {
-                                                    part.tab_grid.push(TabCol::Notes([TabCell::Empty; 6]));
+                                                    for _ in 0..4 {
+                                                        part.tab_grid.push(TabCol::Notes([TabCell::Empty; 6]));
+                                                    }
                                                 }
                                             },
                                             "+"
@@ -1854,18 +1856,33 @@ fn TabEditor(song: Signal<Song>, part_index: usize) -> Element {
                                 }
                             }
 
-                            // ── Six string rows ───────────────────────────────────
-                            for str_idx in 0usize..6 {
-                                div {
-                                    key: "row-{seg_idx}-{str_idx}",
-                                    style: "display: flex; align-items: center; height: 32px;",
-
-                                    span {
-                                        style: "font-family: Courier, monospace; font-size: 12px; font-weight: 700; color: #5c7a5c; width: 20px; text-align: right; margin-right: 8px; flex-shrink: 0;",
-                                        "{STRING_NAMES[str_idx]}"
+                            // ── String name column header ─────────────────────────
+                            div {
+                                style: "display: flex; padding-left: 0px; margin-bottom: 1px;",
+                                // spacer matching the label column width
+                                div { style: "display: flex; flex-direction: column; margin-right: 8px;",
+                                    for si in 0usize..6 {
+                                        div {
+                                            key: "lbl-{seg_idx}-{si}",
+                                            style: "height: 32px; width: 20px; display: flex; align-items: center; justify-content: flex-end;",
+                                            span {
+                                                style: "font-family: Courier, monospace; font-size: 12px; font-weight: 700; color: #5c7a5c;",
+                                                "{STRING_NAMES[si]}"
+                                            }
+                                        }
                                     }
+                                }
+                                // the actual grid columns
+                                div {
+                                    style: "display: flex; flex-direction: column;",
 
-                                    div { style: "width: 6px; height: 2px; background: #aac8aa; flex-shrink: 0;" }
+                                    // ── Six string rows ───────────────────────────────────
+                                    for str_idx in 0usize..6 {
+                                        div {
+                                            key: "row-{seg_idx}-{str_idx}",
+                                            style: "display: flex; align-items: center; height: 32px;",
+
+                                            div { style: "width: 6px; height: 2px; background: #aac8aa; flex-shrink: 0;" }
 
                                     for local_i in 0..seg_len {
                                         {
@@ -1978,7 +1995,9 @@ fn TabEditor(song: Signal<Song>, part_index: usize) -> Element {
                                         }
                                     }
 
-                                    div { style: "width: 6px; height: 2px; background: #aac8aa; flex-shrink: 0;" }
+                                            div { style: "width: 6px; height: 2px; background: #aac8aa; flex-shrink: 0;" }
+                                        }
+                                    }
                                 }
                             }
                         }
