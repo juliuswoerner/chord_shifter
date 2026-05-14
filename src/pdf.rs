@@ -116,9 +116,9 @@ pub fn generate_pdf_bytes(
 
         // ── Riff / Tab part ───────────────────────────────────────────────
         if part.kind == crate::song::PartKind::Riff {
-            let tab_size = chord_size * 0.65;
+            let tab_size = chord_size * 0.62;
             let line_h = row_h * 0.85;
-            for line in part.tab.lines() {
+            for line in part.tab_as_ascii().lines() {
                 if y < MARGIN + 10.0 {
                     break;
                 }

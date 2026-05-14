@@ -1710,6 +1710,163 @@ fn LoginScreen(db: Signal<Option<Db>>, mut current_user: Signal<Option<User>>) -
     }
 }
 
+// ── Tab grid editor ───────────────────────────────────────────────────────────
+
+#[component]
+fn TabEditor(song: Signal<Song>, part_index: usize) -> Element {
+    // (col, string_index) of the cell currently being edited
+    let mut editing: Signal<Option<(usize, usize)>> = use_signal(|| None);
+    // Buffer for the value while the user is typing in a cell
+    let mut edit_buf: Signal<String> = use_signal(String::new);
+
+    const STRING_NAMES: [&str; 6] = ["e", "B", "G", "D", "A", "E"];
+
+    let col_count = song
+        .read()
+        .parts
+        .get(part_index)
+        .map(|p| p.tab_grid.len())
+        .unwrap_or(0);
+
+    rsx! {
+        div {
+            style: "overflow-x: auto; padding: 4px 0;",
+            div {
+                style: "display: inline-block; background: #fff; border: 1.5px solid #b5d6b5; border-radius: 8px; padding: 10px 14px 12px;",
+
+                // ── Header row: per-column delete buttons + add-beat button ──
+                div {
+                    style: "display: flex; align-items: center; margin-bottom: 2px; padding-left: 34px;",
+                    for col in 0usize..col_count {
+                        div {
+                            key: "hd-{col}",
+                            style: "width: 36px; display: flex; justify-content: center;",
+                            button {
+                                style: "background: none; border: none; font-size: 10px; color: #ccc; cursor: pointer; padding: 0; line-height: 1; font-family: inherit;",
+                                title: "Remove this beat",
+                                onclick: move |_| {
+                                    if let Some(part) = song.write().parts.get_mut(part_index) {
+                                        if col < part.tab_grid.len() {
+                                            part.tab_grid.remove(col);
+                                        }
+                                    }
+                                    editing.set(None);
+                                },
+                                "\u{2715}"
+                            }
+                        }
+                    }
+                    div {
+                        style: "width: 36px; display: flex; justify-content: center;",
+                        button {
+                            style: "background: none; border: 1px dashed #8fba8f; border-radius: 4px; font-size: 12px; color: #5c7a5c; cursor: pointer; padding: 1px 7px; font-family: inherit;",
+                            title: "Add beat",
+                            onclick: move |_| {
+                                if let Some(part) = song.write().parts.get_mut(part_index) {
+                                    part.tab_grid.push([None; 6]);
+                                }
+                            },
+                            "+"
+                        }
+                    }
+                }
+
+                // ── One row per string ────────────────────────────────────
+                for str_idx in 0usize..6 {
+                    div {
+                        key: "row-{str_idx}",
+                        style: "display: flex; align-items: center; height: 32px;",
+
+                        span {
+                            style: "font-family: Courier, monospace; font-size: 12px; font-weight: 700; color: #5c7a5c; width: 20px; text-align: right; margin-right: 8px; flex-shrink: 0;",
+                            "{STRING_NAMES[str_idx]}"
+                        }
+
+                        div { style: "width: 6px; height: 2px; background: #aac8aa; flex-shrink: 0;" }
+
+                        for col in 0usize..col_count {
+                            {
+                                let is_editing_cell = matches!(
+                                    *editing.read(),
+                                    Some((c, s)) if c == col && s == str_idx
+                                );
+                                let fret: Option<u8> = song
+                                    .read()
+                                    .parts
+                                    .get(part_index)
+                                    .and_then(|p| p.tab_grid.get(col))
+                                    .map(|c| c[str_idx])
+                                    .flatten();
+                                let has_fret = fret.is_some();
+                                let fret_display = fret.map(|f| f.to_string()).unwrap_or_default();
+                                let cell_bg = if has_fret { "background:#d8edd8;" } else { "background:transparent;" };
+                                let cell_style = format!("position:relative;z-index:1;width:30px;height:26px;display:flex;align-items:center;justify-content:center;cursor:pointer;user-select:none;border-radius:4px;{cell_bg}");
+
+                                if is_editing_cell {
+                                    rsx! {
+                                        div {
+                                            key: "{col}",
+                                            style: "position:relative;width:36px;height:32px;display:flex;align-items:center;justify-content:center;flex-shrink:0;",
+                                            div { style: "position:absolute;top:50%;left:0;right:0;height:2px;background:#aac8aa;transform:translateY(-50%);z-index:0;" }
+                                            input {
+                                                style: "position:relative;z-index:1;width:30px;height:26px;font-family:Courier,monospace;font-size:13px;font-weight:700;text-align:center;border:2px solid #5c7a5c;border-radius:4px;background:#f6fbf6;outline:none;padding:0;box-sizing:border-box;",
+                                                r#type: "text",
+                                                inputmode: "numeric",
+                                                maxlength: "2",
+                                                autofocus: true,
+                                                value: "{edit_buf}",
+                                                oninput: move |e| { edit_buf.set(e.value()); },
+                                                onblur: move |_| {
+                                                    let val = edit_buf.read().clone();
+                                                    let parsed = val.parse::<u8>().ok().filter(|&n| n <= 24);
+                                                    if let Some(part) = song.write().parts.get_mut(part_index) {
+                                                        if let Some(col_data) = part.tab_grid.get_mut(col) {
+                                                            col_data[str_idx] = parsed;
+                                                        }
+                                                    }
+                                                    editing.set(None);
+                                                },
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    rsx! {
+                                        div {
+                                            key: "{col}",
+                                            style: "position:relative;width:36px;height:32px;display:flex;align-items:center;justify-content:center;flex-shrink:0;",
+                                            div { style: "position:absolute;top:50%;left:0;right:0;height:2px;background:#aac8aa;transform:translateY(-50%);z-index:0;" }
+                                            div {
+                                                style: "{cell_style}",
+                                                onclick: move |_| {
+                                                    edit_buf.set(fret.map(|f| f.to_string()).unwrap_or_default());
+                                                    editing.set(Some((col, str_idx)));
+                                                },
+                                                if has_fret {
+                                                    span {
+                                                        style: "font-family:Courier,monospace;font-size:13px;font-weight:700;color:#1a1a2e;",
+                                                        "{fret_display}"
+                                                    }
+                                                } else {
+                                                    span {
+                                                        style: "font-family:Courier,monospace;font-size:13px;color:#c8dcc8;",
+                                                        "\u{2013}"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        div { style: "width: 6px; height: 2px; background: #aac8aa; flex-shrink: 0;" }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ── Part block ────────────────────────────────────────────────────────────────
 
 #[component]
@@ -1737,12 +1894,6 @@ fn PartView(
         .get(part_index)
         .map(|p| p.kind == PartKind::Riff)
         .unwrap_or(false);
-    let tab_content = song
-        .read()
-        .parts
-        .get(part_index)
-        .map(|p| p.tab.clone())
-        .unwrap_or_default();
 
     let part_border = if is_riff { "#b5d6b5" } else { "#ece8df" };
     let part_bg = if is_riff { "#f6fbf6" } else { "#fff" };
@@ -1820,39 +1971,7 @@ fn PartView(
             }
 
             if is_riff {
-                div {
-                    style: "display: flex; flex-direction: column; gap: 8px;",
-
-                    span {
-                        style: "font-size: 10px; font-weight: 700; color: #5c7a5c; letter-spacing: 1.5px; text-transform: uppercase;",
-                        "~ Tab / Riff"
-                    }
-
-                    textarea {
-                        style: "
-                            font-family: Courier, monospace;
-                            font-size: 13px;
-                            line-height: 1.7;
-                            color: #1a1a2e;
-                            background: #fff;
-                            border: 1.5px solid #b5d6b5;
-                            border-radius: 8px;
-                            padding: 12px 14px;
-                            width: 100%;
-                            min-height: 140px;
-                            resize: vertical;
-                            outline: none;
-                            box-sizing: border-box;
-                            overflow-x: auto;
-                        ",
-                        value: "{tab_content}",
-                        oninput: move |e| {
-                            if let Some(part) = song.write().parts.get_mut(part_index) {
-                                part.tab = e.value();
-                            }
-                        },
-                    }
-                }
+                TabEditor { song, part_index }
             }
             if !is_riff {
                 // ── Chord items + add buttons ──────────────────────────────
@@ -2515,7 +2634,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                         .read()
                         .parts
                         .get(part_index)
-                        .map(|p| p.tab.clone())
+                        .map(|p| p.tab_as_ascii())
                         .unwrap_or_default();
                     let part_border = if is_riff { "#b5d6b5" } else { "#ece8df" };
                     let part_bg = if is_riff { "#f6fbf6" } else { "transparent" };

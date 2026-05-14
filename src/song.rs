@@ -193,6 +193,10 @@ pub struct SongPart {
     /// Tab content — only used when `kind == PartKind::Riff`.
     #[serde(default)]
     pub tab: String,
+    /// Structured tab grid — 6 strings × N beats. Index 0 = high e.
+    /// Each column is `[Option<u8>; 6]` where `None` means no note.
+    #[serde(default)]
+    pub tab_grid: Vec<[Option<u8>; 6]>,
     /// All items in this part in order — only used when `kind == PartKind::Chords`.
     #[serde(alias = "chords")]
     pub items: Vec<PartItem>,
@@ -204,6 +208,7 @@ impl SongPart {
             name: name.into(),
             kind: PartKind::Chords,
             tab: String::new(),
+            tab_grid: Vec::new(),
             items: Vec::new(),
         }
     }
@@ -213,6 +218,7 @@ impl SongPart {
             name: name.into(),
             kind: PartKind::Riff,
             tab: String::new(),
+            tab_grid: Vec::new(),
             items: Vec::new(),
         }
     }
@@ -226,6 +232,36 @@ impl SongPart {
                 None
             }
         })
+    }
+
+    /// Render this riff part as an ASCII-tab string, e.g.
+    /// ```text
+    /// e|--0--2--|
+    /// B|--------|
+    /// ```
+    /// Falls back to `self.tab` when `tab_grid` is empty (legacy free-text).
+    pub fn tab_as_ascii(&self) -> String {
+        if self.tab_grid.is_empty() {
+            return self.tab.clone();
+        }
+        const LABELS: [&str; 6] = ["e", "B", "G", "D", "A", "E"];
+        let mut rows: [String; 6] = Default::default();
+        for (i, label) in LABELS.iter().enumerate() {
+            rows[i] = format!("{label}|");
+        }
+        for col in &self.tab_grid {
+            for (str_idx, cell) in col.iter().enumerate() {
+                match cell {
+                    Some(f) if *f >= 10 => rows[str_idx].push_str(&format!("{f}-")),
+                    Some(f) => rows[str_idx].push_str(&format!("-{f}-")),
+                    None => rows[str_idx].push_str("---"),
+                }
+            }
+        }
+        for row in &mut rows {
+            row.push('|');
+        }
+        rows.join("\n")
     }
 
     /// Iterate over only the `Chord` items in this part.
@@ -448,6 +484,7 @@ impl Song {
             name: name.into(),
             kind: PartKind::Chords,
             tab: String::new(),
+            tab_grid: Vec::new(),
             items: chords.into_iter().map(PartItem::Chord).collect(),
         });
         self
