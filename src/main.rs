@@ -339,7 +339,7 @@ struct SongRow {
     username: String,
 }
 
-use song::{apply_notation, Chord, ChordQuality, Notation, PartItem, Song};
+use song::{apply_notation, Chord, ChordQuality, Notation, PartItem, PartKind, Song};
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 #[derive(Routable, Clone, PartialEq)]
@@ -951,7 +951,23 @@ fn SongView(
                     "+ Add Part"
                 }
 
-                // Copy base → all instruments
+                button {
+                    style: "
+                        margin-bottom: 12px;
+                        padding: 10px 20px;
+                        background: transparent;
+                        color: #5c7a5c;
+                        border: 2px dashed #8fba8f;
+                        border-radius: 10px;
+                        font-size: 13px;
+                        font-weight: 600;
+                        cursor: pointer;
+                        font-family: inherit;
+                        width: 100%;
+                    ",
+                    onclick: move |_| { song.write().parts.push(crate::song::SongPart::new_riff("Riff")); },
+                    "~ Add Riff / Tab"
+                }
                 button {
                     style: "
                         margin-bottom: 24px;
@@ -1055,7 +1071,23 @@ fn SongView(
                             onclick: move |_| { act_song.write().parts.push(crate::song::SongPart::new("New Part")); },
                             "+ Add Part"
                         }
-                        // Save instrument sheet
+                        button {
+                            style: "
+                                margin-bottom: 12px;
+                                padding: 10px 20px;
+                                background: transparent;
+                                color: #5c7a5c;
+                                border: 2px dashed #8fba8f;
+                                border-radius: 10px;
+                                font-size: 13px;
+                                font-weight: 600;
+                                cursor: pointer;
+                                font-family: inherit;
+                                width: 100%;
+                            ",
+                            onclick: move |_| { act_song.write().parts.push(crate::song::SongPart::new_riff("Riff")); },
+                            "~ Add Riff / Tab"
+                        }
                         div {
                             style: "margin-bottom: 24px; display: flex; align-items: center; gap: 16px;",
                             button {
@@ -1637,16 +1669,32 @@ fn PartView(
         .get(part_index)
         .map(|p| p.name.clone())
         .unwrap_or_default();
+    let is_riff = song
+        .read()
+        .parts
+        .get(part_index)
+        .map(|p| p.kind == PartKind::Riff)
+        .unwrap_or(false);
+    let tab_content = song
+        .read()
+        .parts
+        .get(part_index)
+        .map(|p| p.tab.clone())
+        .unwrap_or_default();
+
+    let part_border = if is_riff { "#b5d6b5" } else { "#ece8df" };
+    let part_bg = if is_riff { "#f6fbf6" } else { "#fff" };
+    let part_name_color = if is_riff { "#5c7a5c" } else { "#aaa" };
+    let card_style = format!(
+        "margin-bottom: 32px; border: 1px solid {part_border}; border-radius: 12px; padding: 18px 20px 16px; position: relative; background: {part_bg};"
+    );
+    let name_input_style = format!(
+        "display: block; margin: 0 0 14px 0; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 3px; color: {part_name_color}; border: none; border-bottom: 1px dashed #ddd; background: transparent; outline: none; font-family: inherit; padding: 0 0 3px; width: calc(100% - 24px);"
+    );
 
     rsx! {
         div {
-            style: "
-                margin-bottom: 32px;
-                border: 1px solid #ece8df;
-                border-radius: 12px;
-                padding: 18px 20px 16px;
-                position: relative;
-            ",
+            style: "{card_style}",
 
             // Remove part button
             button {
@@ -1674,22 +1722,7 @@ fn PartView(
 
             // Editable part name
             input {
-                style: "
-                    display: block;
-                    margin: 0 0 14px 0;
-                    font-size: 10px;
-                    font-weight: 700;
-                    text-transform: uppercase;
-                    letter-spacing: 3px;
-                    color: #aaa;
-                    border: none;
-                    border-bottom: 1px dashed #ddd;
-                    background: transparent;
-                    outline: none;
-                    font-family: inherit;
-                    padding: 0 0 3px;
-                    width: calc(100% - 24px);
-                ",
+                style: "{name_input_style}",
                 value: "{part_name}",
                 placeholder: "Part name…",
                 oninput: move |e| {
@@ -1699,175 +1732,206 @@ fn PartView(
                 },
             }
 
-            // Item row — chords + structural markers
-            div {
-                style: "display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start;",
-
-                for item_index in 0..item_count {
-                    {
-                        let item = song
-                            .read()
-                            .parts
-                            .get(part_index)
-                            .and_then(|p| p.items.get(item_index))
-                            .cloned();
-                        match item {
-                            Some(PartItem::Chord(_)) => rsx! {
-                                ChordEditor {
-                                    key: "{item_index}",
-                                    song,
-                                    part_index,
-                                    item_index,
-                                    notation,
-                                    capo,
-                                }
-                            },
-                            Some(PartItem::LineBreak) => rsx! {
-                                div {
-                                    key: "{item_index}",
-                                    style: "width: 100%; display: flex; align-items: center; gap: 6px; flex-basis: 100%;",
-                                    div { style: "flex: 1; height: 1px; background: #e0dbd0;" }
-                                    span {
-                                        style: "font-size: 10px; color: #bbb; white-space: nowrap;",
-                                        "↵"
-                                    }
-                                    div { style: "flex: 1; height: 1px; background: #e0dbd0;" }
-                                    button {
-                                        style: "background: none; border: none; font-size: 11px; color: #ccc; cursor: pointer; padding: 0 2px; font-family: inherit;",
-                                        onclick: move |e: Event<MouseData>| {
-                                            e.stop_propagation();
-                                            if let Some(part) = song.write().parts.get_mut(part_index) {
-                                                if item_index < part.items.len() {
-                                                    part.items.remove(item_index);
-                                                }
-                                            }
-                                        },
-                                        "\u{2715}"
-                                    }
-                                }
-                            },
-                            Some(PartItem::Repeat { times }) => rsx! {
-                                RepeatEditor {
-                                    key: "{item_index}",
-                                    song,
-                                    part_index,
-                                    item_index,
-                                    times,
-                                }
-                            },
-                            Some(PartItem::VoltaBracketStart { label }) => rsx! {
-                                VoltaEditor {
-                                    key: "{item_index}",
-                                    song,
-                                    part_index,
-                                    item_index,
-                                    label,
-                                    is_start: true,
-                                }
-                            },
-                            Some(PartItem::VoltaBracketEnd) => rsx! {
-                                VoltaEditor {
-                                    key: "{item_index}",
-                                    song,
-                                    part_index,
-                                    item_index,
-                                    label: String::new(),
-                                    is_start: false,
-                                }
-                            },
-                            None => rsx! { span {} },
-                        }
-                    }
-                }
-
-                // ── Add item buttons ────────────────────────────────────────
+            if is_riff {
                 div {
-                    style: "display: flex; flex-direction: column; gap: 5px; align-self: center;",
+                    style: "display: flex; flex-direction: column; gap: 8px;",
 
-                    // + Chord
-                    button {
+                    span {
+                        style: "font-size: 10px; font-weight: 700; color: #5c7a5c; letter-spacing: 1.5px; text-transform: uppercase;",
+                        "~ Tab / Riff"
+                    }
+
+                    textarea {
                         style: "
-                            display: flex; align-items: center; justify-content: center;
-                            width: 44px; height: 44px;
-                            background: #f5f2ea; border: 2px dashed #c8c3b3;
-                            border-radius: 10px; font-size: 22px; color: #bbb;
-                            cursor: pointer; padding: 0; font-family: inherit;
+                            font-family: Courier, monospace;
+                            font-size: 13px;
+                            line-height: 1.7;
+                            color: #1a1a2e;
+                            background: #fff;
+                            border: 1.5px solid #b5d6b5;
+                            border-radius: 8px;
+                            padding: 12px 14px;
+                            width: 100%;
+                            min-height: 140px;
+                            resize: vertical;
+                            outline: none;
+                            box-sizing: border-box;
+                            overflow-x: auto;
                         ",
-                        title: "Add chord",
-                        onclick: move |_| {
+                        value: "{tab_content}",
+                        oninput: move |e| {
                             if let Some(part) = song.write().parts.get_mut(part_index) {
-                                part.items.push(PartItem::Chord(Chord::new("C", ChordQuality::Major)));
+                                part.tab = e.value();
                             }
                         },
-                        "+"
+                    }
+                }
+            }
+            if !is_riff {
+                // ── Chord items + add buttons ──────────────────────────────
+                div {
+                    style: "display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start;",
+
+                    for item_index in 0..item_count {
+                        {
+                            let item = song
+                                .read()
+                                .parts
+                                .get(part_index)
+                                .and_then(|p| p.items.get(item_index))
+                                .cloned();
+                            match item {
+                                Some(PartItem::Chord(_)) => rsx! {
+                                    ChordEditor {
+                                        key: "{item_index}",
+                                        song,
+                                        part_index,
+                                        item_index,
+                                        notation,
+                                        capo,
+                                    }
+                                },
+                                Some(PartItem::LineBreak) => rsx! {
+                                    div {
+                                        key: "{item_index}",
+                                        style: "width: 100%; display: flex; align-items: center; gap: 6px; flex-basis: 100%;",
+                                        div { style: "flex: 1; height: 1px; background: #e0dbd0;" }
+                                        span {
+                                            style: "font-size: 10px; color: #bbb; white-space: nowrap;",
+                                            "↵"
+                                        }
+                                        div { style: "flex: 1; height: 1px; background: #e0dbd0;" }
+                                        button {
+                                            style: "background: none; border: none; font-size: 11px; color: #ccc; cursor: pointer; padding: 0 2px; font-family: inherit;",
+                                            onclick: move |e: Event<MouseData>| {
+                                                e.stop_propagation();
+                                                if let Some(part) = song.write().parts.get_mut(part_index) {
+                                                    if item_index < part.items.len() {
+                                                        part.items.remove(item_index);
+                                                    }
+                                                }
+                                            },
+                                            "\u{2715}"
+                                        }
+                                    }
+                                },
+                                Some(PartItem::Repeat { times }) => rsx! {
+                                    RepeatEditor {
+                                        key: "{item_index}",
+                                        song,
+                                        part_index,
+                                        item_index,
+                                        times,
+                                    }
+                                },
+                                Some(PartItem::VoltaBracketStart { label }) => rsx! {
+                                    VoltaEditor {
+                                        key: "{item_index}",
+                                        song,
+                                        part_index,
+                                        item_index,
+                                        label,
+                                        is_start: true,
+                                    }
+                                },
+                                Some(PartItem::VoltaBracketEnd) => rsx! {
+                                    VoltaEditor {
+                                        key: "{item_index}",
+                                        song,
+                                        part_index,
+                                        item_index,
+                                        label: String::new(),
+                                        is_start: false,
+                                    }
+                                },
+                                None => rsx! { span {} },
+                            }
+                        }
                     }
 
-                    // Add-more dropdown row
+                    // ── Add item buttons ──────────────────────────────────
                     div {
-                        style: "display: flex; gap: 4px;",
+                        style: "display: flex; flex-direction: column; gap: 5px; align-self: center;",
 
-                        // Line break
                         button {
                             style: "
-                                padding: 3px 7px; font-size: 11px; font-weight: 700;
-                                background: #f5f2ea; border: 1.5px solid #d0cbc0;
-                                border-radius: 7px; color: #888; cursor: pointer; font-family: inherit;
+                                display: flex; align-items: center; justify-content: center;
+                                width: 44px; height: 44px;
+                                background: #f5f2ea; border: 2px dashed #c8c3b3;
+                                border-radius: 10px; font-size: 22px; color: #bbb;
+                                cursor: pointer; padding: 0; font-family: inherit;
                             ",
-                            title: "Insert line break",
+                            title: "Add chord",
                             onclick: move |_| {
                                 if let Some(part) = song.write().parts.get_mut(part_index) {
-                                    part.items.push(PartItem::LineBreak);
+                                    part.items.push(PartItem::Chord(Chord::new("C", ChordQuality::Major)));
                                 }
                             },
-                            "↵"
+                            "+"
                         }
 
-                        // Repeat sign
-                        button {
-                            style: "
-                                padding: 3px 7px; font-size: 11px; font-weight: 700;
-                                background: #f5f2ea; border: 1.5px solid #d0cbc0;
-                                border-radius: 7px; color: #888; cursor: pointer; font-family: inherit;
-                            ",
-                            title: "Insert repeat sign",
-                            onclick: move |_| {
-                                if let Some(part) = song.write().parts.get_mut(part_index) {
-                                    part.items.push(PartItem::Repeat { times: 2 });
-                                }
-                            },
-                            "‖:"
-                        }
+                        div {
+                            style: "display: flex; gap: 4px;",
 
-                        // Volta bracket start
-                        button {
-                            style: "
-                                padding: 3px 7px; font-size: 11px; font-weight: 700;
-                                background: #f5f2ea; border: 1.5px solid #d0cbc0;
-                                border-radius: 7px; color: #888; cursor: pointer; font-family: inherit;
-                            ",
-                            title: "Insert volta bracket (e.g. 1st ending)",
-                            onclick: move |_| {
-                                if let Some(part) = song.write().parts.get_mut(part_index) {
-                                    part.items.push(PartItem::VoltaBracketStart { label: "1.".to_string() });
-                                }
-                            },
-                            "[1."
-                        }
+                            button {
+                                style: "
+                                    padding: 3px 7px; font-size: 11px; font-weight: 700;
+                                    background: #f5f2ea; border: 1.5px solid #d0cbc0;
+                                    border-radius: 7px; color: #888; cursor: pointer; font-family: inherit;
+                                ",
+                                title: "Insert line break",
+                                onclick: move |_| {
+                                    if let Some(part) = song.write().parts.get_mut(part_index) {
+                                        part.items.push(PartItem::LineBreak);
+                                    }
+                                },
+                                "↵"
+                            }
 
-                        // Volta bracket end
-                        button {
-                            style: "
-                                padding: 3px 7px; font-size: 11px; font-weight: 700;
-                                background: #f5f2ea; border: 1.5px solid #d0cbc0;
-                                border-radius: 7px; color: #888; cursor: pointer; font-family: inherit;
-                            ",
-                            title: "Close volta bracket",
-                            onclick: move |_| {
-                                if let Some(part) = song.write().parts.get_mut(part_index) {
-                                    part.items.push(PartItem::VoltaBracketEnd);
-                                }
-                            },
-                            "]"
+                            button {
+                                style: "
+                                    padding: 3px 7px; font-size: 11px; font-weight: 700;
+                                    background: #f5f2ea; border: 1.5px solid #d0cbc0;
+                                    border-radius: 7px; color: #888; cursor: pointer; font-family: inherit;
+                                ",
+                                title: "Insert repeat sign",
+                                onclick: move |_| {
+                                    if let Some(part) = song.write().parts.get_mut(part_index) {
+                                        part.items.push(PartItem::Repeat { times: 2 });
+                                    }
+                                },
+                                "‖:"
+                            }
+
+                            button {
+                                style: "
+                                    padding: 3px 7px; font-size: 11px; font-weight: 700;
+                                    background: #f5f2ea; border: 1.5px solid #d0cbc0;
+                                    border-radius: 7px; color: #888; cursor: pointer; font-family: inherit;
+                                ",
+                                title: "Insert volta bracket (e.g. 1st ending)",
+                                onclick: move |_| {
+                                    if let Some(part) = song.write().parts.get_mut(part_index) {
+                                        part.items.push(PartItem::VoltaBracketStart { label: "1.".to_string() });
+                                    }
+                                },
+                                "[1."
+                            }
+
+                            button {
+                                style: "
+                                    padding: 3px 7px; font-size: 11px; font-weight: 700;
+                                    background: #f5f2ea; border: 1.5px solid #d0cbc0;
+                                    border-radius: 7px; color: #888; cursor: pointer; font-family: inherit;
+                                ",
+                                title: "Close volta bracket",
+                                onclick: move |_| {
+                                    if let Some(part) = song.write().parts.get_mut(part_index) {
+                                        part.items.push(PartItem::VoltaBracketEnd);
+                                    }
+                                },
+                                "]"
+                            }
                         }
                     }
                 }
@@ -2340,7 +2404,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                     }
                 }
 
-                // ── Chord parts (read-only) ──────────────────────────────────────────────────
+                // ── Chord / Riff parts (read-only) ──────────────────────────────────────────
                 for part_index in 0..song.read().parts.len() {{
                     let part_name = song
                         .read()
@@ -2348,23 +2412,56 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                         .get(part_index)
                         .map(|p| p.name.clone())
                         .unwrap_or_default();
+                    let is_riff = song
+                        .read()
+                        .parts
+                        .get(part_index)
+                        .map(|p| p.kind == PartKind::Riff)
+                        .unwrap_or(false);
                     let item_count = song
                         .read()
                         .parts
                         .get(part_index)
                         .map(|p| p.items.len())
                         .unwrap_or(0);
+                    let tab_text = song
+                        .read()
+                        .parts
+                        .get(part_index)
+                        .map(|p| p.tab.clone())
+                        .unwrap_or_default();
+                    let part_border = if is_riff { "#b5d6b5" } else { "#ece8df" };
+                    let part_bg = if is_riff { "#f6fbf6" } else { "transparent" };
+                    let label_color = if is_riff { "#5c7a5c" } else { "#aaa" };
                     rsx! {
                         div {
                             key: "{part_index}",
-                            style: "margin-bottom: 32px; border: 1px solid #ece8df; border-radius: 12px; padding: 18px 20px 16px;",
+                            style: "margin-bottom: 32px; border: 1px solid {part_border}; border-radius: 12px; padding: 18px 20px 16px; background: {part_bg};",
                             p {
-                                style: "margin: 0 0 14px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 3px; color: #aaa;",
+                                style: "margin: 0 0 14px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 3px; color: {label_color};",
                                 "{part_name}"
                             }
-                            div {
-                                style: "display: flex; flex-wrap: wrap; gap: 10px;",
-                                for item_index in 0..item_count {{
+                            if is_riff {
+                                pre {
+                                    style: "
+                                        font-family: Courier, monospace;
+                                        font-size: 13px;
+                                        line-height: 1.7;
+                                        color: #1a1a2e;
+                                        background: #fff;
+                                        border: 1.5px solid #b5d6b5;
+                                        border-radius: 8px;
+                                        padding: 12px 14px;
+                                        margin: 0;
+                                        overflow-x: auto;
+                                        white-space: pre;
+                                    ",
+                                    "{tab_text}"
+                                }
+                            } else {
+                                div {
+                                    style: "display: flex; flex-wrap: wrap; gap: 10px;",
+                                    for item_index in 0..item_count {{
                                     let item = song
                                         .read()
                                         .parts
@@ -2460,7 +2557,8 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                                         None => rsx! { div { key: "{item_index}" } },
                                     }
                                 }}
-                            }
+                            }  // end else div
+                            }  // end else branch
                         }
                     }
                 }}

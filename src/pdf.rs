@@ -114,6 +114,21 @@ pub fn generate_pdf_bytes(
         let qual_char_w: f32 = root_char_w * (qual_size / chord_size);
         let bass_char_w: f32 = root_char_w * (bass_size / chord_size);
 
+        // ── Riff / Tab part ───────────────────────────────────────────────
+        if part.kind == crate::song::PartKind::Riff {
+            let tab_size = chord_size * 0.65;
+            let line_h = row_h * 0.85;
+            for line in part.tab.lines() {
+                if y < MARGIN + 10.0 {
+                    break;
+                }
+                layer.use_text(line, tab_size, Mm(x), Mm(y + 1.5), &font_regular);
+                y -= line_h;
+            }
+            y -= gap + 6.0;
+            continue;
+        }
+
         for item in &part.items {
             use crate::song::PartItem;
             match item {

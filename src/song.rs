@@ -152,6 +152,17 @@ impl Chord {
     }
 }
 
+// ── Part kind ─────────────────────────────────────────────────────────────────
+
+/// Whether a song part holds chords or a guitar-tab riff.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub enum PartKind {
+    #[default]
+    Chords,
+    /// Free-form guitar tab (stored as a plain string).
+    Riff,
+}
+
 // ── Part items ────────────────────────────────────────────────────────────────
 
 /// A single item inside a song part — either a chord or a structural marker.
@@ -176,7 +187,13 @@ pub enum PartItem {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SongPart {
     pub name: String,
-    /// All items in this part in order.
+    /// Whether this part holds chords or a tab riff.
+    #[serde(default)]
+    pub kind: PartKind,
+    /// Tab content — only used when `kind == PartKind::Riff`.
+    #[serde(default)]
+    pub tab: String,
+    /// All items in this part in order — only used when `kind == PartKind::Chords`.
     #[serde(alias = "chords")]
     pub items: Vec<PartItem>,
 }
@@ -185,6 +202,17 @@ impl SongPart {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            kind: PartKind::Chords,
+            tab: String::new(),
+            items: Vec::new(),
+        }
+    }
+
+    pub fn new_riff(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            kind: PartKind::Riff,
+            tab: String::new(),
             items: Vec::new(),
         }
     }
@@ -418,6 +446,8 @@ impl Song {
     pub fn with_part(mut self, name: impl Into<String>, chords: Vec<Chord>) -> Self {
         self.parts.push(SongPart {
             name: name.into(),
+            kind: PartKind::Chords,
+            tab: String::new(),
             items: chords.into_iter().map(PartItem::Chord).collect(),
         });
         self
