@@ -138,7 +138,7 @@ pub fn generate_pdf_bytes(
             }
 
             for seg in &segments {
-                if y - block_h < MARGIN + 2.0 {
+                if y < MARGIN + block_h + 2.0 {
                     break;
                 }
 
@@ -154,8 +154,10 @@ pub fn generate_pdf_bytes(
                 let x0 = MARGIN + label_w; // where the first string line starts
                 let x_end = x0 + seg_w;
 
-                // y positions of the 6 strings (top = high e)
-                let string_y: Vec<f32> = (0..6).map(|i| y - i as f32 * str_gap).collect();
+                // y is the TOP of the current segment block (high-e string).
+                // Subsequent strings go downward (y - i * str_gap).
+                let seg_top = y;
+                let string_y: Vec<f32> = (0..6).map(|i| seg_top - i as f32 * str_gap).collect();
 
                 // ── Draw the 6 horizontal string lines ────────────────────
                 layer.set_outline_thickness(0.35);
@@ -328,7 +330,9 @@ pub fn generate_pdf_bytes(
                     }
                 }
 
-                y -= block_h + block_gap;
+                // Advance y to below this segment's bottom string + gap,
+                // so the next segment is placed below (not above) this one.
+                y = seg_top - block_h - block_gap;
             }
 
             y -= gap;
