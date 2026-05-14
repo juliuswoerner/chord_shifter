@@ -1787,18 +1787,14 @@ fn TabEditor(song: Signal<Song>, part_index: usize) -> Element {
                                 for local_i in 0..seg_len {
                                     {
                                         let col = seg_cols[local_i];
-                                        let col_w_kind = song
+                                        let is_barline = song
                                             .read()
                                             .parts
                                             .get(part_index)
                                             .and_then(|p| p.tab_grid.get(col))
-                                            .map(|c| match c {
-                                                TabCol::Barline => 1u8,
-                                                TabCol::RepeatStart | TabCol::RepeatEnd => 2u8,
-                                                _ => 0u8,
-                                            })
-                                            .unwrap_or(0);
-                                        let w = match col_w_kind { 1 => "18px", 2 => "22px", _ => "36px" };
+                                            .map(|c| matches!(c, TabCol::Barline))
+                                            .unwrap_or(false);
+                                        let w = if is_barline { "18px" } else { "36px" };
                                         rsx! {
                                             div {
                                                 key: "hd-{col}",
@@ -1847,26 +1843,6 @@ fn TabEditor(song: Signal<Song>, part_index: usize) -> Element {
                                             "|"
                                         }
                                         button {
-                                            style: "background: none; border: 1px dashed #3a5a8a; border-radius: 4px; font-size: 11px; font-weight: 700; color: #3a5a8a; cursor: pointer; padding: 1px 6px; font-family: Courier, monospace;",
-                                            title: "Add repeat start (||:)",
-                                            onclick: move |_| {
-                                                if let Some(part) = song.write().parts.get_mut(part_index) {
-                                                    part.tab_grid.push(TabCol::RepeatStart);
-                                                }
-                                            },
-                                            "||:"
-                                        }
-                                        button {
-                                            style: "background: none; border: 1px dashed #3a5a8a; border-radius: 4px; font-size: 11px; font-weight: 700; color: #3a5a8a; cursor: pointer; padding: 1px 6px; font-family: Courier, monospace;",
-                                            title: "Add repeat end (:||)",
-                                            onclick: move |_| {
-                                                if let Some(part) = song.write().parts.get_mut(part_index) {
-                                                    part.tab_grid.push(TabCol::RepeatEnd);
-                                                }
-                                            },
-                                            ":||"
-                                        }
-                                        button {
                                             style: "background: none; border: 1px dashed #c8a8e8; border-radius: 4px; font-size: 12px; color: #9b6fc4; cursor: pointer; padding: 1px 7px; font-family: inherit;",
                                             title: "Add line break (new row)",
                                             onclick: move |_| {
@@ -1911,21 +1887,13 @@ fn TabEditor(song: Signal<Song>, part_index: usize) -> Element {
                                     for local_i in 0..seg_len {
                                         {
                                             let col = seg_cols[local_i];
-                                            let col_kind = song
+                                            let is_barline = song
                                                 .read()
                                                 .parts
                                                 .get(part_index)
                                                 .and_then(|p| p.tab_grid.get(col))
-                                                .map(|c| match c {
-                                                    TabCol::Barline => 1u8,
-                                                    TabCol::RepeatStart => 2u8,
-                                                    TabCol::RepeatEnd => 3u8,
-                                                    _ => 0u8,
-                                                })
-                                                .unwrap_or(0);
-                                            let is_barline = col_kind == 1;
-                                            let is_repeat_start = col_kind == 2;
-                                            let is_repeat_end = col_kind == 3;
+                                                .map(|c| matches!(c, TabCol::Barline))
+                                                .unwrap_or(false);
 
                                             if is_barline {
                                                 rsx! {
@@ -1934,30 +1902,6 @@ fn TabEditor(song: Signal<Song>, part_index: usize) -> Element {
                                                         style: "position:relative;width:18px;height:32px;display:flex;align-items:center;justify-content:center;flex-shrink:0;",
                                                         div { style: "position:absolute;top:50%;left:0;right:0;height:2px;background:#aac8aa;transform:translateY(-50%);z-index:0;" }
                                                         div { style: "position:absolute;top:2px;bottom:2px;left:50%;width:2px;background:#6a7fa6;border-radius:1px;transform:translateX(-50%);z-index:1;" }
-                                                    }
-                                                }
-                                            } else if is_repeat_start {
-                                                // ||:  — thick line + thin line + dot on right
-                                                rsx! {
-                                                    div {
-                                                        key: "{col}",
-                                                        style: "position:relative;width:22px;height:32px;display:flex;align-items:center;justify-content:center;flex-shrink:0;",
-                                                        div { style: "position:absolute;top:50%;left:0;right:0;height:2px;background:#aac8aa;transform:translateY(-50%);z-index:0;" }
-                                                        div { style: "position:absolute;top:2px;bottom:2px;left:2px;width:4px;background:#3a5a8a;border-radius:1px;z-index:1;" }
-                                                        div { style: "position:absolute;top:2px;bottom:2px;left:9px;width:2px;background:#3a5a8a;border-radius:1px;z-index:1;" }
-                                                        div { style: "position:absolute;top:50%;left:15px;width:5px;height:5px;background:#3a5a8a;border-radius:50%;transform:translateY(-50%);z-index:1;" }
-                                                    }
-                                                }
-                                            } else if is_repeat_end {
-                                                // :||  — dot on left + thin line + thick line
-                                                rsx! {
-                                                    div {
-                                                        key: "{col}",
-                                                        style: "position:relative;width:22px;height:32px;display:flex;align-items:center;justify-content:center;flex-shrink:0;",
-                                                        div { style: "position:absolute;top:50%;left:0;right:0;height:2px;background:#aac8aa;transform:translateY(-50%);z-index:0;" }
-                                                        div { style: "position:absolute;top:50%;left:2px;width:5px;height:5px;background:#3a5a8a;border-radius:50%;transform:translateY(-50%);z-index:1;" }
-                                                        div { style: "position:absolute;top:2px;bottom:2px;left:11px;width:2px;background:#3a5a8a;border-radius:1px;z-index:1;" }
-                                                        div { style: "position:absolute;top:2px;bottom:2px;left:16px;width:4px;background:#3a5a8a;border-radius:1px;z-index:1;" }
                                                     }
                                                 }
                                             } else {
@@ -2250,15 +2194,9 @@ fn PartView(
                                 Some(PartItem::RepeatStart) => rsx! {
                                     div {
                                         key: "{item_index}",
-                                        style: "
-                                            display: flex; flex-direction: column; align-items: center; gap: 4px;
-                                            padding: 10px 12px 8px;
-                                            background: #eef2fa; border: 2px solid #3a5a8a;
-                                            border-radius: 12px; min-width: 52px; position: relative;
-                                        ",
+                                        style: "display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 12px 8px;background:#eef2fa;border:2px solid #3a5a8a;border-radius:12px;min-width:52px;position:relative;",
                                         button {
-                                            style: "position: absolute; top: 6px; right: 8px; background: none; border: none;
-                                                font-size: 12px; color: #c0bab0; cursor: pointer; padding: 0; font-family: inherit;",
+                                            style: "position:absolute;top:6px;right:8px;background:none;border:none;font-size:12px;color:#c0bab0;cursor:pointer;padding:0;font-family:inherit;",
                                             onclick: move |e: Event<MouseData>| {
                                                 e.stop_propagation();
                                                 if let Some(part) = song.write().parts.get_mut(part_index) {
@@ -2267,24 +2205,15 @@ fn PartView(
                                             },
                                             "\u{2715}"
                                         }
-                                        span {
-                                            style: "font-size: 22px; font-weight: 800; color: #3a5a8a; line-height: 1;",
-                                            "||:"
-                                        }
+                                        span { style: "font-size:22px;font-weight:800;color:#3a5a8a;line-height:1;", "||" }
                                     }
                                 },
                                 Some(PartItem::RepeatEnd) => rsx! {
                                     div {
                                         key: "{item_index}",
-                                        style: "
-                                            display: flex; flex-direction: column; align-items: center; gap: 4px;
-                                            padding: 10px 12px 8px;
-                                            background: #eef2fa; border: 2px solid #3a5a8a;
-                                            border-radius: 12px; min-width: 52px; position: relative;
-                                        ",
+                                        style: "display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 12px 8px;background:#eef2fa;border:2px solid #3a5a8a;border-radius:12px;min-width:52px;position:relative;",
                                         button {
-                                            style: "position: absolute; top: 6px; right: 8px; background: none; border: none;
-                                                font-size: 12px; color: #c0bab0; cursor: pointer; padding: 0; font-family: inherit;",
+                                            style: "position:absolute;top:6px;right:8px;background:none;border:none;font-size:12px;color:#c0bab0;cursor:pointer;padding:0;font-family:inherit;",
                                             onclick: move |e: Event<MouseData>| {
                                                 e.stop_propagation();
                                                 if let Some(part) = song.write().parts.get_mut(part_index) {
@@ -2293,10 +2222,7 @@ fn PartView(
                                             },
                                             "\u{2715}"
                                         }
-                                        span {
-                                            style: "font-size: 22px; font-weight: 800; color: #3a5a8a; line-height: 1;",
-                                            ":||"
-                                        }
+                                        span { style: "font-size:22px;font-weight:800;color:#3a5a8a;line-height:1;", "||:" }
                                     }
                                 },
                                 None => rsx! { span {} },
@@ -2356,6 +2282,36 @@ fn PartView(
                                     }
                                 },
                                 "‖:"
+                            }
+
+                            button {
+                                style: "
+                                    padding: 3px 7px; font-size: 11px; font-weight: 700;
+                                    background: #eef2fa; border: 1.5px solid #3a5a8a;
+                                    border-radius: 7px; color: #3a5a8a; cursor: pointer; font-family: inherit;
+                                ",
+                                title: "Insert repeat start (||)",
+                                onclick: move |_| {
+                                    if let Some(part) = song.write().parts.get_mut(part_index) {
+                                        part.items.push(PartItem::RepeatStart);
+                                    }
+                                },
+                                "||"
+                            }
+
+                            button {
+                                style: "
+                                    padding: 3px 7px; font-size: 11px; font-weight: 700;
+                                    background: #eef2fa; border: 1.5px solid #3a5a8a;
+                                    border-radius: 7px; color: #3a5a8a; cursor: pointer; font-family: inherit;
+                                ",
+                                title: "Insert repeat end (||:)",
+                                onclick: move |_| {
+                                    if let Some(part) = song.write().parts.get_mut(part_index) {
+                                        part.items.push(PartItem::RepeatEnd);
+                                    }
+                                },
+                                "||:"
                             }
 
                             button {
@@ -3012,35 +2968,15 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                                         Some(PartItem::RepeatStart) => rsx! {
                                             div {
                                                 key: "{item_index}",
-                                                style: "
-                                                    background: #eef2fa;
-                                                    border: 2px solid #3a5a8a;
-                                                    border-radius: 12px;
-                                                    padding: 14px 18px;
-                                                    min-width: 64px;
-                                                    text-align: center;
-                                                ",
-                                                span {
-                                                    style: "font-size: 24px; font-weight: 800; color: #3a5a8a; line-height: 1; display: block;",
-                                                    "||:"
-                                                }
+                                                style: "background:#eef2fa;border:2px solid #3a5a8a;border-radius:12px;padding:14px 18px;min-width:64px;text-align:center;",
+                                                span { style: "font-size:24px;font-weight:800;color:#3a5a8a;line-height:1;display:block;", "||" }
                                             }
                                         },
                                         Some(PartItem::RepeatEnd) => rsx! {
                                             div {
                                                 key: "{item_index}",
-                                                style: "
-                                                    background: #eef2fa;
-                                                    border: 2px solid #3a5a8a;
-                                                    border-radius: 12px;
-                                                    padding: 14px 18px;
-                                                    min-width: 64px;
-                                                    text-align: center;
-                                                ",
-                                                span {
-                                                    style: "font-size: 24px; font-weight: 800; color: #3a5a8a; line-height: 1; display: block;",
-                                                    ":||"
-                                                }
+                                                style: "background:#eef2fa;border:2px solid #3a5a8a;border-radius:12px;padding:14px 18px;min-width:64px;text-align:center;",
+                                                span { style: "font-size:24px;font-weight:800;color:#3a5a8a;line-height:1;display:block;", "||:" }
                                             }
                                         },
                                         None => rsx! { div { key: "{item_index}" } },

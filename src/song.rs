@@ -173,10 +173,6 @@ pub enum TabCol {
     Notes([TabCell; 6]),
     /// A vertical barline (end-of-bar marker).
     Barline,
-    /// Repeat-start barline: ||:
-    RepeatStart,
-    /// Repeat-end barline: :||  
-    RepeatEnd,
     /// Ends the current row and starts a new one with fresh string labels.
     LineBreak,
 }
@@ -204,9 +200,9 @@ pub enum PartItem {
     LineBreak,
     /// A repeat barline (e.g. ‖: … :‖). `times` = 0 means plain repeat with no number.
     Repeat { times: u8 },
-    /// Repeat-start barline: ||:
+    /// Repeat-start marker: ||
     RepeatStart,
-    /// Repeat-end barline: :||  
+    /// Repeat-end marker: ||:
     RepeatEnd,
     /// Start of a volta bracket, e.g. "1." or "2.".
     VoltaBracketStart { label: String },
@@ -307,18 +303,6 @@ impl SongPart {
                 TabCol::Barline => {
                     for row in &mut rows {
                         row.push('|');
-                    }
-                    block_has_content = true;
-                }
-                TabCol::RepeatStart => {
-                    for row in &mut rows {
-                        row.push_str("||:");
-                    }
-                    block_has_content = true;
-                }
-                TabCol::RepeatEnd => {
-                    for row in &mut rows {
-                        row.push_str(":||")
                     }
                     block_has_content = true;
                 }

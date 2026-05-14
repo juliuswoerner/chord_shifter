@@ -153,7 +153,6 @@ pub fn generate_pdf_bytes(
                     .iter()
                     .map(|c| match c {
                         TabCol::Barline => barline_w,
-                        TabCol::RepeatStart | TabCol::RepeatEnd => barline_w * 1.8,
                         _ => beat_w,
                     })
                     .sum::<f32>();
@@ -219,77 +218,6 @@ pub fn generate_pdf_bytes(
                             layer.set_outline_thickness(0.35);
                             layer.set_outline_color(Color::Greyscale(Greyscale::new(0.55, None)));
                             cx += barline_w;
-                        }
-                        TabCol::RepeatStart | TabCol::RepeatEnd => {
-                            let repeat_w = barline_w * 1.8;
-                            let is_start = matches!(col, TabCol::RepeatStart);
-                            let sy_top = string_y[0] + 0.5;
-                            let sy_bot = string_y.last().unwrap() - 0.5;
-                            let mid_y = (sy_top + sy_bot) / 2.0;
-                            layer.set_outline_color(Color::Greyscale(Greyscale::new(0.15, None)));
-                            if is_start {
-                                // thick line on left, thin line slightly right, dot on far right
-                                layer.set_outline_thickness(1.4);
-                                layer.add_line(Line {
-                                    points: vec![
-                                        (Point::new(Mm(cx + 0.7), Mm(sy_bot)), false),
-                                        (Point::new(Mm(cx + 0.7), Mm(sy_top)), false),
-                                    ],
-                                    is_closed: false,
-                                });
-                                layer.set_outline_thickness(0.5);
-                                layer.add_line(Line {
-                                    points: vec![
-                                        (Point::new(Mm(cx + 2.5), Mm(sy_bot)), false),
-                                        (Point::new(Mm(cx + 2.5), Mm(sy_top)), false),
-                                    ],
-                                    is_closed: false,
-                                });
-                                // dot: filled circle
-                                layer.set_fill_color(Color::Greyscale(Greyscale::new(0.15, None)));
-                                layer.add_polygon(Polygon {
-                                    rings: vec![vec![
-                                        (Point::new(Mm(cx + 3.8), Mm(mid_y - 0.8)), false),
-                                        (Point::new(Mm(cx + 5.4), Mm(mid_y - 0.8)), false),
-                                        (Point::new(Mm(cx + 5.4), Mm(mid_y + 0.8)), false),
-                                        (Point::new(Mm(cx + 3.8), Mm(mid_y + 0.8)), false),
-                                    ]],
-                                    mode: PolygonMode::Fill,
-                                    winding_order: WindingOrder::NonZero,
-                                });
-                            } else {
-                                // dot on far left, thin line, thick line on right
-                                layer.set_fill_color(Color::Greyscale(Greyscale::new(0.15, None)));
-                                layer.add_polygon(Polygon {
-                                    rings: vec![vec![
-                                        (Point::new(Mm(cx + 0.2), Mm(mid_y - 0.8)), false),
-                                        (Point::new(Mm(cx + 1.8), Mm(mid_y - 0.8)), false),
-                                        (Point::new(Mm(cx + 1.8), Mm(mid_y + 0.8)), false),
-                                        (Point::new(Mm(cx + 0.2), Mm(mid_y + 0.8)), false),
-                                    ]],
-                                    mode: PolygonMode::Fill,
-                                    winding_order: WindingOrder::NonZero,
-                                });
-                                layer.set_outline_thickness(0.5);
-                                layer.add_line(Line {
-                                    points: vec![
-                                        (Point::new(Mm(cx + 3.1), Mm(sy_bot)), false),
-                                        (Point::new(Mm(cx + 3.1), Mm(sy_top)), false),
-                                    ],
-                                    is_closed: false,
-                                });
-                                layer.set_outline_thickness(1.4);
-                                layer.add_line(Line {
-                                    points: vec![
-                                        (Point::new(Mm(cx + repeat_w - 0.7), Mm(sy_bot)), false),
-                                        (Point::new(Mm(cx + repeat_w - 0.7), Mm(sy_top)), false),
-                                    ],
-                                    is_closed: false,
-                                });
-                            }
-                            layer.set_outline_thickness(0.35);
-                            layer.set_outline_color(Color::Greyscale(Greyscale::new(0.55, None)));
-                            cx += repeat_w;
                         }
                         TabCol::Notes(arr) => {
                             let center_x = cx + beat_w * 0.5;
@@ -471,12 +399,12 @@ pub fn generate_pdf_bytes(
                     x += w;
                 }
                 PartItem::RepeatStart => {
-                    let w = root_char_w * 3.0;
+                    let w = root_char_w * 2.5;
                     if x + w > RIGHT {
                         x = MARGIN;
                         y -= row_h + gap;
                     }
-                    layer.use_text("||:", chord_size, Mm(x), Mm(y + 1.5), &font_bold);
+                    layer.use_text("||", chord_size, Mm(x), Mm(y + 1.5), &font_bold);
                     x += w + gap;
                 }
                 PartItem::RepeatEnd => {
@@ -485,7 +413,7 @@ pub fn generate_pdf_bytes(
                         x = MARGIN;
                         y -= row_h + gap;
                     }
-                    layer.use_text(":|", chord_size, Mm(x), Mm(y + 1.5), &font_bold);
+                    layer.use_text("||:", chord_size, Mm(x), Mm(y + 1.5), &font_bold);
                     x += w + gap;
                 }
                 PartItem::Chord(chord) => {
