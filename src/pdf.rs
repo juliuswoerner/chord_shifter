@@ -138,6 +138,12 @@ pub fn generate_pdf_bytes(
             }
 
             for seg in &segments {
+                // Skip empty segments (no columns at all) — these have nothing
+                // to render and would just consume vertical space at the top.
+                if seg.is_empty() {
+                    continue;
+                }
+
                 if y < MARGIN + block_h + 2.0 {
                     break;
                 }

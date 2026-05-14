@@ -275,27 +275,32 @@ impl SongPart {
             rows[i] = format!("{label}|");
         }
         let mut output = String::new();
+        let mut block_has_content = false; // true once any Notes/Barline seen in current block
         for col in &self.tab_grid {
             match col {
                 TabCol::LineBreak => {
-                    // close current block
-                    for row in &mut rows {
-                        row.push('|');
+                    // Only flush if the current block has actual content.
+                    if block_has_content {
+                        for row in &mut rows {
+                            row.push('|');
+                        }
+                        for row in &rows {
+                            output.push_str(row);
+                            output.push('\n');
+                        }
+                        output.push('\n'); // blank separator line
                     }
-                    for row in &rows {
-                        output.push_str(row);
-                        output.push('\n');
-                    }
-                    output.push('\n'); // blank separator line
-                                       // start fresh block
+                    // start fresh block
                     for (i, label) in LABELS.iter().enumerate() {
                         rows[i] = format!("{label}|");
                     }
+                    block_has_content = false;
                 }
                 TabCol::Barline => {
                     for row in &mut rows {
                         row.push('|');
                     }
+                    block_has_content = true;
                 }
                 TabCol::Notes(arr) => {
                     for (str_idx, cell) in arr.iter().enumerate() {
@@ -308,16 +313,19 @@ impl SongPart {
                             TabCell::Empty => rows[str_idx].push_str("---"),
                         }
                     }
+                    block_has_content = true;
                 }
             }
         }
-        // close and flush last block
-        for row in &mut rows {
-            row.push('|');
-        }
-        for row in &rows {
-            output.push_str(row);
-            output.push('\n');
+        // close and flush last block (only if it has content)
+        if block_has_content {
+            for row in &mut rows {
+                row.push('|');
+            }
+            for row in &rows {
+                output.push_str(row);
+                output.push('\n');
+            }
         }
         if output.ends_with('\n') {
             output.pop();
