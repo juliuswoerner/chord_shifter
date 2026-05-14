@@ -339,7 +339,9 @@ struct SongRow {
     username: String,
 }
 
-use song::{apply_notation, Chord, ChordQuality, Notation, PartItem, PartKind, Song};
+use song::{
+    apply_notation, Chord, ChordQuality, Notation, PartItem, PartKind, Song, TabCell, TabCol,
+};
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 #[derive(Routable, Clone, PartialEq)]
@@ -1714,9 +1716,7 @@ fn LoginScreen(db: Signal<Option<Db>>, mut current_user: Signal<Option<User>>) -
 
 #[component]
 fn TabEditor(song: Signal<Song>, part_index: usize) -> Element {
-    // (col, string_index) of the cell currently being edited
     let mut editing: Signal<Option<(usize, usize)>> = use_signal(|| None);
-    // Buffer for the value while the user is typing in a cell
     let mut edit_buf: Signal<String> = use_signal(String::new);
 
     const STRING_NAMES: [&str; 6] = ["e", "B", "G", "D", "A", "E"];
@@ -1734,44 +1734,66 @@ fn TabEditor(song: Signal<Song>, part_index: usize) -> Element {
             div {
                 style: "display: inline-block; background: #fff; border: 1.5px solid #b5d6b5; border-radius: 8px; padding: 10px 14px 12px;",
 
-                // ── Header row: per-column delete buttons + add-beat button ──
+                // ── Header row: delete buttons + add-beat / add-barline ──
                 div {
                     style: "display: flex; align-items: center; margin-bottom: 2px; padding-left: 34px;",
                     for col in 0usize..col_count {
-                        div {
-                            key: "hd-{col}",
-                            style: "width: 36px; display: flex; justify-content: center;",
-                            button {
-                                style: "background: none; border: none; font-size: 10px; color: #ccc; cursor: pointer; padding: 0; line-height: 1; font-family: inherit;",
-                                title: "Remove this beat",
-                                onclick: move |_| {
-                                    if let Some(part) = song.write().parts.get_mut(part_index) {
-                                        if col < part.tab_grid.len() {
-                                            part.tab_grid.remove(col);
-                                        }
+                        {
+                            let is_barline = song
+                                .read()
+                                .parts
+                                .get(part_index)
+                                .and_then(|p| p.tab_grid.get(col))
+                                .map(|c| matches!(c, TabCol::Barline))
+                                .unwrap_or(false);
+                            let w = if is_barline { "18px" } else { "36px" };
+                            rsx! {
+                                div {
+                                    key: "hd-{col}",
+                                    style: "width: {w}; display: flex; justify-content: center;",
+                                    button {
+                                        style: "background: none; border: none; font-size: 10px; color: #ccc; cursor: pointer; padding: 0; line-height: 1; font-family: inherit;",
+                                        title: "Remove",
+                                        onclick: move |_| {
+                                            if let Some(part) = song.write().parts.get_mut(part_index) {
+                                                if col < part.tab_grid.len() {
+                                                    part.tab_grid.remove(col);
+                                                }
+                                            }
+                                            editing.set(None);
+                                        },
+                                        "\u{2715}"
                                     }
-                                    editing.set(None);
-                                },
-                                "\u{2715}"
+                                }
                             }
                         }
                     }
                     div {
-                        style: "width: 36px; display: flex; justify-content: center;",
+                        style: "display: flex; gap: 4px; margin-left: 6px;",
                         button {
                             style: "background: none; border: 1px dashed #8fba8f; border-radius: 4px; font-size: 12px; color: #5c7a5c; cursor: pointer; padding: 1px 7px; font-family: inherit;",
                             title: "Add beat",
                             onclick: move |_| {
                                 if let Some(part) = song.write().parts.get_mut(part_index) {
-                                    part.tab_grid.push([None; 6]);
+                                    part.tab_grid.push(TabCol::Notes([TabCell::Empty; 6]));
                                 }
                             },
                             "+"
                         }
+                        button {
+                            style: "background: none; border: 1px dashed #a0b4cc; border-radius: 4px; font-size: 13px; font-weight: 700; color: #6a7fa6; cursor: pointer; padding: 1px 8px; font-family: Courier, monospace;",
+                            title: "Add barline (end of bar)",
+                            onclick: move |_| {
+                                if let Some(part) = song.write().parts.get_mut(part_index) {
+                                    part.tab_grid.push(TabCol::Barline);
+                                }
+                            },
+                            "|"
+                        }
                     }
                 }
 
-                // ── One row per string ────────────────────────────────────
+                // ── One row per string ───────────────────────────
                 for str_idx in 0usize..6 {
                     div {
                         key: "row-{str_idx}",
@@ -1786,70 +1808,105 @@ fn TabEditor(song: Signal<Song>, part_index: usize) -> Element {
 
                         for col in 0usize..col_count {
                             {
-                                let is_editing_cell = matches!(
-                                    *editing.read(),
-                                    Some((c, s)) if c == col && s == str_idx
-                                );
-                                let fret: Option<u8> = song
+                                let is_barline = song
                                     .read()
                                     .parts
                                     .get(part_index)
                                     .and_then(|p| p.tab_grid.get(col))
-                                    .map(|c| c[str_idx])
-                                    .flatten();
-                                let has_fret = fret.is_some();
-                                let fret_display = fret.map(|f| f.to_string()).unwrap_or_default();
-                                let cell_bg = if has_fret { "background:#d8edd8;" } else { "background:transparent;" };
-                                let cell_style = format!("position:relative;z-index:1;width:30px;height:26px;display:flex;align-items:center;justify-content:center;cursor:pointer;user-select:none;border-radius:4px;{cell_bg}");
+                                    .map(|c| matches!(c, TabCol::Barline))
+                                    .unwrap_or(false);
 
-                                if is_editing_cell {
+                                if is_barline {
                                     rsx! {
                                         div {
                                             key: "{col}",
-                                            style: "position:relative;width:36px;height:32px;display:flex;align-items:center;justify-content:center;flex-shrink:0;",
+                                            style: "position:relative;width:18px;height:32px;display:flex;align-items:center;justify-content:center;flex-shrink:0;",
+                                            // string line behind
                                             div { style: "position:absolute;top:50%;left:0;right:0;height:2px;background:#aac8aa;transform:translateY(-50%);z-index:0;" }
-                                            input {
-                                                style: "position:relative;z-index:1;width:30px;height:26px;font-family:Courier,monospace;font-size:13px;font-weight:700;text-align:center;border:2px solid #5c7a5c;border-radius:4px;background:#f6fbf6;outline:none;padding:0;box-sizing:border-box;",
-                                                r#type: "text",
-                                                inputmode: "numeric",
-                                                maxlength: "2",
-                                                autofocus: true,
-                                                value: "{edit_buf}",
-                                                oninput: move |e| { edit_buf.set(e.value()); },
-                                                onblur: move |_| {
-                                                    let val = edit_buf.read().clone();
-                                                    let parsed = val.parse::<u8>().ok().filter(|&n| n <= 24);
-                                                    if let Some(part) = song.write().parts.get_mut(part_index) {
-                                                        if let Some(col_data) = part.tab_grid.get_mut(col) {
-                                                            col_data[str_idx] = parsed;
-                                                        }
-                                                    }
-                                                    editing.set(None);
-                                                },
-                                            }
+                                            // vertical barline
+                                            div { style: "position:absolute;top:2px;bottom:2px;left:50%;width:2px;background:#6a7fa6;border-radius:1px;transform:translateX(-50%);z-index:1;" }
                                         }
                                     }
                                 } else {
-                                    rsx! {
-                                        div {
-                                            key: "{col}",
-                                            style: "position:relative;width:36px;height:32px;display:flex;align-items:center;justify-content:center;flex-shrink:0;",
-                                            div { style: "position:absolute;top:50%;left:0;right:0;height:2px;background:#aac8aa;transform:translateY(-50%);z-index:0;" }
+                                    let is_editing_cell = matches!(
+                                        *editing.read(),
+                                        Some((c, s)) if c == col && s == str_idx
+                                    );
+                                    let cell: TabCell = song
+                                        .read()
+                                        .parts
+                                        .get(part_index)
+                                        .and_then(|p| p.tab_grid.get(col))
+                                        .and_then(|cd| {
+                                            if let TabCol::Notes(arr) = cd {
+                                                Some(arr[str_idx])
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .unwrap_or(TabCell::Empty);
+                                    let (cell_label, label_color, cell_bg) = match cell {
+                                        TabCell::Fret(n) => (n.to_string(), "#1a1a2e", "background:#d8edd8;"),
+                                        TabCell::Muted => ("x".to_string(), "#c0392b", "background:#fde8e8;"),
+                                        TabCell::Empty => ("\u{2013}".to_string(), "#c8dcc8", "background:transparent;"),
+                                    };
+                                    let has_value = !matches!(cell, TabCell::Empty);
+                                    let fw = if has_value { "700" } else { "400" };
+                                    let cell_style = format!("position:relative;z-index:1;width:30px;height:26px;display:flex;align-items:center;justify-content:center;cursor:pointer;user-select:none;border-radius:4px;{cell_bg}");
+                                    let label_style = format!("font-family:Courier,monospace;font-size:13px;font-weight:{fw};color:{label_color};");
+
+                                    if is_editing_cell {
+                                        rsx! {
                                             div {
-                                                style: "{cell_style}",
-                                                onclick: move |_| {
-                                                    edit_buf.set(fret.map(|f| f.to_string()).unwrap_or_default());
-                                                    editing.set(Some((col, str_idx)));
-                                                },
-                                                if has_fret {
+                                                key: "{col}",
+                                                style: "position:relative;width:36px;height:32px;display:flex;align-items:center;justify-content:center;flex-shrink:0;",
+                                                div { style: "position:absolute;top:50%;left:0;right:0;height:2px;background:#aac8aa;transform:translateY(-50%);z-index:0;" }
+                                                input {
+                                                    style: "position:relative;z-index:1;width:30px;height:26px;font-family:Courier,monospace;font-size:13px;font-weight:700;text-align:center;border:2px solid #5c7a5c;border-radius:4px;background:#f6fbf6;outline:none;padding:0;box-sizing:border-box;",
+                                                    r#type: "text",
+                                                    maxlength: "2",
+                                                    autofocus: true,
+                                                    value: "{edit_buf}",
+                                                    oninput: move |e| { edit_buf.set(e.value()); },
+                                                    onblur: move |_| {
+                                                        let val = edit_buf.read().trim().to_lowercase();
+                                                        let new_cell = if val == "x" {
+                                                            TabCell::Muted
+                                                        } else if let Some(n) = val.parse::<u8>().ok().filter(|&n| n <= 24) {
+                                                            TabCell::Fret(n)
+                                                        } else {
+                                                            TabCell::Empty
+                                                        };
+                                                        if let Some(part) = song.write().parts.get_mut(part_index) {
+                                                            if let Some(TabCol::Notes(arr)) = part.tab_grid.get_mut(col) {
+                                                                arr[str_idx] = new_cell;
+                                                            }
+                                                        }
+                                                        editing.set(None);
+                                                    },
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        rsx! {
+                                            div {
+                                                key: "{col}",
+                                                style: "position:relative;width:36px;height:32px;display:flex;align-items:center;justify-content:center;flex-shrink:0;",
+                                                div { style: "position:absolute;top:50%;left:0;right:0;height:2px;background:#aac8aa;transform:translateY(-50%);z-index:0;" }
+                                                div {
+                                                    style: "{cell_style}",
+                                                    onclick: move |_| {
+                                                        let init = match cell {
+                                                            TabCell::Fret(n) => n.to_string(),
+                                                            TabCell::Muted => "x".to_string(),
+                                                            TabCell::Empty => String::new(),
+                                                        };
+                                                        edit_buf.set(init);
+                                                        editing.set(Some((col, str_idx)));
+                                                    },
                                                     span {
-                                                        style: "font-family:Courier,monospace;font-size:13px;font-weight:700;color:#1a1a2e;",
-                                                        "{fret_display}"
-                                                    }
-                                                } else {
-                                                    span {
-                                                        style: "font-family:Courier,monospace;font-size:13px;color:#c8dcc8;",
-                                                        "\u{2013}"
+                                                        style: "{label_style}",
+                                                        "{cell_label}"
                                                     }
                                                 }
                                             }

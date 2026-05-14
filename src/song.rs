@@ -152,6 +152,29 @@ impl Chord {
     }
 }
 
+// ── Tab grid types ───────────────────────────────────────────────────────────
+
+/// A single note cell in a tab grid column.
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub enum TabCell {
+    /// No note on this string at this beat.
+    #[default]
+    Empty,
+    /// A fretted note (0 = open, 1–24).
+    Fret(u8),
+    /// Muted / dead string (written as "x").
+    Muted,
+}
+
+/// A single column in a tab grid — either a beat with 6 note cells, or a barline.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum TabCol {
+    /// Six note cells (one per string), index 0 = high e.
+    Notes([TabCell; 6]),
+    /// A vertical barline (end-of-bar marker).
+    Barline,
+}
+
 // ── Part kind ─────────────────────────────────────────────────────────────────
 
 /// Whether a song part holds chords or a guitar-tab riff.
@@ -194,9 +217,9 @@ pub struct SongPart {
     #[serde(default)]
     pub tab: String,
     /// Structured tab grid — 6 strings × N beats. Index 0 = high e.
-    /// Each column is `[Option<u8>; 6]` where `None` means no note.
+    /// Each column is either `Notes([TabCell; 6])` or a `Barline`.
     #[serde(default)]
-    pub tab_grid: Vec<[Option<u8>; 6]>,
+    pub tab_grid: Vec<TabCol>,
     /// All items in this part in order — only used when `kind == PartKind::Chords`.
     #[serde(alias = "chords")]
     pub items: Vec<PartItem>,
@@ -250,11 +273,23 @@ impl SongPart {
             rows[i] = format!("{label}|");
         }
         for col in &self.tab_grid {
-            for (str_idx, cell) in col.iter().enumerate() {
-                match cell {
-                    Some(f) if *f >= 10 => rows[str_idx].push_str(&format!("{f}-")),
-                    Some(f) => rows[str_idx].push_str(&format!("-{f}-")),
-                    None => rows[str_idx].push_str("---"),
+            match col {
+                TabCol::Barline => {
+                    for row in &mut rows {
+                        row.push('|');
+                    }
+                }
+                TabCol::Notes(arr) => {
+                    for (str_idx, cell) in arr.iter().enumerate() {
+                        match cell {
+                            TabCell::Fret(f) if *f >= 10 => {
+                                rows[str_idx].push_str(&format!("{f}-"))
+                            }
+                            TabCell::Fret(f) => rows[str_idx].push_str(&format!("-{f}-")),
+                            TabCell::Muted => rows[str_idx].push_str("-x-"),
+                            TabCell::Empty => rows[str_idx].push_str("---"),
+                        }
+                    }
                 }
             }
         }
