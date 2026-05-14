@@ -1,6 +1,6 @@
 [application]
 name             = "chord_shifter"
-default_platform = "desktop"
+default_platform = "web"
 
 [web.app]
 title = "Chord Shifter"
