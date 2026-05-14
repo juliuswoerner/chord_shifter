@@ -1787,14 +1787,18 @@ fn TabEditor(song: Signal<Song>, part_index: usize) -> Element {
                                 for local_i in 0..seg_len {
                                     {
                                         let col = seg_cols[local_i];
-                                        let is_barline = song
+                                        let col_w_kind = song
                                             .read()
                                             .parts
                                             .get(part_index)
                                             .and_then(|p| p.tab_grid.get(col))
-                                            .map(|c| matches!(c, TabCol::Barline))
-                                            .unwrap_or(false);
-                                        let w = if is_barline { "18px" } else { "36px" };
+                                            .map(|c| match c {
+                                                TabCol::Barline => 1u8,
+                                                TabCol::RepeatStart | TabCol::RepeatEnd => 2u8,
+                                                _ => 0u8,
+                                            })
+                                            .unwrap_or(0);
+                                        let w = match col_w_kind { 1 => "18px", 2 => "22px", _ => "36px" };
                                         rsx! {
                                             div {
                                                 key: "hd-{col}",
@@ -1843,6 +1847,26 @@ fn TabEditor(song: Signal<Song>, part_index: usize) -> Element {
                                             "|"
                                         }
                                         button {
+                                            style: "background: none; border: 1px dashed #3a5a8a; border-radius: 4px; font-size: 11px; font-weight: 700; color: #3a5a8a; cursor: pointer; padding: 1px 6px; font-family: Courier, monospace;",
+                                            title: "Add repeat start (||:)",
+                                            onclick: move |_| {
+                                                if let Some(part) = song.write().parts.get_mut(part_index) {
+                                                    part.tab_grid.push(TabCol::RepeatStart);
+                                                }
+                                            },
+                                            "||:"
+                                        }
+                                        button {
+                                            style: "background: none; border: 1px dashed #3a5a8a; border-radius: 4px; font-size: 11px; font-weight: 700; color: #3a5a8a; cursor: pointer; padding: 1px 6px; font-family: Courier, monospace;",
+                                            title: "Add repeat end (:||)",
+                                            onclick: move |_| {
+                                                if let Some(part) = song.write().parts.get_mut(part_index) {
+                                                    part.tab_grid.push(TabCol::RepeatEnd);
+                                                }
+                                            },
+                                            ":||"
+                                        }
+                                        button {
                                             style: "background: none; border: 1px dashed #c8a8e8; border-radius: 4px; font-size: 12px; color: #9b6fc4; cursor: pointer; padding: 1px 7px; font-family: inherit;",
                                             title: "Add line break (new row)",
                                             onclick: move |_| {
@@ -1887,13 +1911,21 @@ fn TabEditor(song: Signal<Song>, part_index: usize) -> Element {
                                     for local_i in 0..seg_len {
                                         {
                                             let col = seg_cols[local_i];
-                                            let is_barline = song
+                                            let col_kind = song
                                                 .read()
                                                 .parts
                                                 .get(part_index)
                                                 .and_then(|p| p.tab_grid.get(col))
-                                                .map(|c| matches!(c, TabCol::Barline))
-                                                .unwrap_or(false);
+                                                .map(|c| match c {
+                                                    TabCol::Barline => 1u8,
+                                                    TabCol::RepeatStart => 2u8,
+                                                    TabCol::RepeatEnd => 3u8,
+                                                    _ => 0u8,
+                                                })
+                                                .unwrap_or(0);
+                                            let is_barline = col_kind == 1;
+                                            let is_repeat_start = col_kind == 2;
+                                            let is_repeat_end = col_kind == 3;
 
                                             if is_barline {
                                                 rsx! {
@@ -1902,6 +1934,30 @@ fn TabEditor(song: Signal<Song>, part_index: usize) -> Element {
                                                         style: "position:relative;width:18px;height:32px;display:flex;align-items:center;justify-content:center;flex-shrink:0;",
                                                         div { style: "position:absolute;top:50%;left:0;right:0;height:2px;background:#aac8aa;transform:translateY(-50%);z-index:0;" }
                                                         div { style: "position:absolute;top:2px;bottom:2px;left:50%;width:2px;background:#6a7fa6;border-radius:1px;transform:translateX(-50%);z-index:1;" }
+                                                    }
+                                                }
+                                            } else if is_repeat_start {
+                                                // ||:  — thick line + thin line + dot on right
+                                                rsx! {
+                                                    div {
+                                                        key: "{col}",
+                                                        style: "position:relative;width:22px;height:32px;display:flex;align-items:center;justify-content:center;flex-shrink:0;",
+                                                        div { style: "position:absolute;top:50%;left:0;right:0;height:2px;background:#aac8aa;transform:translateY(-50%);z-index:0;" }
+                                                        div { style: "position:absolute;top:2px;bottom:2px;left:2px;width:4px;background:#3a5a8a;border-radius:1px;z-index:1;" }
+                                                        div { style: "position:absolute;top:2px;bottom:2px;left:9px;width:2px;background:#3a5a8a;border-radius:1px;z-index:1;" }
+                                                        div { style: "position:absolute;top:50%;left:15px;width:5px;height:5px;background:#3a5a8a;border-radius:50%;transform:translateY(-50%);z-index:1;" }
+                                                    }
+                                                }
+                                            } else if is_repeat_end {
+                                                // :||  — dot on left + thin line + thick line
+                                                rsx! {
+                                                    div {
+                                                        key: "{col}",
+                                                        style: "position:relative;width:22px;height:32px;display:flex;align-items:center;justify-content:center;flex-shrink:0;",
+                                                        div { style: "position:absolute;top:50%;left:0;right:0;height:2px;background:#aac8aa;transform:translateY(-50%);z-index:0;" }
+                                                        div { style: "position:absolute;top:50%;left:2px;width:5px;height:5px;background:#3a5a8a;border-radius:50%;transform:translateY(-50%);z-index:1;" }
+                                                        div { style: "position:absolute;top:2px;bottom:2px;left:11px;width:2px;background:#3a5a8a;border-radius:1px;z-index:1;" }
+                                                        div { style: "position:absolute;top:2px;bottom:2px;left:16px;width:4px;background:#3a5a8a;border-radius:1px;z-index:1;" }
                                                     }
                                                 }
                                             } else {

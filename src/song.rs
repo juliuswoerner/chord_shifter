@@ -173,6 +173,10 @@ pub enum TabCol {
     Notes([TabCell; 6]),
     /// A vertical barline (end-of-bar marker).
     Barline,
+    /// Repeat-start barline: ||:
+    RepeatStart,
+    /// Repeat-end barline: :||  
+    RepeatEnd,
     /// Ends the current row and starts a new one with fresh string labels.
     LineBreak,
 }
@@ -299,6 +303,18 @@ impl SongPart {
                 TabCol::Barline => {
                     for row in &mut rows {
                         row.push('|');
+                    }
+                    block_has_content = true;
+                }
+                TabCol::RepeatStart => {
+                    for row in &mut rows {
+                        row.push_str("||:");
+                    }
+                    block_has_content = true;
+                }
+                TabCol::RepeatEnd => {
+                    for row in &mut rows {
+                        row.push_str(":||")
                     }
                     block_has_content = true;
                 }
