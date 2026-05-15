@@ -3,7 +3,7 @@
 use dioxus::prelude::*;
 use manganis::Asset;
 
-use song::Instrument;
+use chord_shifter::song::Instrument;
 
 const ICON_BASE: Asset = manganis::asset!("/assets/icons/base.png");
 const ICON_ELECTRIC: Asset = manganis::asset!("/assets/icons/electric.png");
@@ -22,9 +22,10 @@ fn inst_icon(inst: Instrument) -> Asset {
     }
 }
 
-mod auth;
+// song and auth live in the shared library crate (src/lib.rs)
+use chord_shifter::auth;
+use chord_shifter::song;
 mod pdf;
-mod song;
 
 // ── Trigger a browser PDF download ───────────────────────────────────────────
 #[allow(dead_code)]
