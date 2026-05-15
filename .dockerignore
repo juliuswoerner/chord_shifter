@@ -1,0 +1,20 @@
+# Build artifacts — these are large and rebuilt inside Docker anyway
+target/
+dist/
+
+# Local database files — never ship these
+*.db
+*.db-shm
+*.db-wal
+
+# Git internals
+.git/
+.gitignore
+
+# Local PDF exports (dev artefacts)
+*.pdf
+
+# Editor / OS noise
+.DS_Store
+.vscode/
+*.swp

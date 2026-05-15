@@ -3,27 +3,58 @@ name = "chord_shifter"
 version = "0.1.0"
 edition = "2021"
 
+# ── Binaries ──────────────────────────────────────────────────────────────────
+
+# WASM frontend — build with: dx build --platform web --release
+[[bin]]
+name    = "chord_shifter"
+path    = "src/main.rs"
+required-features = ["web"]
+
+# Axum backend — build with: cargo build --bin server --features server --release
+[[bin]]
+name    = "server"
+path    = "src/bin/server.rs"
+required-features = ["server"]
+
+# ── Features ──────────────────────────────────────────────────────────────────
+
 [features]
 default = ["web"]
-web     = ["dioxus/web", "dioxus/minimal", "dioxus/router"]
+web = [
+    "dioxus/web", "dioxus/minimal", "dioxus/router",
+    "dep:manganis", "dep:web-sys", "dep:wasm-bindgen", "dep:js-sys", "dep:zip", "dep:printpdf",
+]
+server = ["dep:axum", "dep:tokio", "dep:sqlx", "dep:tower-http", "dep:jsonwebtoken"]
+
+# ── Shared deps (compiled for all targets) ────────────────────────────────────
 
 [dependencies]
 dioxus      = { version = "0.6", default-features = false }
-printpdf    = "0.6"
 serde       = { version = "1", features = ["derive"] }
 serde_json  = "1"
-# Password hashing – pure Rust, works on wasm32
+# Password hashing – pure Rust, works on both wasm32 and native
 argon2      = { version = "0.5", default-features = false, features = ["alloc"] }
-# CSPRNG for salt generation; wasm_js backend makes getrandom work in the browser
+# CSPRNG; the `js` feature is only activated on wasm32 by getrandom itself
 getrandom   = { version = "0.2", features = ["js"] }
-manganis    = "0.7"
-web-sys     = { version = "0.3", features = [
+
+# ── Web-only deps (WASM frontend) ─────────────────────────────────────────────
+printpdf     = { version = "0.6", optional = true }
+manganis     = { version = "0.7", optional = true }
+web-sys      = { version = "0.3", optional = true, features = [
     "Blob", "BlobPropertyBag", "Document",
     "HtmlAnchorElement", "Storage", "Url", "Window",
 ] }
-wasm-bindgen = "0.2"
-js-sys       = "0.3"
-zip          = { version = "2", default-features = false, features = ["deflate"] }
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys       = { version = "0.3", optional = true }
+zip          = { version = "2",   optional = true, default-features = false, features = ["deflate"] }
+
+# ── Server-only deps ──────────────────────────────────────────────────────────
+axum           = { version = "0.8", optional = true }
+tokio          = { version = "1",   optional = true, features = ["full"] }
+sqlx           = { version = "0.8", optional = true, features = ["sqlite", "runtime-tokio"] }
+tower-http     = { version = "0.6", optional = true, features = ["fs", "cors"] }
+jsonwebtoken   = { version = "9",   optional = true }
 
 [profile.release]
 opt-level = "z"
