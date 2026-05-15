@@ -4,7 +4,6 @@ default_platform = "web"
 
 [web.app]
 title = "Chord Shifter"
-# base_path = "chord_shifter"  # Uncomment only for GitHub Pages deployment
 
 [web.watcher]
 watch_path = ["src"]
