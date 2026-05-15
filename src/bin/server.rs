@@ -29,7 +29,10 @@ use axum::{
 };
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
-use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    SqlitePool,
+};
 use std::net::SocketAddr;
 use tower_http::{cors::CorsLayer, services::ServeDir};
 
@@ -168,9 +171,14 @@ async fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(8080);
 
+    let connect_opts = database_url
+        .parse::<SqliteConnectOptions>()
+        .expect("Invalid DATABASE_URL")
+        .create_if_missing(true);
+
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
-        .connect(&database_url)
+        .connect_with(connect_opts)
         .await
         .expect("Failed to connect to SQLite database");
 
