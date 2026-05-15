@@ -24,8 +24,8 @@ COPY . .
 # Build the WASM frontend — output goes to ./dist/
 RUN dx build --platform web --release
 
-# Build the Axum server binary
-RUN cargo build --bin server --features server --release
+# Build the Axum server binary (disable default 'web' feature — wasm deps don't compile on native)
+RUN cargo build --bin server --no-default-features --features server --release
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
 #
