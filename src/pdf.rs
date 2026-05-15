@@ -1,7 +1,7 @@
 use printpdf::*;
 use std::io::BufWriter;
 
-use crate::song::{apply_notation, Notation, Song};
+use chord_shifter::song::{apply_notation, Notation, Song};
 
 const PAGE_W: f32 = 210.0;
 const PAGE_H: f32 = 297.0;
