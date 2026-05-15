@@ -17,6 +17,8 @@ primary_region = "fra"           # Frankfurt — change to the region closest to
 [env]
   PORT         = "8080"
   DATABASE_URL = "sqlite:/data/chord_shifter.db"
+  # JWT_SECRET must be set as a Fly secret — never put the real value here:
+  #   fly secrets set JWT_SECRET=$(openssl rand -hex 32)
 
 [[mounts]]
   source      = "data"           # Fly volume name (created with `fly volumes create data`)

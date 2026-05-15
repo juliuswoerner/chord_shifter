@@ -7,26 +7,27 @@
 //!
 //! # Run
 //! ```bash
-//! DATABASE_URL=sqlite:chord_shifter.db PORT=8080 ./target/release/server
+//! DATABASE_URL=sqlite:chord_shifter.db JWT_SECRET=changeme PORT=8080 ./target/release/server
 //! ```
 //!
-//! # API
-//! POST   /api/auth/register          — create account
-//! POST   /api/auth/login             — verify credentials, returns user id
-//! GET    /api/songs?user_id=<id>     — list songs for a user (+ shared songs)
-//! POST   /api/songs                  — create / update a song
-//! GET    /api/songs/:id              — load full song
-//! DELETE /api/songs/:id              — delete a song
+//! # API  (all /api/songs/* require `Authorization: Bearer <token>`)
+//! POST   /api/auth/register  — create account, returns JWT
+//! POST   /api/auth/login     — verify credentials, returns JWT
+//! GET    /api/songs          — list caller's songs + shared demo songs
+//! POST   /api/songs          — create / update a song (owner = token user)
+//! GET    /api/songs/:id      — load song (own or shared)
+//! DELETE /api/songs/:id      — delete own song
 //!
-//! Static files are served from ./dist/ (the output of `dx build --release`).
+//! Static files are served from ./dist/ (output of `dx build --release`).
 
 use axum::{
-    extract::{Path, Query, State},
-    http::StatusCode,
+    extract::{FromRequestParts, Path, State},
+    http::{header::AUTHORIZATION, request::Parts, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
+use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use std::net::SocketAddr;
@@ -39,6 +40,77 @@ use chord_shifter::{auth, song};
 #[derive(Clone)]
 struct AppState {
     db: SqlitePool,
+    jwt_secret: String,
+}
+
+// ── JWT types ─────────────────────────────────────────────────────────────────
+
+/// Payload embedded inside every JWT token.
+#[derive(Debug, Serialize, Deserialize)]
+struct Claims {
+    /// User id (the "subject" field in JWT parlance).
+    sub: i64,
+    username: String,
+    /// Expiry as a Unix timestamp (seconds).
+    exp: usize,
+}
+
+/// Axum extractor: reads `Authorization: Bearer <token>`, validates the
+/// signature and expiry, and injects the caller's identity into handlers.
+struct AuthUser {
+    id: i64,
+    #[allow(dead_code)]
+    username: String,
+}
+
+impl FromRequestParts<AppState> for AuthUser {
+    type Rejection = (StatusCode, String);
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let token = parts
+            .headers
+            .get(AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .ok_or_else(|| (StatusCode::UNAUTHORIZED, "Missing Bearer token".into()))?;
+
+        let data = decode::<Claims>(
+            token,
+            &DecodingKey::from_secret(state.jwt_secret.as_bytes()),
+            &Validation::default(),
+        )
+        .map_err(|e| (StatusCode::UNAUTHORIZED, format!("Invalid token: {e}")))?;
+
+        Ok(AuthUser {
+            id: data.claims.sub,
+            username: data.claims.username,
+        })
+    }
+}
+
+/// Mint a JWT token for `user_id` / `username` that expires in 30 days.
+fn make_token(user_id: i64, username: &str, secret: &str) -> Result<String, String> {
+    let exp = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 30 * 24 * 3600) as usize;
+
+    let claims = Claims {
+        sub: user_id,
+        username: username.to_string(),
+        exp,
+    };
+
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .map_err(|e| e.to_string())
 }
 
 // ── Request / Response types ──────────────────────────────────────────────────
@@ -49,9 +121,13 @@ struct RegisterRequest {
     password: String,
 }
 
+/// Returned by both register and login.
 #[derive(Serialize)]
-struct RegisterResponse {
+struct AuthResponse {
     id: i64,
+    username: String,
+    /// JWT — store this in the frontend and send as `Authorization: Bearer <token>`.
+    token: String,
 }
 
 #[derive(Deserialize)]
@@ -60,28 +136,15 @@ struct LoginRequest {
     password: String,
 }
 
-#[derive(Serialize)]
-struct LoginResponse {
-    id: i64,
-    username: String,
-}
-
-/// Body for both create and update operations.
+/// Song body — `user_id` is intentionally absent; it is derived from the token.
 #[derive(Deserialize)]
 struct SaveSongRequest {
     song: song::Song,
-    user_id: i64,
 }
 
 #[derive(Serialize)]
 struct SaveSongResponse {
     id: i64,
-}
-
-#[derive(Deserialize)]
-struct ListSongsQuery {
-    /// Omit or pass 0 to list only the shared demo songs.
-    user_id: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -98,6 +161,8 @@ struct SongListItem {
 async fn main() {
     let database_url =
         std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:chord_shifter.db".to_string());
+    let jwt_secret =
+        std::env::var("JWT_SECRET").expect("JWT_SECRET environment variable must be set");
     let port: u16 = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
@@ -117,7 +182,10 @@ async fn main() {
 
     run_migrations(&pool).await;
 
-    let state = AppState { db: pool };
+    let state = AppState {
+        db: pool,
+        jwt_secret,
+    };
 
     let api = Router::new()
         .route("/auth/register", post(register))
@@ -142,7 +210,6 @@ async fn main() {
 // ── Migrations ────────────────────────────────────────────────────────────────
 
 async fn run_migrations(pool: &SqlitePool) {
-    // Users table
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS users (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -180,7 +247,7 @@ async fn run_migrations(pool: &SqlitePool) {
 async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
-) -> Result<Json<RegisterResponse>, (StatusCode, String)> {
+) -> Result<Json<AuthResponse>, (StatusCode, String)> {
     let hash =
         auth::hash_password(&req.password).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
@@ -193,13 +260,20 @@ async fn register(
     .await
     .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
 
-    Ok(Json(RegisterResponse { id }))
+    let token = make_token(id, &req.username, &state.jwt_secret)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    Ok(Json(AuthResponse {
+        id,
+        username: req.username,
+        token,
+    }))
 }
 
 async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
-) -> Result<Json<LoginResponse>, (StatusCode, String)> {
+) -> Result<Json<AuthResponse>, (StatusCode, String)> {
     let row = sqlx::query_as::<_, (i64, String, String)>(
         "SELECT id, username, password_hash FROM users WHERE username = ?",
     )
@@ -213,27 +287,30 @@ async fn login(
         return Err((StatusCode::UNAUTHORIZED, "Invalid credentials".into()));
     }
 
-    Ok(Json(LoginResponse {
+    let token = make_token(row.0, &row.1, &state.jwt_secret)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    Ok(Json(AuthResponse {
         id: row.0,
         username: row.1,
+        token,
     }))
 }
 
 // ── Song handlers ─────────────────────────────────────────────────────────────
 
+/// List the authenticated user's songs, plus shared demo songs (user_id = 0).
 async fn list_songs(
     State(state): State<AppState>,
-    Query(q): Query<ListSongsQuery>,
+    user: AuthUser,
 ) -> Result<Json<Vec<SongListItem>>, (StatusCode, String)> {
-    let user_id = q.user_id.unwrap_or(0);
-
     let rows = sqlx::query_as::<_, (i64, String, String, String)>(
         "SELECT id, name, artist, instruments_json
          FROM   songs
          WHERE  user_id = ? OR user_id = 0
          ORDER  BY id",
     )
-    .bind(user_id)
+    .bind(user.id)
     .fetch_all(&state.db)
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -254,8 +331,10 @@ async fn list_songs(
     Ok(Json(items))
 }
 
+/// Create or update a song. The owner is always the authenticated user.
 async fn save_song(
     State(state): State<AppState>,
+    user: AuthUser,
     Json(req): Json<SaveSongRequest>,
 ) -> Result<Json<SaveSongResponse>, (StatusCode, String)> {
     let s = &req.song;
@@ -269,13 +348,13 @@ async fn save_song(
     let ic_json = serde_json::to_string(&s.instrument_capos)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Upsert: update existing row if name + artist + user_id already exist.
+    // Upsert: update if name + artist already exist for this user.
     let existing = sqlx::query_scalar::<_, i64>(
         "SELECT id FROM songs WHERE name = ? AND artist = ? AND user_id = ?",
     )
     .bind(&s.name)
     .bind(&s.artist)
-    .bind(req.user_id)
+    .bind(user.id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -310,7 +389,7 @@ async fn save_song(
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
              RETURNING id",
         )
-        .bind(req.user_id)
+        .bind(user.id)
         .bind(&s.name)
         .bind(&s.artist)
         .bind(&s.key)
@@ -327,8 +406,10 @@ async fn save_song(
     Ok(Json(SaveSongResponse { id }))
 }
 
+/// Load a song. Allowed if the song belongs to the caller or is a shared demo (user_id = 0).
 async fn load_song(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<i64>,
 ) -> Result<Json<song::Song>, (StatusCode, String)> {
     type Row = (
@@ -345,9 +426,11 @@ async fn load_song(
     let row = sqlx::query_as::<_, Row>(
         "SELECT name, artist, key_name, parts_json, instruments_json,
                 vocals_notes, instrument_parts_json, instrument_capos_json
-         FROM   songs WHERE id = ?",
+         FROM   songs
+         WHERE  id = ? AND (user_id = ? OR user_id = 0)",
     )
     .bind(id)
+    .bind(user.id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -371,15 +454,26 @@ async fn load_song(
     }))
 }
 
+/// Delete a song. Only the owner can delete; shared demo songs (user_id = 0) are protected.
 async fn delete_song(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<i64>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    sqlx::query("DELETE FROM songs WHERE id = ?")
+    let affected = sqlx::query("DELETE FROM songs WHERE id = ? AND user_id = ?")
         .bind(id)
+        .bind(user.id)
         .execute(&state.db)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .rows_affected();
+
+    if affected == 0 {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("Song {id} not found or not owned by you"),
+        ));
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }
