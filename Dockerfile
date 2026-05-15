@@ -42,7 +42,7 @@ WORKDIR /app
 COPY --from=builder /app/target/release/server ./server
 
 # Copy the compiled WASM frontend that the server will serve statically
-COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/target/dx/chord_shifter/release/web/public ./dist
 
 # The persistent SQLite volume will be mounted at /data by Fly.io
 RUN mkdir -p /data
