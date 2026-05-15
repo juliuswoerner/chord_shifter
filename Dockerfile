@@ -2,7 +2,7 @@
 #
 # Builds both the WASM frontend (dx build) and the Axum server binary.
 # Uses a cache mount for the Cargo registry so repeated builds are fast.
-FROM rust:1.87-slim AS builder
+FROM rust:1.88-slim AS builder
 
 # System deps: pkg-config + libssl for any TLS crates; also needed by sqlx
 RUN apt-get update && apt-get install -y \
