@@ -109,6 +109,12 @@ async fn main() {
         .await
         .expect("Failed to connect to SQLite database");
 
+    // Enable WAL mode for better concurrent read performance.
+    sqlx::query("PRAGMA journal_mode=WAL")
+        .execute(&pool)
+        .await
+        .expect("Failed to enable WAL mode");
+
     run_migrations(&pool).await;
 
     let state = AppState { db: pool };

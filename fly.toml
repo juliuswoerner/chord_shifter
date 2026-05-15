@@ -1,0 +1,40 @@
+# fly.toml — Fly.io app configuration for Chord Shifter
+#
+# Deploy with:
+#   fly launch    (first time — creates the app and volume)
+#   fly deploy    (subsequent deploys)
+#
+# Required one-time setup after `fly launch`:
+#   fly volumes create data --size 1 --region fra
+#   fly secrets set DATABASE_URL=sqlite:/data/chord_shifter.db
+
+app    = "chord-shifter"
+primary_region = "fra"           # Frankfurt — change to the region closest to your users
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT         = "8080"
+  DATABASE_URL = "sqlite:/data/chord_shifter.db"
+
+[[mounts]]
+  source      = "data"           # Fly volume name (created with `fly volumes create data`)
+  destination = "/data"          # Mount path inside the container
+  initial_size = "1gb"
+
+[http_service]
+  internal_port       = 8080
+  force_https         = true     # Fly.io terminates TLS and forwards to port 8080
+  auto_stop_machines  = false    # Keep the app always alive (no cold-start delays)
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type       = "connections"
+    hard_limit = 250
+    soft_limit = 200
+
+[[vm]]
+  size   = "shared-cpu-1x"      # Cheapest tier — plenty for a personal / small-team app
+  memory = "256mb"
