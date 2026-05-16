@@ -1,3 +1,5 @@
+// Copyright (c) 2026 APSOS — App and Software Solutions Wörner. All rights reserved.
+
 use std::collections::HashMap;
 
 // ── Chord quality ─────────────────────────────────────────────────────────────

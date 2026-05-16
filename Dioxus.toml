@@ -1,3 +1,5 @@
+# Copyright (c) 2026 APSOS — App and Software Solutions Wörner. All rights reserved.
+
 [application]
 name             = "chord_shifter"
 default_platform = "web"
