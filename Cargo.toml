@@ -2,6 +2,8 @@
 name = "chord_shifter"
 version = "0.1.0"
 edition = "2021"
+authors = ["APSOS — App and Software Solutions Wörner"]
+license-file = "LICENSE"
 
 # ── Binaries ──────────────────────────────────────────────────────────────────
 
