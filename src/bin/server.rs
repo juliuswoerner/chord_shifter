@@ -170,6 +170,12 @@ fn decrypt(cipher: &Aes256Gcm, stored: &str) -> Result<String, String> {
     let (nonce_hex, ct_hex) = stored.split_once(':').ok_or("Invalid encrypted format")?;
     let nonce_bytes = hex::decode(nonce_hex).map_err(|e| e.to_string())?;
     let ciphertext = hex::decode(ct_hex).map_err(|e| e.to_string())?;
+    if nonce_bytes.len() != 12 {
+        return Err(format!(
+            "Invalid nonce length: expected 12 bytes, got {}",
+            nonce_bytes.len()
+        ));
+    }
     let nonce = Nonce::from_slice(&nonce_bytes);
     let plaintext = cipher
         .decrypt(nonce, ciphertext.as_ref())
@@ -182,6 +188,12 @@ mod hex {
         bytes.as_ref().iter().map(|b| format!("{b:02x}")).collect()
     }
     pub fn decode(s: &str) -> Result<Vec<u8>, String> {
+        if s.len() % 2 != 0 {
+            return Err("Hex string must have an even number of characters".into());
+        }
+        if !s.as_bytes().iter().all(|b| b.is_ascii_hexdigit()) {
+            return Err("Hex string contains non-hex characters".into());
+        }
         (0..s.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| e.to_string()))
