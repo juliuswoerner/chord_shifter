@@ -291,7 +291,7 @@ impl Db {
     fn create_user(&self, username: &str, password: &str) -> Result<i64, String> {
         let mut users = ls_read_users();
         if users.iter().any(|u| u.username == username) {
-            return Err(format!("Username '{username}' is already taken"));
+            return Err(format!("Email '{username}' is already registered"));
         }
         let hash = auth::hash_password(password)?;
         let id = users.iter().map(|u| u.id).max().unwrap_or(0) + 1;
@@ -1601,7 +1601,7 @@ fn SongView(
 
 #[component]
 fn LoginScreen(db: Signal<Option<Db>>, mut current_user: Signal<Option<User>>) -> Element {
-    let mut username = use_signal(String::new);
+    let mut email = use_signal(String::new);
     let mut password = use_signal(String::new);
     let mut error_msg: Signal<String> = use_signal(String::new);
 
@@ -1648,18 +1648,18 @@ fn LoginScreen(db: Signal<Option<Db>>, mut current_user: Signal<Option<User>>) -
                 "{form_title}"
             }
 
-            // Username
+            // Email
             input {
                 style: "
                     width: 100%; padding: 12px 14px; font-size: 14px;
                     border: 1.5px solid #d0cbc0; border-radius: 8px;
                     outline: none; font-family: inherit; box-sizing: border-box;
                 ",
-                r#type: "text",
-                placeholder: "Username",
-                value: "{username}",
+                r#type: "email",
+                placeholder: "Email address",
+                value: "{email}",
                 oninput: move |e| {
-                    *username.write() = e.value();
+                    *email.write() = e.value();
                     *error_msg.write() = String::new();
                 },
             }
@@ -1697,10 +1697,19 @@ fn LoginScreen(db: Signal<Option<Db>>, mut current_user: Signal<Option<User>>) -
                     letter-spacing: 0.5px;
                 ",
                 onclick: move |_| {
-                    let u = username.read().trim().to_string();
+                    let u = email.read().trim().to_lowercase();
                     let p = password.read().clone();
                     if u.is_empty() || p.is_empty() {
                         *error_msg.write() = "Please fill in all fields.".into();
+                        return;
+                    }
+                    // Validate email format: must contain '@' and a '.' after it.
+                    let at = u.find('@');
+                    let valid_email = at
+                        .map(|i| u[i + 1..].contains('.'))
+                        .unwrap_or(false);
+                    if !valid_email {
+                        *error_msg.write() = "Please enter a valid email address.".into();
                         return;
                     }
                     if let Some(db_ref) = db.read().as_ref() {
@@ -1717,7 +1726,7 @@ fn LoginScreen(db: Signal<Option<Db>>, mut current_user: Signal<Option<User>>) -
                                 Ok(Some(user)) => *current_user.write() = Some(user),
                                 Ok(None) => {
                                     *error_msg.write() =
-                                        "Invalid username or password.".into();
+                                        "Invalid email or password.".into();
                                 }
                                 Err(e) => *error_msg.write() = e.to_string(),
                             }
