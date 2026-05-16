@@ -349,12 +349,27 @@ async fn main() {
     let smtp_username = std::env::var("SMTP_USERNAME").ok();
     let smtp_password = std::env::var("SMTP_PASSWORD").ok();
     let smtp_from = std::env::var("SMTP_FROM").ok();
-    let smtp_configured = smtp_host.is_some();
+    // All four fields must be present for SMTP to be considered configured.
+    // A partial configuration would leave users stuck as unverified with no way to
+    // receive a verification email.
+    let smtp_configured = smtp_host.is_some()
+        && smtp_username.is_some()
+        && smtp_password.is_some()
+        && smtp_from.is_some();
     let app_url = std::env::var("APP_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
     if smtp_configured {
         println!("SMTP configured — email verification enabled.");
     } else {
-        println!("Warning: SMTP not configured. Users will be auto-verified on registration.");
+        // Warn if partially configured so operators catch misconfiguration early.
+        let any_smtp = smtp_host.is_some()
+            || smtp_username.is_some()
+            || smtp_password.is_some()
+            || smtp_from.is_some();
+        if any_smtp {
+            eprintln!("Warning: SMTP partially configured (need SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, SMTP_FROM). Users will be auto-verified.");
+        } else {
+            println!("Warning: SMTP not configured. Users will be auto-verified on registration.");
+        }
     }
 
     let connect_opts = database_url
@@ -412,6 +427,25 @@ async fn main() {
 // ── Migrations ────────────────────────────────────────────────────────────────
 
 async fn run_migrations(pool: &SqlitePool) {
+    // Detect the old schema (has `username` column, lacks `email_hash`) and
+    // drop it so we start clean. Existing users will need to re-register.
+    // This only applies to the first deploy after the auth rewrite.
+    let has_old_schema = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'username'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0)
+        > 0;
+
+    if has_old_schema {
+        eprintln!("Detected old username-based users table — dropping and recreating with new email schema.");
+        sqlx::query("DROP TABLE IF EXISTS users")
+            .execute(pool)
+            .await
+            .expect("Failed to drop old users table");
+    }
+
     // Users table: email is stored AES-256-GCM encrypted; email_hash (SHA-256)
     // is stored in plain for fast O(1) lookups without decrypting every row.
     sqlx::query(
@@ -482,8 +516,12 @@ async fn register(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("RNG error: {e}")))?;
     let verification_token = hex::encode(token_bytes);
 
-    // If SMTP is not configured, auto-verify so the user can log in immediately.
-    let smtp_available = state.smtp_host.is_some();
+    // If SMTP is not fully configured, auto-verify so the user can log in immediately.
+    // Requires all four fields — a partial config would leave users permanently unverified.
+    let smtp_available = state.smtp_host.is_some()
+        && state.smtp_username.is_some()
+        && state.smtp_password.is_some()
+        && state.smtp_from.is_some();
     let verified_flag = if smtp_available { 0 } else { 1 };
     let token_to_store = if smtp_available {
         Some(verification_token.as_str())
@@ -581,7 +619,7 @@ async fn verify_email(
     if result.rows_affected() == 0 {
         return Err((
             StatusCode::NOT_FOUND,
-            "Invalid or expired verification token.".into(),
+            "Invalid verification token. It may have already been used.".into(),
         ));
     }
 
