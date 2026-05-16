@@ -245,7 +245,7 @@ async fn send_verification_email(
     let verify_url = format!("{}/api/auth/verify/{}", state.app_url, token);
 
     let body = format!(
-        "Welcome to Chord Shifter!\n\nPlease verify your email by clicking the link below:\n\n{verify_url}\n\nThis link expires in 24 hours.\n\nIf you did not register, please ignore this email."
+        "Welcome to Chord Shifter!\n\nPlease verify your email by clicking the link below:\n\n{verify_url}\n\nIf you did not register, please ignore this email."
     );
 
     let email = Message::builder()
