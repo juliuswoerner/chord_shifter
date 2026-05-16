@@ -68,11 +68,13 @@ struct AppState {
     jwt_secret: String,
     /// AES-256-GCM cipher used to encrypt/decrypt email addresses at rest.
     cipher: Aes256Gcm,
-    smtp_host: String,
+    /// SMTP config — all `None` if SMTP env vars are not set; email verification
+    /// is skipped (users are auto-verified) when SMTP is unconfigured.
+    smtp_host: Option<String>,
     smtp_port: u16,
-    smtp_username: String,
-    smtp_password: String,
-    smtp_from: String,
+    smtp_username: Option<String>,
+    smtp_password: Option<String>,
+    smtp_from: Option<String>,
     app_url: String,
 }
 
@@ -228,6 +230,18 @@ async fn send_verification_email(
     to_email: &str,
     token: &str,
 ) -> Result<(), String> {
+    let (smtp_host, smtp_username, smtp_password, smtp_from) = match (
+        state.smtp_host.as_deref(),
+        state.smtp_username.as_deref(),
+        state.smtp_password.as_deref(),
+        state.smtp_from.as_deref(),
+    ) {
+        (Some(h), Some(u), Some(p), Some(f)) => (h, u, p, f),
+        _ => {
+            eprintln!("SMTP not configured — skipping verification email to {to_email}");
+            return Ok(());
+        }
+    };
     let verify_url = format!("{}/api/auth/verify/{}", state.app_url, token);
 
     let body = format!(
@@ -236,8 +250,7 @@ async fn send_verification_email(
 
     let email = Message::builder()
         .from(
-            state
-                .smtp_from
+            smtp_from
                 .parse()
                 .map_err(|e| format!("Invalid from: {e}"))?,
         )
@@ -247,9 +260,9 @@ async fn send_verification_email(
         .body(body)
         .map_err(|e| format!("Build email error: {e}"))?;
 
-    let creds = Credentials::new(state.smtp_username.clone(), state.smtp_password.clone());
+    let creds = Credentials::new(smtp_username.to_string(), smtp_password.to_string());
 
-    let mailer = AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&state.smtp_host)
+    let mailer = AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(smtp_host)
         .map_err(|e| format!("SMTP relay error: {e}"))?
         .credentials(creds)
         .port(state.smtp_port)
@@ -328,15 +341,21 @@ async fn main() {
     );
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
 
-    let smtp_host = std::env::var("SMTP_HOST").expect("SMTP_HOST must be set");
+    let smtp_host = std::env::var("SMTP_HOST").ok();
     let smtp_port: u16 = std::env::var("SMTP_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(587);
-    let smtp_username = std::env::var("SMTP_USERNAME").expect("SMTP_USERNAME must be set");
-    let smtp_password = std::env::var("SMTP_PASSWORD").expect("SMTP_PASSWORD must be set");
-    let smtp_from = std::env::var("SMTP_FROM").expect("SMTP_FROM must be set");
+    let smtp_username = std::env::var("SMTP_USERNAME").ok();
+    let smtp_password = std::env::var("SMTP_PASSWORD").ok();
+    let smtp_from = std::env::var("SMTP_FROM").ok();
+    let smtp_configured = smtp_host.is_some();
     let app_url = std::env::var("APP_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+    if smtp_configured {
+        println!("SMTP configured — email verification enabled.");
+    } else {
+        println!("Warning: SMTP not configured. Users will be auto-verified on registration.");
+    }
 
     let connect_opts = database_url
         .parse::<SqliteConnectOptions>()
@@ -463,29 +482,44 @@ async fn register(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("RNG error: {e}")))?;
     let verification_token = hex::encode(token_bytes);
 
+    // If SMTP is not configured, auto-verify so the user can log in immediately.
+    let smtp_available = state.smtp_host.is_some();
+    let verified_flag = if smtp_available { 0 } else { 1 };
+    let token_to_store = if smtp_available {
+        Some(verification_token.as_str())
+    } else {
+        None
+    };
+
     sqlx::query(
         "INSERT INTO users
              (email_encrypted, email_hash, email_verified, verification_token, password_hash)
-         VALUES (?, ?, 0, ?, ?)",
+         VALUES (?, ?, ?, ?, ?)",
     )
     .bind(&email_encrypted)
     .bind(&email_hash)
-    .bind(&verification_token)
+    .bind(verified_flag)
+    .bind(token_to_store)
     .bind(&password_hash)
     .execute(&state.db)
     .await
     .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
 
     // Best-effort: log but don't fail if the email cannot be sent.
-    if let Err(e) = send_verification_email(&state, &email, &verification_token).await {
-        eprintln!("Warning: failed to send verification email to {email}: {e}");
+    if smtp_available {
+        if let Err(e) = send_verification_email(&state, &email, &verification_token).await {
+            eprintln!("Warning: failed to send verification email to {email}: {e}");
+        }
     }
 
+    let message = if smtp_available {
+        "Registration successful. Please check your email to verify your account."
+    } else {
+        "Registration successful. You can now log in."
+    };
     Ok((
         StatusCode::CREATED,
-        Json(serde_json::json!({
-            "message": "Registration successful. Please check your email to verify your account."
-        })),
+        Json(serde_json::json!({ "message": message })),
     ))
 }
 
