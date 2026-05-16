@@ -1,3 +1,5 @@
+// Copyright (c) 2026 APSOS — App and Software Solutions Wörner. All rights reserved.
+
 #![allow(non_snake_case)]
 
 use dioxus::prelude::*;
