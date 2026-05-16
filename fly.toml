@@ -10,7 +10,7 @@ primary_region = 'cdg'
   dockerfile = 'Dockerfile'
 
 [env]
-  DATABASE_URL = 'sqlite:/data/chord_shifter.db'
+  DATABASE_URL = 'sqlite:///data/chord_shifter.db'
   PORT = '8080'
 
 [[mounts]]
