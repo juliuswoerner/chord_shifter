@@ -5,22 +5,20 @@
 //! cargo build --bin server --no-default-features --features server --release
 //! ```
 //!
-//! # Run (required env vars)
+//! # Run (required + optional env vars)
 //! ```bash
 //! DATABASE_URL=sqlite:///data/chord_shifter.db \
 //! JWT_SECRET=<32-byte-hex> \
 //! ENCRYPTION_KEY=<64-char-hex-32-bytes> \
-//! SMTP_HOST=smtp.example.com \
-//! SMTP_PORT=587 \
-//! SMTP_USERNAME=user@example.com \
-//! SMTP_PASSWORD=secret \
-//! SMTP_FROM=noreply@example.com \
 //! APP_URL=https://chord-shifter.fly.dev \
 //! ./target/release/server
 //! ```
 //!
+//! Optional SMTP env vars (enable email verification emails):
+//! `SMTP_HOST`, `SMTP_PORT` (default `587`), `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`
+//!
 //! # API
-//! POST   /api/auth/register         — register with email + password, sends verification email
+//! POST   /api/auth/register         — register with email + password (sends verification email when SMTP is configured)
 //! POST   /api/auth/login            — login (email must be verified)
 //! GET    /api/auth/verify/:token    — verify email address
 //! GET    /api/songs                 — list songs (requires Bearer token)
