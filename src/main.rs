@@ -453,6 +453,8 @@ fn SongView(
     let mut preview_open = use_signal(|| false);
     let mut preview_url: Signal<String> = use_signal(String::new);
     let mut notation: Signal<Notation> = use_signal(|| Notation::English);
+    let mut render_mode: Signal<bool> = use_signal(|| false);
+    let base_capo: Signal<u8> = use_signal(|| 0_u8);
     // None = base sheet; Some(inst) = that instrument's sheet
     let mut active_instrument: Signal<Option<Instrument>> = use_signal(|| None);
     // Per-instrument working copies — each instrument has its own isolated signal
@@ -467,7 +469,7 @@ fn SongView(
         drop(s);
         use_signal(move || Song { parts, ..sc })
     };
-    let guitar_capo = {
+    let mut guitar_capo = {
         let cap = *song.read().instrument_capos.get("Electric").unwrap_or(&0);
         use_signal(move || cap)
     };
@@ -482,7 +484,7 @@ fn SongView(
         drop(s);
         use_signal(move || Song { parts, ..sc })
     };
-    let acoustic_capo = {
+    let mut acoustic_capo = {
         let cap = *song.read().instrument_capos.get("Acoustic").unwrap_or(&0);
         use_signal(move || cap)
     };
@@ -932,7 +934,86 @@ fn SongView(
                 }
             }
 
+            // ── Rendered View / Edit toggle ───────────────────────────────────────
+            div {
+                style: "margin-top: 20px; display: flex; justify-content: flex-end;",
+                button {
+                    style: {
+                        if render_mode() {
+                            "display: inline-flex; align-items: center; gap: 6px; padding: 7px 18px; background: #1a1a2e; color: #f0ece2; border: 2px solid #1a1a2e; border-radius: 20px; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit; letter-spacing: 0.4px;"
+                        } else {
+                            "display: inline-flex; align-items: center; gap: 6px; padding: 7px 18px; background: #f5f2ea; color: #1a1a2e; border: 2px solid #d9d4c5; border-radius: 20px; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit; letter-spacing: 0.4px;"
+                        }
+                    },
+                    onclick: move |_| { *render_mode.write() = !render_mode(); },
+                    if render_mode() { "✏️  Edit" } else { "🖨  Rendered View" }
+                }
+            }
+
             // ── Parts editor (base or instrument) ─────────────────────────────────
+            if render_mode() && active_instrument.read().is_none() {
+                RenderedSheet { song, notation, capo: base_capo }
+            }
+            if render_mode() && *active_instrument.read() == Some(Instrument::Guitar) {
+                div {
+                    style: "display: flex; align-items: center; gap: 10px; margin-top: 16px;",
+                    span { style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;", "Capo:" }
+                    button {
+                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                        onclick: move |_| { if guitar_capo() > 0 { *guitar_capo.write() -= 1; } },
+                        "−"
+                    }
+                    span { style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #1a1a2e;",
+                        if guitar_capo() == 0 { "Off" } else { "{guitar_capo()}" }
+                    }
+                    button {
+                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                        onclick: move |_| { if guitar_capo() < 12 { *guitar_capo.write() += 1; } },
+                        "+"
+                    }
+                    if guitar_capo() > 0 {
+                        span { style: "font-size: 11px; color: #888; font-style: italic;",
+                            "→ play in {guitar_song.read().apply_capo(guitar_capo()).key}"
+                        }
+                    }
+                }
+                RenderedSheet { song: guitar_song, notation, capo: guitar_capo }
+            }
+            if render_mode() && *active_instrument.read() == Some(Instrument::AcousticGuitar) {
+                div {
+                    style: "display: flex; align-items: center; gap: 10px; margin-top: 16px;",
+                    span { style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;", "Capo:" }
+                    button {
+                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                        onclick: move |_| { if acoustic_capo() > 0 { *acoustic_capo.write() -= 1; } },
+                        "−"
+                    }
+                    span { style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #1a1a2e;",
+                        if acoustic_capo() == 0 { "Off" } else { "{acoustic_capo()}" }
+                    }
+                    button {
+                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                        onclick: move |_| { if acoustic_capo() < 12 { *acoustic_capo.write() += 1; } },
+                        "+"
+                    }
+                    if acoustic_capo() > 0 {
+                        span { style: "font-size: 11px; color: #888; font-style: italic;",
+                            "→ play in {acoustic_song.read().apply_capo(acoustic_capo()).key}"
+                        }
+                    }
+                }
+                RenderedSheet { song: acoustic_song, notation, capo: acoustic_capo }
+            }
+            if render_mode() && *active_instrument.read() == Some(Instrument::Bass) {
+                RenderedSheet { song: bass_song, notation, capo: bass_capo }
+            }
+            if render_mode() && *active_instrument.read() == Some(Instrument::Piano) {
+                RenderedSheet { song: piano_song, notation, capo: piano_capo }
+            }
+            if render_mode() && *active_instrument.read() == Some(Instrument::Drums) {
+                RenderedSheet { song: drums_song, notation, capo: drums_capo }
+            }
+            if !render_mode() {
             if active_instrument.read().is_none() {
                 // Base sheet
                 for part_index in 0..song.read().parts.len() {
@@ -1207,6 +1288,7 @@ fn SongView(
                     }
                 }
             }
+            } // end if !render_mode() parts editor
 
             // ── Vocals / notes ────────────────────────────────────────────────
             div {
@@ -2053,6 +2135,164 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool) -> Element {
                                         }
                                         } // end rsx!
                                         } // end let str_idx block
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Rendered Sheet ────────────────────────────────────────────────────────────
+
+#[component]
+fn RenderedSheet(song: Signal<Song>, notation: Signal<Notation>, capo: Signal<u8>) -> Element {
+    let s = song.read();
+    let n = notation();
+    let cap = capo();
+    let title = s.name.clone();
+    let artist = s.artist.clone();
+    let key = s.key.clone();
+    // Apply capo shift (same as PDF: render shape chords, show shape key)
+    let effective = if cap > 0 {
+        s.apply_capo(cap)
+    } else {
+        s.clone()
+    };
+    let shape_key = effective.key.clone();
+    let parts = effective.parts.clone();
+    drop(s);
+    rsx! {
+        div {
+            style: "
+                background: #ffffff;
+                border-radius: 4px;
+                box-shadow: 0 4px 32px rgba(0,0,0,0.13);
+                padding: 64px 72px;
+                margin-top: 24px;
+                margin-bottom: 24px;
+                font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+                max-width: 960px;
+            ",
+            // Title
+            div {
+                style: "font-size: 34px; font-weight: 700; color: #111; line-height: 1.2; margin-bottom: 8px;",
+                "{title}"
+            }
+            // Artist
+            if !artist.is_empty() {
+                div {
+                    style: "font-size: 18px; color: #333; font-style: italic; margin-bottom: 6px;",
+                    "{artist}"
+                }
+            }
+            // Key
+            if !key.is_empty() {
+                div {
+                    style: "font-size: 14px; color: #333; margin-bottom: 4px;",
+                    "Key: {key}"
+                }
+            }
+            // Capo
+            if cap > 0 {
+                div {
+                    style: "font-size: 14px; color: #333; margin-bottom: 4px;",
+                    "Capo: fret {cap}  (shapes in {shape_key})"
+                }
+            }
+            // Horizontal rule
+            div { style: "border-bottom: 1.5px solid #bbb; margin: 20px 0 32px 0;" }
+            // Parts
+            for part in parts.iter() {
+                div {
+                    style: "margin-bottom: 44px;",
+                    // Part label
+                    div {
+                        style: "font-size: 11px; font-weight: 700; color: #555; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 14px;",
+                        "{part.name}"
+                    }
+                    if part.kind == PartKind::Riff || part.kind == PartKind::BassRiff {
+                        pre {
+                            style: "font-family: 'Courier New', monospace; font-size: 15px; color: #333; white-space: pre-wrap; margin: 0;",
+                            "{part.tab}"
+                        }
+                    } else {
+                        // Chord row — split at LineBreak items
+                        {
+                            let mut rows: Vec<Vec<&PartItem>> = vec![vec![]];
+                            for item in &part.items {
+                                if matches!(item, PartItem::LineBreak) {
+                                    rows.push(vec![]);
+                                } else {
+                                    rows.last_mut().unwrap().push(item);
+                                }
+                            }
+                            rsx! {
+                                div {
+                                    style: "display: flex; flex-direction: column; gap: 24px;",
+                                    for row in rows.iter() {
+                                        div {
+                                            style: "display: flex; flex-wrap: wrap; gap: 32px; align-items: baseline;",
+                                            for item in row.iter() {
+                                                match item {
+                                                    PartItem::Chord(chord) => {
+                                                        let root = apply_notation(&chord.root, n);
+                                                        let qual = chord.quality.symbol().to_string();
+                                                        let bass = chord.bass_note.as_ref().map(|b| apply_notation(b, n));
+                                                        rsx! {
+                                                            span {
+                                                                style: "display: inline-flex; align-items: baseline; white-space: nowrap;",
+                                                                // Root
+                                                                span {
+                                                                    style: "font-size: 28px; font-weight: 700; color: #111; line-height: 1;",
+                                                                    "{root}"
+                                                                }
+                                                                // Quality superscript
+                                                                if !qual.is_empty() {
+                                                                    sup {
+                                                                        style: "font-size: 15px; font-weight: 600; color: #111; vertical-align: super; margin-left: 1px;",
+                                                                        "{qual}"
+                                                                    }
+                                                                }
+                                                                // Bass note
+                                                                if let Some(b) = bass {
+                                                                    span {
+                                                                        style: "font-size: 19px; font-weight: 500; color: #222; vertical-align: sub; margin-left: 1px;",
+                                                                        "/{b}"
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    },
+                                                    PartItem::Repeat { times } => {
+                                                        let label = if *times == 0 { "||:".to_string() } else { format!("||: x{times}") };
+                                                        rsx! {
+                                                            span {
+                                                                style: "font-size: 22px; color: #888; font-weight: 700; letter-spacing: -1px; font-family: 'Courier New', monospace;",
+                                                                "{label}"
+                                                            }
+                                                        }
+                                                    },
+                                                    PartItem::RepeatStart => rsx! {
+                                                        span { style: "font-size: 22px; color: #888; font-weight: 700; letter-spacing: -1px; font-family: 'Courier New', monospace;", "||" }
+                                                    },
+                                                    PartItem::VoltaBracketStart { label } => rsx! {
+                                                        span {
+                                                            style: "display: inline-flex; align-items: flex-start; white-space: nowrap;",
+                                                            span { style: "font-size: 28px; font-weight: 300; color: #888; line-height: 1;", "[" }
+                                                            sup { style: "font-size: 13px; font-weight: 700; color: #555; margin-left: 1px;", "{label}" }
+                                                        }
+                                                    },
+                                                    PartItem::VoltaBracketEnd => rsx! {
+                                                        span { style: "font-size: 24px; font-weight: 300; color: #888;", "]" }
+                                                    },
+                                                    PartItem::LineBreak => rsx! { span {} },
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
