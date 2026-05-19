@@ -499,7 +499,7 @@ fn SongView(
         drop(s);
         use_signal(move || Song { parts, ..sc })
     };
-    let mut bass_capo = {
+    let bass_capo = {
         let cap = *song.read().instrument_capos.get("Bass").unwrap_or(&0);
         use_signal(move || cap)
     };
@@ -514,7 +514,7 @@ fn SongView(
         drop(s);
         use_signal(move || Song { parts, ..sc })
     };
-    let mut piano_capo = {
+    let piano_capo = {
         let cap = *song.read().instrument_capos.get("Piano").unwrap_or(&0);
         use_signal(move || cap)
     };
@@ -529,7 +529,7 @@ fn SongView(
         drop(s);
         use_signal(move || Song { parts, ..sc })
     };
-    let mut drums_capo = {
+    let drums_capo = {
         let cap = *song.read().instrument_capos.get("Drums").unwrap_or(&0);
         use_signal(move || cap)
     };
