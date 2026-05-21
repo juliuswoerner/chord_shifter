@@ -112,10 +112,12 @@ impl FromRequestParts<AppState> for AuthUser {
             .and_then(|v| v.strip_prefix("Bearer "))
             .ok_or_else(|| (StatusCode::UNAUTHORIZED, "Missing Bearer token".into()))?;
 
+        let mut validation = Validation::new(jsonwebtoken::Algorithm::HS256);
+        validation.set_required_spec_claims(&["exp", "sub"]);
         let data = decode::<Claims>(
             token,
             &DecodingKey::from_secret(state.jwt_secret.as_bytes()),
-            &Validation::default(),
+            &validation,
         )
         .map_err(|e| (StatusCode::UNAUTHORIZED, format!("Invalid token: {e}")))?;
 
@@ -226,13 +228,25 @@ fn validate_password_strength(password: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Basic email format check.
+/// Email format check: non-empty local part, exactly one '@', domain with at least one
+/// dot that is neither leading nor trailing, max 254 chars (RFC 5321).
 fn validate_email(email: &str) -> Result<(), String> {
-    if email.contains('@') && email.contains('.') {
-        Ok(())
-    } else {
-        Err("Invalid email address.".into())
+    if email.len() > 254 {
+        return Err("Email address is too long.".into());
     }
+    let (local, domain) = email
+        .split_once('@')
+        .ok_or_else(|| "Invalid email address.".to_string())?;
+    if local.is_empty() {
+        return Err("Invalid email address.".into());
+    }
+    let dot_pos = domain
+        .rfind('.')
+        .ok_or_else(|| "Invalid email address.".to_string())?;
+    if dot_pos == 0 || domain[dot_pos + 1..].is_empty() {
+        return Err("Invalid email address.".into());
+    }
+    Ok(())
 }
 
 // ── Email sending ─────────────────────────────────────────────────────────────
@@ -339,6 +353,11 @@ async fn main() {
         std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:chord_shifter.db".to_string());
     let jwt_secret =
         std::env::var("JWT_SECRET").expect("JWT_SECRET environment variable must be set");
+    assert!(
+        jwt_secret.len() >= 32,
+        "JWT_SECRET must be at least 32 characters long (got {})",
+        jwt_secret.len()
+    );
     let port: u16 = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
@@ -415,18 +434,51 @@ async fn main() {
         app_url,
     };
 
-    let api = Router::new()
+    // Rate-limit auth endpoints: burst of 5, then max 1 request every 2 s per IP.
+    let auth_governor_conf = std::sync::Arc::new(
+        tower_governor::governor::GovernorConfigBuilder::default()
+            .per_second(2)
+            .burst_size(5)
+            .finish()
+            .unwrap(),
+    );
+
+    let auth_routes = Router::new()
         .route("/auth/register", post(register))
         .route("/auth/login", post(login))
         .route("/auth/verify/{token}", get(verify_email))
+        .layer(tower_governor::GovernorLayer {
+            config: auth_governor_conf,
+        });
+
+    let song_routes = Router::new()
         .route("/songs", get(list_songs).post(save_song))
         .route("/songs/{id}", get(load_song).delete(delete_song));
 
+    let api = auth_routes.merge(song_routes);
+
+    // Lock CORS to the configured APP_URL origin only.
+    let allowed_origin = state
+        .app_url
+        .parse::<axum::http::HeaderValue>()
+        .unwrap_or_else(|_| axum::http::HeaderValue::from_static("http://localhost:8080"));
+    let cors = CorsLayer::new()
+        .allow_origin(allowed_origin)
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::DELETE,
+            axum::http::Method::OPTIONS,
+        ])
+        .allow_headers([
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::CONTENT_TYPE,
+        ]);
+
     let app = Router::new()
         .nest("/api", api)
-        // Serve the compiled WASM frontend from ./dist/
         .fallback_service(ServeDir::new("dist"))
-        .layer(CorsLayer::permissive())
+        .layer(cors)
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
@@ -473,6 +525,11 @@ async fn run_migrations(pool: &SqlitePool) {
     .execute(pool)
     .await
     .expect("Failed to create users table");
+
+    // Idempotent: add verification_token_expires_at to existing deployments.
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN verification_token_expires_at INTEGER")
+        .execute(pool)
+        .await;
 
     // Songs table — JSON blobs mirror the localStorage schema so the frontend
     // can be switched between backends without data-model changes.
@@ -540,16 +597,28 @@ async fn register(
     } else {
         None
     };
+    // Verification tokens expire after 24 hours.
+    let token_expiry: Option<i64> = if smtp_available {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        Some(secs + 24 * 3600)
+    } else {
+        None
+    };
 
     sqlx::query(
         "INSERT INTO users
-             (email_encrypted, email_hash, email_verified, verification_token, password_hash)
-         VALUES (?, ?, ?, ?, ?)",
+             (email_encrypted, email_hash, email_verified, verification_token,
+              verification_token_expires_at, password_hash)
+         VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(&email_encrypted)
     .bind(&email_hash)
     .bind(verified_flag)
     .bind(token_to_store)
+    .bind(token_expiry)
     .bind(&password_hash)
     .execute(&state.db)
     .await
@@ -619,8 +688,44 @@ async fn verify_email(
     State(state): State<AppState>,
     Path(token): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
+    // Look up the token first so we can check its expiry.
+    let row = sqlx::query_as::<_, (i64, Option<i64>)>(
+        "SELECT id, verification_token_expires_at FROM users WHERE verification_token = ?",
+    )
+    .bind(&token)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            "Invalid verification token. It may have already been used.".to_string(),
+        )
+    })?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    if let Some(expires_at) = row.1 {
+        if now > expires_at {
+            // Remove the expired unverified account so the address can be re-registered.
+            let _ = sqlx::query("DELETE FROM users WHERE id = ?")
+                .bind(row.0)
+                .execute(&state.db)
+                .await;
+            return Err((
+                StatusCode::GONE,
+                "Verification token has expired. Please register again.".into(),
+            ));
+        }
+    }
+
     let result = sqlx::query(
-        "UPDATE users SET email_verified = 1, verification_token = NULL
+        "UPDATE users
+         SET    email_verified = 1,
+                verification_token = NULL,
+                verification_token_expires_at = NULL
          WHERE  verification_token = ?",
     )
     .bind(&token)

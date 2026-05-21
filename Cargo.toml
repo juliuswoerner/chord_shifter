@@ -27,7 +27,7 @@ web = [
     "dioxus/web", "dioxus/minimal", "dioxus/router",
     "dep:manganis", "dep:web-sys", "dep:wasm-bindgen", "dep:js-sys", "dep:zip", "dep:printpdf",
 ]
-server = ["dep:axum", "dep:tokio", "dep:sqlx", "dep:tower-http", "dep:jsonwebtoken", "dep:lettre", "dep:aes-gcm", "dep:sha2"]
+server = ["dep:axum", "dep:tokio", "dep:sqlx", "dep:tower-http", "dep:jsonwebtoken", "dep:lettre", "dep:aes-gcm", "dep:sha2", "dep:tower_governor"]
 
 # ── Shared deps (compiled for all targets) ────────────────────────────────────
 
@@ -56,6 +56,7 @@ axum           = { version = "0.8", optional = true }
 tokio          = { version = "1",   optional = true, features = ["full"] }
 sqlx           = { version = "0.8", optional = true, features = ["sqlite", "runtime-tokio"] }
 tower-http     = { version = "0.6", optional = true, features = ["fs", "cors"] }
+tower_governor = { version = "0.7", optional = true }
 jsonwebtoken   = { version = "9",   optional = true }
 lettre         = { version = "0.11", optional = true, default-features = false, features = ["smtp-transport", "tokio1", "tokio1-native-tls", "builder"] }
 aes-gcm        = { version = "0.10", optional = true }
