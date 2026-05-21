@@ -458,10 +458,12 @@ async fn main() {
     let api = auth_routes.merge(song_routes);
 
     // Lock CORS to the configured APP_URL origin only.
-    let allowed_origin = state
-        .app_url
-        .parse::<axum::http::HeaderValue>()
-        .unwrap_or_else(|_| axum::http::HeaderValue::from_static("http://localhost:8080"));
+    let allowed_origin = state.app_url.parse::<axum::http::HeaderValue>().unwrap_or_else(|err| {
+        panic!(
+            "Invalid APP_URL for CORS allow_origin: {:?} ({err})",
+            state.app_url
+        )
+    });
     let cors = CorsLayer::new()
         .allow_origin(allowed_origin)
         .allow_methods([
