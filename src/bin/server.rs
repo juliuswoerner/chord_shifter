@@ -229,7 +229,8 @@ fn validate_password_strength(password: &str) -> Result<(), String> {
 }
 
 /// Email format check: non-empty local part, exactly one '@', domain with at least one
-/// dot that is neither leading nor trailing, max 254 chars (RFC 5321).
+/// dot that is neither leading nor trailing, alphabetic TLD with 2+ chars, max 254
+/// chars (RFC 5321).
 fn validate_email(email: &str) -> Result<(), String> {
     if email.len() > 254 {
         return Err("Email address is too long.".into());
@@ -240,10 +241,14 @@ fn validate_email(email: &str) -> Result<(), String> {
     if local.is_empty() {
         return Err("Invalid email address.".into());
     }
+    if domain.contains('@') {
+        return Err("Invalid email address.".into());
+    }
     let dot_pos = domain
         .rfind('.')
         .ok_or_else(|| "Invalid email address.".to_string())?;
-    if dot_pos == 0 || domain[dot_pos + 1..].is_empty() {
+    let tld = &domain[dot_pos + 1..];
+    if dot_pos == 0 || tld.len() < 2 || !tld.chars().all(|c| c.is_ascii_alphabetic()) {
         return Err("Invalid email address.".into());
     }
     Ok(())
@@ -1006,4 +1011,25 @@ async fn delete_song(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_email;
+
+    #[test]
+    fn validate_email_accepts_basic_address() {
+        assert!(validate_email("user@example.com").is_ok());
+    }
+
+    #[test]
+    fn validate_email_rejects_multiple_at_signs() {
+        assert!(validate_email("a@b@c.com").is_err());
+    }
+
+    #[test]
+    fn validate_email_rejects_short_or_non_alphabetic_tld() {
+        assert!(validate_email("a@b.c").is_err());
+        assert!(validate_email("a@b.c0m").is_err());
+    }
 }
