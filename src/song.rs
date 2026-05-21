@@ -5,7 +5,6 @@ use std::collections::HashMap;
 // ── Chord quality ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[allow(dead_code)]
 pub enum ChordQuality {
     Major,
     Minor,
@@ -131,7 +130,6 @@ impl Chord {
     }
 
     /// Human-readable chord name, e.g. `"Am"`, `"G7"`, `"Fmaj7"`, `"G/B"`.
-    #[allow(dead_code)]
     pub fn display(&self) -> String {
         match &self.bass_note {
             Some(b) => format!("{}{}/{}", self.root, self.quality.symbol(), b),
@@ -349,7 +347,6 @@ impl SongPart {
     }
 
     /// Iterate over only the `Chord` items in this part.
-    #[allow(dead_code)]
     pub fn chords(&self) -> impl Iterator<Item = &Chord> {
         self.items.iter().filter_map(|item| {
             if let PartItem::Chord(c) = item {
@@ -490,7 +487,6 @@ impl Instrument {
     }
 
     /// Accent colour used on the instrument sheet page.
-    #[allow(dead_code)]
     pub fn accent_color(self) -> &'static str {
         match self {
             Instrument::Guitar => "#1a5c38",
@@ -502,7 +498,6 @@ impl Instrument {
     }
 
     /// Parse from the label string (used for URL routing).
-    #[allow(dead_code)]
     pub fn from_label(s: &str) -> Option<Instrument> {
         match s {
             "Electric" => Some(Instrument::Guitar),
@@ -913,5 +908,382 @@ mod tests {
             song.parts[0].chords().next().map(|c| c.root.as_str()),
             Some("C")
         );
+    }
+
+    // ── ChordQuality::label ──────────────────────────────────────────────────
+
+    #[test]
+    fn chord_quality_labels_are_human_readable() {
+        assert_eq!(ChordQuality::Major.label(), "Major");
+        assert_eq!(ChordQuality::Minor.label(), "Minor");
+        assert_eq!(ChordQuality::Dominant7.label(), "Dom 7");
+        assert_eq!(ChordQuality::Major7.label(), "Maj 7");
+        assert_eq!(ChordQuality::Minor7.label(), "Min 7");
+        assert_eq!(ChordQuality::Diminished.label(), "Dim");
+        assert_eq!(ChordQuality::Augmented.label(), "Aug");
+        assert_eq!(ChordQuality::Sus2.label(), "Sus 2");
+        assert_eq!(ChordQuality::Sus4.label(), "Sus 4");
+    }
+
+    // ── Notation / apply_notation ────────────────────────────────────────────
+
+    #[test]
+    fn apply_notation_english_is_identity() {
+        for note in &["C", "D", "E", "F", "G", "A", "B", "Bb", "F#"] {
+            assert_eq!(apply_notation(note, Notation::English), *note);
+        }
+    }
+
+    #[test]
+    fn apply_notation_german_renames_b_to_h() {
+        assert_eq!(apply_notation("B", Notation::German), "H");
+    }
+
+    #[test]
+    fn apply_notation_german_renames_bb_to_b() {
+        assert_eq!(apply_notation("Bb", Notation::German), "B");
+    }
+
+    #[test]
+    fn apply_notation_german_leaves_other_notes_unchanged() {
+        assert_eq!(apply_notation("C", Notation::German), "C");
+        assert_eq!(apply_notation("F#", Notation::German), "F#");
+        assert_eq!(apply_notation("Eb", Notation::German), "Eb");
+    }
+
+    #[test]
+    fn apply_notation_custom_renames_b_to_h_but_keeps_bb() {
+        assert_eq!(apply_notation("B", Notation::Custom), "H");
+        assert_eq!(apply_notation("Bb", Notation::Custom), "Bb");
+    }
+
+    // ── Chord::display_with_notation ─────────────────────────────────────────
+
+    #[test]
+    fn chord_display_with_notation_english() {
+        let c = Chord::new("B", ChordQuality::Minor);
+        assert_eq!(c.display_with_notation(Notation::English), "Bm");
+    }
+
+    #[test]
+    fn chord_display_with_notation_german_b_becomes_h() {
+        let c = Chord::new("B", ChordQuality::Minor);
+        assert_eq!(c.display_with_notation(Notation::German), "Hm");
+    }
+
+    #[test]
+    fn chord_display_with_notation_bass_note_also_converted() {
+        let mut c = Chord::new("B", ChordQuality::Major);
+        c.bass_note = Some("Bb".to_string());
+        // German: B → H, Bb → B
+        assert_eq!(c.display_with_notation(Notation::German), "H/B");
+    }
+
+    // ── Chord with bass note ──────────────────────────────────────────────────
+
+    #[test]
+    fn chord_display_with_bass_note() {
+        let mut c = Chord::new("G", ChordQuality::Major);
+        c.bass_note = Some("B".to_string());
+        assert_eq!(c.display(), "G/B");
+    }
+
+    #[test]
+    fn chord_display_minor_with_bass_note() {
+        let mut c = Chord::new("D", ChordQuality::Minor);
+        c.bass_note = Some("F".to_string());
+        assert_eq!(c.display(), "Dm/F");
+    }
+
+    // ── SongPart::new_riff / new_bass_riff ────────────────────────────────────
+
+    #[test]
+    fn song_part_new_riff_has_riff_kind() {
+        let p = SongPart::new_riff("Intro Riff");
+        assert_eq!(p.kind, PartKind::Riff);
+        assert_eq!(p.name, "Intro Riff");
+        assert!(p.tab_grid.is_empty());
+    }
+
+    #[test]
+    fn song_part_new_bass_riff_has_bass_riff_kind() {
+        let p = SongPart::new_bass_riff("Bass Line");
+        assert_eq!(p.kind, PartKind::BassRiff);
+        assert_eq!(p.name, "Bass Line");
+    }
+
+    // ── SongPart::tab_as_ascii ────────────────────────────────────────────────
+
+    #[test]
+    fn tab_as_ascii_falls_back_to_tab_string_when_grid_empty() {
+        let mut p = SongPart::new_riff("Riff");
+        p.tab = "e|--0--|".to_string();
+        assert_eq!(p.tab_as_ascii(), "e|--0--|");
+    }
+
+    #[test]
+    fn tab_as_ascii_single_open_string_col() {
+        let mut p = SongPart::new_riff("Riff");
+        // One column: open on every string (TabCell::Fret(0))
+        p.tab_grid = vec![TabCol::Notes([
+            TabCell::Fret(0),
+            TabCell::Fret(0),
+            TabCell::Fret(0),
+            TabCell::Fret(0),
+            TabCell::Fret(0),
+            TabCell::Fret(0),
+        ])];
+        let ascii = p.tab_as_ascii();
+        assert!(
+            ascii.contains("e|-0-|"),
+            "expected e string row, got: {ascii}"
+        );
+        assert!(
+            ascii.contains("E|-0-|"),
+            "expected E string row, got: {ascii}"
+        );
+    }
+
+    #[test]
+    fn tab_as_ascii_muted_string_shows_x() {
+        let mut p = SongPart::new_riff("Riff");
+        let mut cells = [TabCell::Empty; 6];
+        cells[0] = TabCell::Muted; // high e muted
+        p.tab_grid = vec![TabCol::Notes(cells)];
+        let ascii = p.tab_as_ascii();
+        assert!(ascii.contains("e|-x-|"), "expected muted e, got: {ascii}");
+    }
+
+    #[test]
+    fn tab_as_ascii_barline_inserts_bar_marker() {
+        let mut p = SongPart::new_riff("Riff");
+        let col = TabCol::Notes([TabCell::Empty; 6]);
+        p.tab_grid = vec![col.clone(), TabCol::Barline, col];
+        let ascii = p.tab_as_ascii();
+        // Each row should contain a mid-bar "|"
+        let e_row = ascii.lines().next().unwrap_or("");
+        assert!(
+            e_row.matches('|').count() >= 3,
+            "expected barline in row: {e_row}"
+        );
+    }
+
+    #[test]
+    fn tab_as_ascii_empty_grid_returns_empty_string() {
+        let p = SongPart::new_riff("Riff");
+        assert_eq!(p.tab_as_ascii(), "");
+    }
+
+    #[test]
+    fn tab_as_ascii_bass_riff_uses_four_strings() {
+        let mut p = SongPart::new_bass_riff("Bass");
+        p.tab_grid = vec![TabCol::Notes([TabCell::Empty; 6])];
+        let ascii = p.tab_as_ascii();
+        let rows: Vec<&str> = ascii.lines().collect();
+        assert_eq!(rows.len(), 4, "bass riff should have 4 string rows");
+        assert!(rows[0].starts_with("G|"), "first row should be G string");
+        assert!(rows[3].starts_with("E|"), "last row should be E string");
+    }
+
+    // ── prefer_sharps_for_key ─────────────────────────────────────────────────
+
+    #[test]
+    fn prefer_sharps_for_major_sharp_keys() {
+        for key in &["C", "G", "D", "A", "E", "B", "F#", "C#"] {
+            assert!(
+                prefer_sharps_for_key(key, false),
+                "{key} major should prefer sharps"
+            );
+        }
+    }
+
+    #[test]
+    fn prefer_flats_for_major_flat_keys() {
+        for key in &["F", "Bb", "Eb", "Ab", "Db", "Gb"] {
+            assert!(
+                !prefer_sharps_for_key(key, false),
+                "{key} major should prefer flats"
+            );
+        }
+    }
+
+    #[test]
+    fn prefer_sharps_for_minor_sharp_keys() {
+        for key in &["A", "E", "B", "F#", "C#", "G#", "D#"] {
+            assert!(
+                prefer_sharps_for_key(key, true),
+                "{key} minor should prefer sharps"
+            );
+        }
+    }
+
+    // ── shift_note_up / shift_note ────────────────────────────────────────────
+
+    #[test]
+    fn shift_note_up_c_by_7_is_g() {
+        assert_eq!(shift_note_up("C", 7, false), "G");
+    }
+
+    #[test]
+    fn shift_note_up_wraps_around_octave() {
+        assert_eq!(shift_note_up("B", 1, false), "C");
+    }
+
+    #[test]
+    fn shift_note_up_zero_is_identity() {
+        assert_eq!(shift_note_up("F#", 0, false), "F#");
+    }
+
+    #[test]
+    fn shift_note_up_unknown_root_returns_unchanged() {
+        assert_eq!(shift_note_up("Z", 3, false), "Z");
+    }
+
+    #[test]
+    fn shift_note_down_c_by_2_is_bb() {
+        assert_eq!(shift_note("C", 2, false), "Bb");
+    }
+
+    #[test]
+    fn shift_note_down_zero_is_identity() {
+        assert_eq!(shift_note("G#", 0, false), "G#");
+    }
+
+    #[test]
+    fn shift_note_down_unknown_root_returns_unchanged() {
+        assert_eq!(shift_note("Z", 5, false), "Z");
+    }
+
+    // ── Instrument ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn instrument_labels_are_distinct_and_nonempty() {
+        let labels: Vec<&str> = Instrument::all().iter().map(|i| i.label()).collect();
+        for label in &labels {
+            assert!(!label.is_empty());
+        }
+        // All labels should be unique
+        let mut unique = labels.clone();
+        unique.dedup();
+        // dedup only removes consecutive, so sort first
+        let mut sorted = labels.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            labels.len(),
+            "instrument labels must be unique"
+        );
+    }
+
+    #[test]
+    fn instrument_from_label_round_trips() {
+        for inst in Instrument::all() {
+            let label = inst.label();
+            assert_eq!(
+                Instrument::from_label(label),
+                Some(inst),
+                "from_label({label:?}) should return {inst:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn instrument_from_label_unknown_returns_none() {
+        assert_eq!(Instrument::from_label("Banjo"), None);
+        assert_eq!(Instrument::from_label(""), None);
+    }
+
+    #[test]
+    fn instrument_accent_colors_are_nonempty_hex() {
+        for inst in Instrument::all() {
+            let color = inst.accent_color();
+            assert!(
+                color.starts_with('#'),
+                "{inst:?} accent color should start with #, got {color}"
+            );
+            assert_eq!(
+                color.len(),
+                7,
+                "{inst:?} color should be 7 chars (#{:06x}), got {color}",
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn instrument_all_returns_five_instruments() {
+        assert_eq!(Instrument::all().len(), 5);
+    }
+
+    // ── transpose_to with instrument_parts overrides ──────────────────────────
+
+    #[test]
+    fn transpose_also_shifts_instrument_parts_overrides() {
+        let mut song = c_major_song();
+        // Add a guitar override part
+        song.instrument_parts.insert(
+            "Electric".to_string(),
+            vec![SongPart {
+                name: "Verse".to_string(),
+                kind: PartKind::Chords,
+                tab: String::new(),
+                tab_grid: Vec::new(),
+                items: vec![
+                    PartItem::Chord(Chord::new("C", ChordQuality::Major)),
+                    PartItem::Chord(Chord::new("F", ChordQuality::Major)),
+                ],
+            }],
+        );
+        song.transpose_to("G");
+        let overrides = &song.instrument_parts["Electric"];
+        let roots: Vec<&str> = overrides[0].chords().map(|c| c.root.as_str()).collect();
+        assert_eq!(roots, ["G", "C"]);
+    }
+
+    // ── Song serde round-trip ─────────────────────────────────────────────────
+
+    #[test]
+    fn song_json_round_trip() {
+        let song = c_major_song();
+        let json = serde_json::to_string(&song).expect("serialize");
+        let back: Song = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(song, back);
+    }
+
+    #[test]
+    fn song_with_instruments_and_vocals_round_trip() {
+        let mut song = c_major_song();
+        song.instruments = vec![Instrument::Guitar, Instrument::Drums];
+        song.vocals_notes = "La la la".to_string();
+        let json = serde_json::to_string(&song).expect("serialize");
+        let back: Song = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(
+            back.instruments,
+            vec![Instrument::Guitar, Instrument::Drums]
+        );
+        assert_eq!(back.vocals_notes, "La la la");
+    }
+
+    #[test]
+    fn part_item_repeat_and_volta_serialize() {
+        let part = SongPart {
+            name: "Chorus".to_string(),
+            kind: PartKind::Chords,
+            tab: String::new(),
+            tab_grid: Vec::new(),
+            items: vec![
+                PartItem::Chord(Chord::new("G", ChordQuality::Major)),
+                PartItem::Repeat { times: 2 },
+                PartItem::VoltaBracketStart {
+                    label: "1.".to_string(),
+                },
+                PartItem::Chord(Chord::new("C", ChordQuality::Major)),
+                PartItem::VoltaBracketEnd,
+            ],
+        };
+        let json = serde_json::to_string(&part).expect("serialize");
+        let back: SongPart = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(part, back);
     }
 }
