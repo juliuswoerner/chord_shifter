@@ -442,7 +442,7 @@ async fn main() {
     // Rate-limit auth endpoints: burst of 5, then max 1 request every 2 s per IP.
     let auth_governor_conf = std::sync::Arc::new(
         tower_governor::governor::GovernorConfigBuilder::default()
-            .per_second(2)
+            .period(std::time::Duration::from_secs(2))
             .burst_size(5)
             .finish()
             .unwrap(),
