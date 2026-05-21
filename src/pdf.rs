@@ -10,6 +10,93 @@ const PAGE_H: f32 = 297.0;
 const MARGIN: f32 = 22.0;
 const RIGHT: f32 = PAGE_W - MARGIN;
 
+/// Estimate the total height in mm that `part` will occupy when rendered.
+/// Used to decide whether to start a new page before drawing.
+fn measure_part_height(
+    part: &chord_shifter::song::SongPart,
+    chord_size: f32,
+    part_name_size: f32,
+) -> f32 {
+    use chord_shifter::song::{PartItem, PartKind, TabCol};
+
+    let part_name_h = (part_name_size / 9.0) * 14.0;
+
+    if part.kind == PartKind::Riff || part.kind == PartKind::BassRiff {
+        let is_bass = part.kind == PartKind::BassRiff;
+        let num_strings: usize = if is_bass { 4 } else { 6 };
+        let str_gap: f32 = 3.8;
+        let block_h = str_gap * (num_strings as f32 - 1.0);
+        let block_gap: f32 = 8.0;
+        let gap: f32 = 6.0;
+
+        let mut seg_count: u32 = 0;
+        let mut in_seg = false;
+        for col in &part.tab_grid {
+            match col {
+                TabCol::LineBreak => {
+                    in_seg = false;
+                }
+                _ => {
+                    if !in_seg {
+                        seg_count += 1;
+                        in_seg = true;
+                    }
+                }
+            }
+        }
+
+        part_name_h + (seg_count as f32) * (block_h + block_gap) + gap
+    } else {
+        let scale = chord_size / 18.0;
+        let row_h: f32 = 12.0 * scale;
+        let gap: f32 = 6.0;
+        let root_char_w: f32 = chord_size * (3.5 / 18.0);
+        let qual_size: f32 = chord_size * (10.0 / 18.0);
+        let qual_char_w: f32 = root_char_w * (qual_size / chord_size);
+        let bass_size: f32 = chord_size * (14.0 / 18.0);
+        let bass_char_w: f32 = root_char_w * (bass_size / chord_size);
+        let sup_offset: f32 = 1.0;
+
+        let mut x: f32 = MARGIN;
+        let mut rows: u32 = 1;
+
+        for item in &part.items {
+            match item {
+                PartItem::LineBreak => {
+                    x = MARGIN;
+                    rows += 1;
+                }
+                PartItem::Chord(chord) => {
+                    let root_w = chord.root.len() as f32 * root_char_w;
+                    let qual_w = chord.quality.symbol().len() as f32 * qual_char_w;
+                    let bass_w = chord
+                        .bass_note
+                        .as_deref()
+                        .map(|b| (b.len() + 1) as f32 * bass_char_w)
+                        .unwrap_or(0.0);
+                    let total_w = root_w + sup_offset + qual_w + bass_w;
+                    if x + total_w > RIGHT {
+                        x = MARGIN;
+                        rows += 1;
+                    }
+                    x += total_w + gap;
+                }
+                _ => {
+                    // Repeat, VoltaBracket, etc. — rough width
+                    let w = root_char_w * 5.0 + gap;
+                    if x + w > RIGHT {
+                        x = MARGIN;
+                        rows += 1;
+                    }
+                    x += w;
+                }
+            }
+        }
+
+        part_name_h + (rows as f32) * (row_h + gap) + 8.0
+    }
+}
+
 /// Render `song` into a PDF and return the raw bytes.
 /// `notation`        – note-naming convention (English / German / Custom).
 /// `part_name_size`  – font size in pt for part labels (default 9).
@@ -33,7 +120,7 @@ pub fn generate_pdf_bytes(
     };
 
     let (doc, page1, layer1) = PdfDocument::new(&song.name, Mm(PAGE_W), Mm(PAGE_H), "Layer 1");
-    let layer = doc.get_page(page1).get_layer(layer1);
+    let mut layer = doc.get_page(page1).get_layer(layer1);
 
     let font_bold = doc.add_builtin_font(BuiltinFont::HelveticaBold)?;
     let font_regular = doc.add_builtin_font(BuiltinFont::Helvetica)?;
@@ -85,9 +172,25 @@ pub fn generate_pdf_bytes(
     y -= 10.0;
 
     // ── Parts ─────────────────────────────────────────────────────────────────
+    // Helper: start a fresh page and reset y to the top margin.
+    macro_rules! next_page {
+        () => {{
+            let (pi, li) = doc.add_page(Mm(PAGE_W), Mm(PAGE_H), "Layer 1");
+            layer = doc.get_page(pi).get_layer(li);
+            y = PAGE_H - MARGIN;
+        }};
+    }
+
     for part in &effective.parts {
-        if y < MARGIN + 20.0 {
-            break;
+        // ── Page-break check ────────────────────────────────────────────────
+        // If the remaining vertical space is less than this part's estimated
+        // height, start a fresh page so the part isn't split or clipped.
+        // For parts taller than a full page the inner loops will add further
+        // pages as needed.
+        let part_h = measure_part_height(part, chord_size, part_name_size);
+        let remaining = y - MARGIN;
+        if remaining < part_h {
+            next_page!();
         }
 
         // Part label
@@ -157,7 +260,7 @@ pub fn generate_pdf_bytes(
                 }
 
                 if y < MARGIN + block_h + 2.0 {
-                    break;
+                    next_page!();
                 }
 
                 // Compute total width of this segment
@@ -439,7 +542,7 @@ pub fn generate_pdf_bytes(
                         x = MARGIN;
                         y -= row_h + gap;
                         if y < MARGIN + 10.0 {
-                            break;
+                            next_page!();
                         }
                     }
 
@@ -542,5 +645,43 @@ mod tests {
         let song = sample_song();
         let bytes = generate_pdf_bytes(&song, Notation::German, 9.0, 18.0, 0).unwrap();
         assert!(bytes.starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn generate_pdf_many_parts_produces_multiple_pages() {
+        // 20 parts × 4 chords each should overflow a single A4 page.
+        let chords = vec![
+            Chord::new("G", ChordQuality::Major),
+            Chord::new("E", ChordQuality::Minor),
+            Chord::new("C", ChordQuality::Major),
+            Chord::new("D", ChordQuality::Major),
+        ];
+        let mut song = Song::new("Long Song", "G Major", "Test Artist");
+        for i in 0..20 {
+            song = song.with_part(format!("Part {i}"), chords.clone());
+        }
+        let bytes = generate_pdf_bytes(&song, Notation::English, 9.0, 18.0, 0).unwrap();
+        assert!(bytes.starts_with(b"%PDF-"));
+        // A multi-page PDF is larger than a single-page one — use size as proxy.
+        let single = generate_pdf_bytes(
+            &Song::new("X", "G", "Y").with_part("V", chords.clone()),
+            Notation::English,
+            9.0,
+            18.0,
+            0,
+        )
+        .unwrap();
+        assert!(
+            bytes.len() > single.len() * 3,
+            "20-part PDF ({} bytes) should be much larger than 1-part PDF ({} bytes)",
+            bytes.len(),
+            single.len()
+        );
+        // printpdf emits "Page" in object dictionaries; count occurrences.
+        let page_kw = bytes.windows(4).filter(|w| *w == b"Page").count();
+        assert!(
+            page_kw > 1,
+            "expected multiple page objects, found 'Page' count = {page_kw}"
+        );
     }
 }
