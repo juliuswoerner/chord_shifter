@@ -393,7 +393,10 @@ async fn main() {
         && smtp_password.is_some()
         && smtp_from.is_some();
     let app_url = std::env::var("APP_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
-    if smtp_configured {
+    let is_local = app_url.contains("localhost") || app_url.contains("127.0.0.1");
+    if is_local {
+        println!("Running in local mode — email verification skipped.");
+    } else if smtp_configured {
         println!("SMTP configured — email verification enabled.");
     } else {
         // Warn if partially configured so operators catch misconfiguration early.
@@ -402,9 +405,9 @@ async fn main() {
             || smtp_password.is_some()
             || smtp_from.is_some();
         if any_smtp {
-            eprintln!("Warning: SMTP partially configured (need SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, SMTP_FROM). Users will be auto-verified.");
+            eprintln!("Warning: SMTP partially configured (need SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, SMTP_FROM). Registration will be rejected until fixed.");
         } else {
-            println!("Warning: SMTP not configured. Users will be auto-verified on registration.");
+            eprintln!("Warning: SMTP not configured. Registration will be rejected on non-local deployments.");
         }
     }
 
@@ -463,12 +466,15 @@ async fn main() {
     let api = auth_routes.merge(song_routes);
 
     // Lock CORS to the configured APP_URL origin only.
-    let allowed_origin = state.app_url.parse::<axum::http::HeaderValue>().unwrap_or_else(|err| {
-        panic!(
-            "Invalid APP_URL for CORS allow_origin: {:?} ({err})",
-            state.app_url
-        )
-    });
+    let allowed_origin = state
+        .app_url
+        .parse::<axum::http::HeaderValue>()
+        .unwrap_or_else(|err| {
+            panic!(
+                "Invalid APP_URL for CORS allow_origin: {:?} ({err})",
+                state.app_url
+            )
+        });
     let cors = CorsLayer::new()
         .allow_origin(allowed_origin)
         .allow_methods([
@@ -544,9 +550,7 @@ async fn run_migrations(pool: &SqlitePool) {
                 .message()
                 .contains("duplicate column name: verification_token_expires_at") => {}
         Err(err) => {
-            panic!(
-                "Failed to add users.verification_token_expires_at column: {err}"
-            );
+            panic!("Failed to add users.verification_token_expires_at column: {err}");
         }
     }
 
@@ -604,27 +608,37 @@ async fn register(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("RNG error: {e}")))?;
     let verification_token = hex::encode(token_bytes);
 
-    // If SMTP is not fully configured, auto-verify so the user can log in immediately.
-    // Requires all four fields — a partial config would leave users permanently unverified.
+    // Auto-verify only for local development (APP_URL points to localhost).
+    // In all other environments, email verification is always required — even if
+    // SMTP is misconfigured, we'd rather surface a clear error than silently skip verification.
+    let is_local = state.app_url.contains("localhost") || state.app_url.contains("127.0.0.1");
     let smtp_available = state.smtp_host.is_some()
         && state.smtp_username.is_some()
         && state.smtp_password.is_some()
         && state.smtp_from.is_some();
-    let verified_flag = if smtp_available { 0 } else { 1 };
-    let token_to_store = if smtp_available {
-        Some(verification_token.as_str())
-    } else {
+
+    if !is_local && !smtp_available {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Registration is temporarily unavailable: email verification cannot be sent. Please try again later or contact support.".into(),
+        ));
+    }
+
+    let verified_flag = if is_local { 1 } else { 0 };
+    let token_to_store = if is_local {
         None
+    } else {
+        Some(verification_token.as_str())
     };
     // Verification tokens expire after 24 hours.
-    let token_expiry: Option<i64> = if smtp_available {
+    let token_expiry: Option<i64> = if is_local {
+        None
+    } else {
         let secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
         Some(secs + 24 * 3600)
-    } else {
-        None
     };
 
     sqlx::query(
@@ -644,16 +658,16 @@ async fn register(
     .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
 
     // Best-effort: log but don't fail if the email cannot be sent.
-    if smtp_available {
+    if !is_local {
         if let Err(e) = send_verification_email(&state, &email, &verification_token).await {
             eprintln!("Warning: failed to send verification email to {email}: {e}");
         }
     }
 
-    let message = if smtp_available {
-        "Registration successful. Please check your email to verify your account."
-    } else {
+    let message = if is_local {
         "Registration successful. You can now log in."
+    } else {
+        "Registration successful. Please check your email to verify your account."
     };
     Ok((
         StatusCode::CREATED,
