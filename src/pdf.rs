@@ -684,4 +684,83 @@ mod tests {
             "expected multiple page objects, found 'Page' count = {page_kw}"
         );
     }
+
+    #[test]
+    fn generate_pdf_with_riff_part_produces_valid_pdf() {
+        use chord_shifter::song::{SongPart, TabCell, TabCol};
+        let mut song = sample_song();
+        let mut riff = SongPart::new_riff("Intro");
+        riff.tab_grid = vec![
+            TabCol::Notes([
+                TabCell::Fret(0),
+                TabCell::Empty,
+                TabCell::Empty,
+                TabCell::Empty,
+                TabCell::Empty,
+                TabCell::Fret(0),
+            ]),
+            TabCol::Barline,
+            TabCol::Notes([TabCell::Muted; 6]),
+        ];
+        song.parts.push(riff);
+        let bytes = generate_pdf_bytes(&song, Notation::English, 9.0, 18.0, 0).unwrap();
+        assert!(bytes.starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn generate_pdf_with_bass_riff_part_produces_valid_pdf() {
+        use chord_shifter::song::{SongPart, TabCell, TabCol};
+        let mut song = sample_song();
+        let mut bass = SongPart::new_bass_riff("Bass Line");
+        bass.tab_grid = vec![TabCol::Notes([TabCell::Fret(5); 6])];
+        song.parts.push(bass);
+        let bytes = generate_pdf_bytes(&song, Notation::English, 9.0, 18.0, 0).unwrap();
+        assert!(bytes.starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn generate_pdf_with_repeat_and_volta_produces_valid_pdf() {
+        use chord_shifter::song::{Chord, ChordQuality, PartItem, PartKind, SongPart};
+        let mut song = Song::new("Repeat Test", "C Major", "Artist");
+        let part = SongPart {
+            name: "Chorus".to_string(),
+            kind: PartKind::Chords,
+            tab: String::new(),
+            tab_grid: Vec::new(),
+            items: vec![
+                PartItem::Chord(Chord::new("C", ChordQuality::Major)),
+                PartItem::RepeatStart,
+                PartItem::Chord(Chord::new("G", ChordQuality::Major)),
+                PartItem::VoltaBracketStart {
+                    label: "1.".to_string(),
+                },
+                PartItem::Chord(Chord::new("F", ChordQuality::Major)),
+                PartItem::VoltaBracketEnd,
+                PartItem::Repeat { times: 2 },
+            ],
+        };
+        song.parts.push(part);
+        let bytes = generate_pdf_bytes(&song, Notation::English, 9.0, 18.0, 0).unwrap();
+        assert!(bytes.starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn generate_pdf_with_line_break_item_produces_valid_pdf() {
+        use chord_shifter::song::{Chord, ChordQuality, PartItem, PartKind, SongPart};
+        let mut song = Song::new("LineBreak Test", "C Major", "Artist");
+        let part = SongPart {
+            name: "Verse".to_string(),
+            kind: PartKind::Chords,
+            tab: String::new(),
+            tab_grid: Vec::new(),
+            items: vec![
+                PartItem::Chord(Chord::new("C", ChordQuality::Major)),
+                PartItem::LineBreak,
+                PartItem::Chord(Chord::new("G", ChordQuality::Major)),
+            ],
+        };
+        song.parts.push(part);
+        let bytes = generate_pdf_bytes(&song, Notation::English, 9.0, 18.0, 0).unwrap();
+        assert!(bytes.starts_with(b"%PDF-"));
+    }
 }
