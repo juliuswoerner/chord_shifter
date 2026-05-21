@@ -820,7 +820,19 @@ fn SongView(
                                 style: "font-size: 13px; font-weight: 700; color: #1a1a2e; background: #f0ece2; border: 1.5px solid #d9d4c5; border-radius: 10px; padding: 4px 10px; outline: none; cursor: pointer; font-family: inherit;",
                                 title: "Change key without transposing chords",
                                 onchange: move |e| {
-                                    song.write().transpose_to(&e.value());
+                                    let new_root = e.value();
+                                    let mut s = song.write();
+                                    // Only update the key label — do NOT transpose chords.
+                                    let mode = s.key
+                                        .split_whitespace()
+                                        .skip(1)
+                                        .collect::<Vec<_>>()
+                                        .join(" ");
+                                    s.key = if mode.is_empty() {
+                                        new_root.clone()
+                                    } else {
+                                        format!("{} {}", new_root, mode)
+                                    };
                                 },
                                 for note in notes {
                                     option {
