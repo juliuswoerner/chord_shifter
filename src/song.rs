@@ -5,7 +5,6 @@ use std::collections::HashMap;
 // ── Chord quality ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[allow(dead_code)]
 pub enum ChordQuality {
     Major,
     Minor,
@@ -131,7 +130,6 @@ impl Chord {
     }
 
     /// Human-readable chord name, e.g. `"Am"`, `"G7"`, `"Fmaj7"`, `"G/B"`.
-    #[allow(dead_code)]
     pub fn display(&self) -> String {
         match &self.bass_note {
             Some(b) => format!("{}{}/{}", self.root, self.quality.symbol(), b),
@@ -349,7 +347,6 @@ impl SongPart {
     }
 
     /// Iterate over only the `Chord` items in this part.
-    #[allow(dead_code)]
     pub fn chords(&self) -> impl Iterator<Item = &Chord> {
         self.items.iter().filter_map(|item| {
             if let PartItem::Chord(c) = item {
@@ -490,7 +487,6 @@ impl Instrument {
     }
 
     /// Accent colour used on the instrument sheet page.
-    #[allow(dead_code)]
     pub fn accent_color(self) -> &'static str {
         match self {
             Instrument::Guitar => "#1a5c38",
@@ -502,7 +498,6 @@ impl Instrument {
     }
 
     /// Parse from the label string (used for URL routing).
-    #[allow(dead_code)]
     pub fn from_label(s: &str) -> Option<Instrument> {
         match s {
             "Electric" => Some(Instrument::Guitar),
