@@ -721,18 +721,16 @@ async fn verify_email(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64;
-    if let Some(expires_at) = row.1 {
-        if now > expires_at {
-            // Remove the expired unverified account so the address can be re-registered.
-            let _ = sqlx::query("DELETE FROM users WHERE id = ?")
-                .bind(row.0)
-                .execute(&state.db)
-                .await;
-            return Err((
-                StatusCode::GONE,
-                "Verification token has expired. Please register again.".into(),
-            ));
-        }
+    if row.1.is_none_or(|expires_at| now > expires_at) {
+        // Remove the expired unverified account so the address can be re-registered.
+        let _ = sqlx::query("DELETE FROM users WHERE id = ?")
+            .bind(row.0)
+            .execute(&state.db)
+            .await;
+        return Err((
+            StatusCode::GONE,
+            "Verification token has expired. Please register again.".into(),
+        ));
     }
 
     let result = sqlx::query(
@@ -757,6 +755,70 @@ async fn verify_email(
     Ok(Json(serde_json::json!({
         "message": "Email verified successfully. You can now log in."
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn verify_email_treats_null_expiry_as_expired() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("Failed to connect to in-memory SQLite");
+        run_migrations(&pool).await;
+
+        let key_bytes = [0u8; 32];
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
+        let email = "legacy@example.com";
+        let encrypted_email = encrypt(&cipher, email).expect("Failed to encrypt email");
+
+        sqlx::query(
+            "INSERT INTO users
+             (email_encrypted, email_hash, email_verified, verification_token,
+              verification_token_expires_at, password_hash)
+             VALUES (?, ?, 0, ?, NULL, ?)",
+        )
+        .bind(encrypted_email)
+        .bind(email_sha256(email))
+        .bind("legacy-token")
+        .bind("password-hash")
+        .execute(&pool)
+        .await
+        .expect("Failed to insert legacy user");
+
+        let state = AppState {
+            db: pool.clone(),
+            jwt_secret: "0".repeat(64),
+            cipher,
+            smtp_host: None,
+            smtp_port: 587,
+            smtp_username: None,
+            smtp_password: None,
+            smtp_from: None,
+            app_url: "http://localhost:8080".into(),
+        };
+
+        let result = verify_email(State(state), Path("legacy-token".to_string())).await;
+
+        match result {
+            Err((status, message)) => {
+                assert_eq!(status, StatusCode::GONE);
+                assert_eq!(
+                    message,
+                    "Verification token has expired. Please register again."
+                );
+            }
+            Ok(_) => panic!("Expected legacy token with NULL expiry to be rejected"),
+        }
+        let remaining_users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&pool)
+            .await
+            .expect("Failed to count users");
+        assert_eq!(remaining_users, 0);
+    }
 }
 
 /// SHA-256 of the lowercased email address, hex-encoded, used as a lookup key.
