@@ -353,10 +353,10 @@ async fn main() {
         std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:chord_shifter.db".to_string());
     let jwt_secret =
         std::env::var("JWT_SECRET").expect("JWT_SECRET environment variable must be set");
+    let jwt_secret_bytes = hex::decode(&jwt_secret).expect("JWT_SECRET must be valid hex");
     assert!(
-        jwt_secret.len() >= 32,
-        "JWT_SECRET must be at least 32 characters long (got {})",
-        jwt_secret.len()
+        jwt_secret_bytes.len() == 32,
+        "JWT_SECRET must be 32 bytes (64 hex chars)"
     );
     let port: u16 = std::env::var("PORT")
         .ok()
