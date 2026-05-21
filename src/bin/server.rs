@@ -529,9 +529,21 @@ async fn run_migrations(pool: &SqlitePool) {
     .expect("Failed to create users table");
 
     // Idempotent: add verification_token_expires_at to existing deployments.
-    let _ = sqlx::query("ALTER TABLE users ADD COLUMN verification_token_expires_at INTEGER")
+    match sqlx::query("ALTER TABLE users ADD COLUMN verification_token_expires_at INTEGER")
         .execute(pool)
-        .await;
+        .await
+    {
+        Ok(_) => {}
+        Err(sqlx::Error::Database(db_err))
+            if db_err
+                .message()
+                .contains("duplicate column name: verification_token_expires_at") => {}
+        Err(err) => {
+            panic!(
+                "Failed to add users.verification_token_expires_at column: {err}"
+            );
+        }
+    }
 
     // Songs table — JSON blobs mirror the localStorage schema so the frontend
     // can be switched between backends without data-model changes.
