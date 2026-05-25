@@ -155,7 +155,7 @@ impl Chord {
 // ── Tab grid types ───────────────────────────────────────────────────────────
 
 /// A single note cell in a tab grid column.
-#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub enum TabCell {
     /// No note on this string at this beat.
     #[default]
@@ -164,6 +164,22 @@ pub enum TabCell {
     Fret(u8),
     /// Muted / dead string (written as "x").
     Muted,
+    /// Ghost note — written as "(n)" where n is the fret.
+    Ghost(u8),
+    /// Hammer-on ("h").
+    HammerOn,
+    /// Pull-off ("p").
+    PullOff,
+    /// Release bend ("r").
+    Release,
+    /// Bend ("b").
+    Bend,
+    /// Slide up ("/").
+    SlideUp,
+    /// Slide down ("\\").
+    SlideDown,
+    /// Free-form combination (e.g. "5h", "7b", "5h7", "(5)b").
+    Custom(String),
 }
 
 /// A single column in a tab grid — either a beat with 6 note cells, a barline, or a row break.
@@ -324,6 +340,14 @@ impl SongPart {
                             TabCell::Fret(f) => rows[row_i].push_str(&format!("-{f}-")),
                             TabCell::Muted => rows[row_i].push_str("-x-"),
                             TabCell::Empty => rows[row_i].push_str("---"),
+                            TabCell::Ghost(f) => rows[row_i].push_str(&format!("({f})")),
+                            TabCell::HammerOn => rows[row_i].push_str("-h-"),
+                            TabCell::PullOff => rows[row_i].push_str("-p-"),
+                            TabCell::Release => rows[row_i].push_str("-r-"),
+                            TabCell::Bend => rows[row_i].push_str("-b-"),
+                            TabCell::SlideUp => rows[row_i].push_str("-/-"),
+                            TabCell::SlideDown => rows[row_i].push_str("-\\-"),
+                            TabCell::Custom(s) => rows[row_i].push_str(s),
                         }
                     }
                     block_has_content = true;
@@ -520,6 +544,26 @@ impl Instrument {
     }
 }
 
+// ── PDF settings ─────────────────────────────────────────────────────────────
+
+/// Per-sheet PDF font-size settings.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PdfSettings {
+    /// Font size for part-label text (default 9 pt).
+    pub part_name_size: u32,
+    /// Font size for chord roots (default 18 pt).
+    pub chord_size: u32,
+}
+
+impl Default for PdfSettings {
+    fn default() -> Self {
+        Self {
+            part_name_size: 9,
+            chord_size: 18,
+        }
+    }
+}
+
 // ── Song ──────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -541,6 +585,9 @@ pub struct Song {
     /// Per-instrument capo settings. Key = Instrument::label().
     #[serde(default)]
     pub instrument_capos: HashMap<String, u8>,
+    /// Per-sheet PDF font-size settings. Key = "Base" or Instrument::label().
+    #[serde(default)]
+    pub pdf_settings: HashMap<String, PdfSettings>,
 }
 
 impl Song {
@@ -554,6 +601,7 @@ impl Song {
             vocals_notes: String::new(),
             instrument_parts: HashMap::new(),
             instrument_capos: HashMap::new(),
+            pdf_settings: HashMap::new(),
         }
     }
 
@@ -1047,7 +1095,7 @@ mod tests {
     #[test]
     fn tab_as_ascii_muted_string_shows_x() {
         let mut p = SongPart::new_riff("Riff");
-        let mut cells = [TabCell::Empty; 6];
+        let mut cells: [TabCell; 6] = std::array::from_fn(|_| TabCell::Empty);
         cells[0] = TabCell::Muted; // high e muted
         p.tab_grid = vec![TabCol::Notes(cells)];
         let ascii = p.tab_as_ascii();
@@ -1057,7 +1105,7 @@ mod tests {
     #[test]
     fn tab_as_ascii_barline_inserts_bar_marker() {
         let mut p = SongPart::new_riff("Riff");
-        let col = TabCol::Notes([TabCell::Empty; 6]);
+        let col = TabCol::Notes(std::array::from_fn(|_| TabCell::Empty));
         p.tab_grid = vec![col.clone(), TabCol::Barline, col];
         let ascii = p.tab_as_ascii();
         // Each row should contain a mid-bar "|"
@@ -1077,7 +1125,7 @@ mod tests {
     #[test]
     fn tab_as_ascii_bass_riff_uses_four_strings() {
         let mut p = SongPart::new_bass_riff("Bass");
-        p.tab_grid = vec![TabCol::Notes([TabCell::Empty; 6])];
+        p.tab_grid = vec![TabCol::Notes(std::array::from_fn(|_| TabCell::Empty))];
         let ascii = p.tab_as_ascii();
         let rows: Vec<&str> = ascii.lines().collect();
         assert_eq!(rows.len(), 4, "bass riff should have 4 string rows");
