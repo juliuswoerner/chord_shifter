@@ -24,7 +24,6 @@ fn measure_part_height(
     if part.kind == PartKind::Riff
         || part.kind == PartKind::BassRiff
         || part.kind == PartKind::DrumBeat
-        || part.kind == PartKind::DrumBeat
     {
         let is_bass = part.kind == PartKind::BassRiff;
         let num_strings: usize = if is_bass {

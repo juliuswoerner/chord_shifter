@@ -482,7 +482,7 @@ fn SongView(
     };
     let mut guitar_capo = {
         let cap = *song.read().instrument_capos.get("Electric").unwrap_or(&0);
-        use_signal(move || cap as i8)
+        use_signal(move || cap)
     };
     let mut acoustic_song = {
         let s = song.read();
@@ -497,7 +497,7 @@ fn SongView(
     };
     let mut acoustic_capo = {
         let cap = *song.read().instrument_capos.get("Acoustic").unwrap_or(&0);
-        use_signal(move || cap as i8)
+        use_signal(move || cap)
     };
     let mut bass_song = {
         let s = song.read();
@@ -512,7 +512,7 @@ fn SongView(
     };
     let bass_capo = {
         let cap = *song.read().instrument_capos.get("Bass").unwrap_or(&0);
-        use_signal(move || cap as i8)
+        use_signal(move || cap)
     };
     let mut piano_song = {
         let s = song.read();
