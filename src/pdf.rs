@@ -679,118 +679,272 @@ pub fn generate_pdf_bytes(
             continue;
         }
 
-        for item in &part.items {
-            use crate::song::PartItem;
-            match item {
-                PartItem::LineBreak => {
-                    x = MARGIN;
-                    y -= row_h + gap;
-                }
-                PartItem::Repeat { times } => {
-                    let label = if *times > 0 {
-                        format!("||: x{}", times)
-                    } else {
-                        "||:".to_string()
-                    };
-                    let w = label.len() as f32 * root_char_w;
-                    if x + w > RIGHT {
-                        x = MARGIN;
-                        y -= row_h + gap;
-                    }
-                    layer.use_text(&label, chord_size, Mm(x), Mm(y + 1.5), &font_bold);
-                    x += w + gap;
-                }
-                PartItem::VoltaBracketStart { label } => {
-                    let bracket_size = chord_size * 1.5;
-                    let label_size = chord_size * 0.55;
-                    let bracket_w = root_char_w * 1.5;
-                    let label_w = label.len() as f32 * root_char_w * 0.55 + 2.0;
-                    let w = bracket_w + label_w + 3.0;
-                    if x + w > RIGHT {
-                        x = MARGIN;
-                        y -= row_h + gap;
-                    }
-                    // Large bracket
-                    layer.use_text("[", bracket_size, Mm(x), Mm(y + 1.5), &font_bold);
-                    // Small superscript label
-                    layer.use_text(
-                        label.as_str(),
-                        label_size,
-                        Mm(x + bracket_w + 1.0),
-                        Mm(y + 1.5 + row_h * 0.45),
-                        &font_bold,
-                    );
-                    x += w;
-                }
-                PartItem::RepeatStart => {
-                    let w = root_char_w * 1.5 + 3.0;
-                    if x + w > RIGHT {
-                        x = MARGIN;
-                        y -= row_h + gap;
-                    }
-                    layer.use_text("||", chord_size, Mm(x), Mm(y + 1.5), &font_bold);
-                    x += w;
-                }
-                PartItem::VoltaBracketEnd => {
-                    let bracket_size = chord_size * 1.5;
-                    let w = root_char_w * 1.5 + 3.0;
-                    if x + w > RIGHT {
-                        x = MARGIN;
-                        y -= row_h + gap;
-                    }
-                    layer.use_text("]", bracket_size, Mm(x), Mm(y + 1.5), &font_bold);
-                    x += w;
-                }
-                PartItem::Chord(chord) => {
-                    let root = apply_notation(&chord.root, notation);
-                    let quality = chord.quality.symbol();
-                    let bass_suffix: String = chord
-                        .bass_note
-                        .as_deref()
-                        .map(|b| format!("/{}", apply_notation(b, notation)))
-                        .unwrap_or_default();
+        let has_lyrics = part
+            .part_text
+            .as_ref()
+            .map(|t| !t.content.is_empty())
+            .unwrap_or(false);
+        let two_col = has_lyrics
+            && part
+                .part_text
+                .as_ref()
+                .map(|t| t.show_chords)
+                .unwrap_or(false);
+        let skip_chords = has_lyrics && !two_col;
 
-                    let root_w = root.len() as f32 * root_char_w;
-                    let qual_w = quality.len() as f32 * qual_char_w;
-                    let bass_w = bass_suffix.len() as f32 * bass_char_w;
-                    let total_w = root_w + sup_offset + qual_w + bass_w;
+        // Column split point (45% left for lyrics, 55% right for chords)
+        let col_mid = MARGIN + (RIGHT - MARGIN) * 0.45;
 
-                    if x + total_w > RIGHT {
-                        x = MARGIN;
-                        y -= row_h + gap;
+        // ── In two-column mode render lyrics first (left col), save y, then reset ─
+        let start_y = y;
+        if two_col {
+            if let Some(pt) = &part.part_text {
+                let text_size = pt.size as f32;
+                let char_w = text_size * (3.5 / 18.0);
+                let line_h = text_size * (3.5 / 18.0) * 4.5;
+                let x_right = col_mid - 4.0;
+                let hex = pt.color.trim_start_matches('#');
+                let (r, g, b) = if hex.len() == 6 {
+                    (
+                        u8::from_str_radix(&hex[0..2], 16).unwrap_or(0x55),
+                        u8::from_str_radix(&hex[2..4], 16).unwrap_or(0x55),
+                        u8::from_str_radix(&hex[4..6], 16).unwrap_or(0x55),
+                    )
+                } else {
+                    (0x55, 0x55, 0x55)
+                };
+                layer.set_fill_color(Color::Rgb(Rgb::new(
+                    r as f32 / 255.0,
+                    g as f32 / 255.0,
+                    b as f32 / 255.0,
+                    None,
+                )));
+                let max_chars = ((x_right - MARGIN) / char_w).floor().max(1.0) as usize;
+                for line in pt.content.split('\n') {
+                    let mut remaining = line;
+                    while !remaining.is_empty() {
                         if y < MARGIN + 10.0 {
                             next_page!();
                         }
+                        let take = remaining.len().min(max_chars);
+                        let take = if take < remaining.len() {
+                            remaining[..take].rfind(' ').map(|i| i + 1).unwrap_or(take)
+                        } else {
+                            take
+                        };
+                        let (chunk, rest) = remaining.split_at(take);
+                        layer.use_text(chunk, text_size, Mm(MARGIN), Mm(y + 1.5), &font_bold);
+                        y -= line_h;
+                        remaining = rest;
                     }
-
-                    layer.use_text(&root, chord_size, Mm(x), Mm(y + 1.5), &font_bold);
-
-                    if !quality.is_empty() {
-                        layer.use_text(
-                            quality,
-                            qual_size,
-                            Mm(x + root_w + sup_offset),
-                            Mm(y + 1.5 + raise_mm),
-                            &font_bold,
-                        );
-                    }
-
-                    if !bass_suffix.is_empty() {
-                        layer.use_text(
-                            &bass_suffix,
-                            bass_size,
-                            Mm(x + root_w + sup_offset + qual_w),
-                            Mm(y + 1.5 - drop_mm),
-                            &font_bold,
-                        );
-                    }
-
-                    x += total_w + gap;
                 }
+                layer.set_fill_color(Color::Greyscale(Greyscale::new(0.0, None)));
             }
         }
+        let y_after_lyrics = y;
 
-        y -= row_h + gap + 8.0;
+        // Reset y/x for chord rendering (two-col: start chords at same y, right column)
+        if two_col {
+            y = start_y;
+        }
+        x = if two_col { col_mid } else { MARGIN };
+
+        // ── Chord items loop ─────────────────────────────────────────────────
+        let x_chord_start = if two_col { col_mid } else { MARGIN };
+        if !skip_chords {
+            for item in &part.items {
+                use crate::song::PartItem;
+                match item {
+                    PartItem::LineBreak => {
+                        x = x_chord_start;
+                        y -= row_h + gap;
+                    }
+                    PartItem::Repeat { times } => {
+                        let label = if *times > 0 {
+                            format!("||: x{}", times)
+                        } else {
+                            "||:".to_string()
+                        };
+                        let w = label.len() as f32 * root_char_w;
+                        if x + w > RIGHT {
+                            x = x_chord_start;
+                            y -= row_h + gap;
+                        }
+                        layer.use_text(&label, chord_size, Mm(x), Mm(y + 1.5), &font_bold);
+                        x += w + gap;
+                    }
+                    PartItem::VoltaBracketStart { label } => {
+                        let bracket_size = chord_size * 1.5;
+                        let label_size = chord_size * 0.55;
+                        let bracket_w = root_char_w * 1.5;
+                        let label_w = label.len() as f32 * root_char_w * 0.55 + 2.0;
+                        let w = bracket_w + label_w + 3.0;
+                        if x + w > RIGHT {
+                            x = x_chord_start;
+                            y -= row_h + gap;
+                        }
+                        layer.use_text("[", bracket_size, Mm(x), Mm(y + 1.5), &font_bold);
+                        layer.use_text(
+                            label.as_str(),
+                            label_size,
+                            Mm(x + bracket_w + 1.0),
+                            Mm(y + 1.5 + row_h * 0.45),
+                            &font_bold,
+                        );
+                        x += w;
+                    }
+                    PartItem::RepeatStart => {
+                        let w = root_char_w * 1.5 + 3.0;
+                        if x + w > RIGHT {
+                            x = x_chord_start;
+                            y -= row_h + gap;
+                        }
+                        layer.use_text("||", chord_size, Mm(x), Mm(y + 1.5), &font_bold);
+                        x += w;
+                    }
+                    PartItem::VoltaBracketEnd => {
+                        let bracket_size = chord_size * 1.5;
+                        let w = root_char_w * 1.5 + 3.0;
+                        if x + w > RIGHT {
+                            x = x_chord_start;
+                            y -= row_h + gap;
+                        }
+                        layer.use_text("]", bracket_size, Mm(x), Mm(y + 1.5), &font_bold);
+                        x += w;
+                    }
+                    PartItem::Chord(chord) => {
+                        let root = apply_notation(&chord.root, notation);
+                        let quality = chord.quality.symbol();
+                        let bass_suffix: String = chord
+                            .bass_note
+                            .as_deref()
+                            .map(|b| format!("/{}", apply_notation(b, notation)))
+                            .unwrap_or_default();
+
+                        let root_w = root.len() as f32 * root_char_w;
+                        let qual_w = quality.len() as f32 * qual_char_w;
+                        let bass_w = bass_suffix.len() as f32 * bass_char_w;
+                        let total_w = root_w + sup_offset + qual_w + bass_w;
+
+                        if x + total_w > RIGHT {
+                            x = x_chord_start;
+                            y -= row_h + gap;
+                            if y < MARGIN + 10.0 {
+                                next_page!();
+                            }
+                        }
+
+                        layer.use_text(&root, chord_size, Mm(x), Mm(y + 1.5), &font_bold);
+
+                        if !quality.is_empty() {
+                            layer.use_text(
+                                quality,
+                                qual_size,
+                                Mm(x + root_w + sup_offset),
+                                Mm(y + 1.5 + raise_mm),
+                                &font_bold,
+                            );
+                        }
+
+                        if !bass_suffix.is_empty() {
+                            layer.use_text(
+                                &bass_suffix,
+                                bass_size,
+                                Mm(x + root_w + sup_offset + qual_w),
+                                Mm(y + 1.5 - drop_mm),
+                                &font_bold,
+                            );
+                        }
+
+                        x += total_w + gap;
+                    }
+                    PartItem::Text { content, color } => {
+                        if y < MARGIN + 10.0 {
+                            next_page!();
+                        }
+                        let hex = color.trim_start_matches('#');
+                        let (r, g, b) = if hex.len() == 6 {
+                            let rv = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0x88);
+                            let gv = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0x88);
+                            let bv = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0x88);
+                            (rv, gv, bv)
+                        } else if hex.len() == 3 {
+                            let rv = u8::from_str_radix(&hex[0..1].repeat(2), 16).unwrap_or(0x88);
+                            let gv = u8::from_str_radix(&hex[1..2].repeat(2), 16).unwrap_or(0x88);
+                            let bv = u8::from_str_radix(&hex[2..3].repeat(2), 16).unwrap_or(0x88);
+                            (rv, gv, bv)
+                        } else {
+                            (0x88, 0x88, 0x88)
+                        };
+                        let text_size = chord_size * 0.72;
+                        layer.set_fill_color(Color::Rgb(Rgb::new(
+                            r as f32 / 255.0,
+                            g as f32 / 255.0,
+                            b as f32 / 255.0,
+                            None,
+                        )));
+                        layer.use_text(content.as_str(), text_size, Mm(x), Mm(y + 1.5), &font_bold);
+                        layer.set_fill_color(Color::Greyscale(Greyscale::new(0.0, None)));
+                        let text_char_w = root_char_w * (text_size / chord_size);
+                        x += content.len() as f32 * text_char_w + gap;
+                    }
+                }
+            }
+        } // end !skip_chords
+
+        // ── Advance y based on mode ──────────────────────────────────────────
+        if two_col {
+            let y_after_chords = y - (row_h + gap + 8.0);
+            y = y_after_lyrics.min(y_after_chords);
+            y -= gap;
+        } else if skip_chords {
+            // Lyrics-only: render full-width, no chord row gap
+            if let Some(pt) = &part.part_text {
+                let text_size = pt.size as f32;
+                let char_w = text_size * (3.5 / 18.0);
+                let line_h = text_size * (3.5 / 18.0) * 4.5;
+                let hex = pt.color.trim_start_matches('#');
+                let (r, g, b) = if hex.len() == 6 {
+                    (
+                        u8::from_str_radix(&hex[0..2], 16).unwrap_or(0x55),
+                        u8::from_str_radix(&hex[2..4], 16).unwrap_or(0x55),
+                        u8::from_str_radix(&hex[4..6], 16).unwrap_or(0x55),
+                    )
+                } else {
+                    (0x55, 0x55, 0x55)
+                };
+                layer.set_fill_color(Color::Rgb(Rgb::new(
+                    r as f32 / 255.0,
+                    g as f32 / 255.0,
+                    b as f32 / 255.0,
+                    None,
+                )));
+                let max_chars = ((RIGHT - MARGIN) / char_w).floor().max(1.0) as usize;
+                for line in pt.content.split('\n') {
+                    let mut remaining = line;
+                    while !remaining.is_empty() {
+                        if y < MARGIN + 10.0 {
+                            next_page!();
+                        }
+                        let take = remaining.len().min(max_chars);
+                        let take = if take < remaining.len() {
+                            remaining[..take].rfind(' ').map(|i| i + 1).unwrap_or(take)
+                        } else {
+                            take
+                        };
+                        let (chunk, rest) = remaining.split_at(take);
+                        layer.use_text(chunk, text_size, Mm(MARGIN), Mm(y + 1.5), &font_bold);
+                        y -= line_h;
+                        remaining = rest;
+                    }
+                }
+                layer.set_fill_color(Color::Greyscale(Greyscale::new(0.0, None)));
+            }
+            y -= gap;
+        } else {
+            // Chords only: normal advance
+            y -= row_h + gap + 8.0;
+        }
     }
 
     let mut buf: Vec<u8> = Vec::new();
@@ -957,6 +1111,7 @@ mod tests {
                 PartItem::VoltaBracketEnd,
                 PartItem::Repeat { times: 2 },
             ],
+            part_text: None,
         };
         song.parts.push(part);
         let bytes = generate_pdf_bytes(&song, Notation::English, 9.0, 18.0, 0).unwrap();
@@ -977,6 +1132,7 @@ mod tests {
                 PartItem::LineBreak,
                 PartItem::Chord(Chord::new("G", ChordQuality::Major)),
             ],
+            part_text: None,
         };
         song.parts.push(part);
         let bytes = generate_pdf_bytes(&song, Notation::English, 9.0, 18.0, 0).unwrap();

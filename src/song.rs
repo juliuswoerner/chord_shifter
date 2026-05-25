@@ -226,6 +226,50 @@ pub enum PartItem {
     VoltaBracketStart { label: String },
     /// End of a volta bracket.
     VoltaBracketEnd,
+    /// A free-text comment / annotation for this part. Always rendered on its own line.
+    /// `color` is a CSS colour string (e.g. `"#888888"`).
+    Text { content: String, color: String },
+}
+
+// ── Part text ─────────────────────────────────────────────────────────────────
+
+/// Per-part vocal / lyrics annotation shown below the chords or tab.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PartTextSettings {
+    /// The lyrics / comment text. Use `\n` for line breaks.
+    pub content: String,
+    /// CSS colour string for the text (e.g. `"#555555"`).
+    #[serde(default = "PartTextSettings::default_color")]
+    pub color: String,
+    /// Font size in pt used in the PDF (default 10).
+    #[serde(default = "PartTextSettings::default_size")]
+    pub size: u32,
+    /// Whether to show the part's chords alongside the lyrics (two-column layout).
+    #[serde(default)]
+    pub show_chords: bool,
+}
+
+impl PartTextSettings {
+    fn default_color() -> String {
+        "#555555".to_string()
+    }
+    fn default_size() -> u32 {
+        10
+    }
+    pub fn new() -> Self {
+        Self {
+            content: String::new(),
+            color: Self::default_color(),
+            size: Self::default_size(),
+            show_chords: false,
+        }
+    }
+}
+
+impl Default for PartTextSettings {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ── Song part ─────────────────────────────────────────────────────────────────
@@ -247,6 +291,9 @@ pub struct SongPart {
     /// All items in this part in order — only used when `kind == PartKind::Chords`.
     #[serde(alias = "chords")]
     pub items: Vec<PartItem>,
+    /// Optional vocals / lyrics text shown below the chords or tab.
+    #[serde(default)]
+    pub part_text: Option<PartTextSettings>,
 }
 
 impl SongPart {
@@ -257,6 +304,7 @@ impl SongPart {
             tab: String::new(),
             tab_grid: Vec::new(),
             items: Vec::new(),
+            part_text: None,
         }
     }
 
@@ -267,6 +315,7 @@ impl SongPart {
             tab: String::new(),
             tab_grid: Vec::new(),
             items: Vec::new(),
+            part_text: None,
         }
     }
 
@@ -277,6 +326,7 @@ impl SongPart {
             tab: String::new(),
             tab_grid: Vec::new(),
             items: Vec::new(),
+            part_text: None,
         }
     }
 
@@ -287,6 +337,7 @@ impl SongPart {
             tab: String::new(),
             tab_grid: Vec::new(),
             items: Vec::new(),
+            part_text: None,
         }
     }
 
@@ -511,6 +562,7 @@ pub enum Instrument {
     Bass,
     Piano,
     Drums,
+    Vocals,
 }
 
 impl Instrument {
@@ -521,6 +573,7 @@ impl Instrument {
             Instrument::Bass => "Bass",
             Instrument::Piano => "Piano",
             Instrument::Drums => "Drums",
+            Instrument::Vocals => "Vocals",
         }
     }
 
@@ -532,6 +585,7 @@ impl Instrument {
             Instrument::Bass => "#1a2e5c",
             Instrument::Piano => "#4a1a6e",
             Instrument::Drums => "#7c1a1a",
+            Instrument::Vocals => "#3a3a4e",
         }
     }
 
@@ -543,17 +597,19 @@ impl Instrument {
             "Bass" => Some(Instrument::Bass),
             "Piano" => Some(Instrument::Piano),
             "Drums" => Some(Instrument::Drums),
+            "Vocals" => Some(Instrument::Vocals),
             _ => None,
         }
     }
 
-    pub fn all() -> [Instrument; 5] {
+    pub fn all() -> [Instrument; 6] {
         [
             Instrument::Guitar,
             Instrument::AcousticGuitar,
             Instrument::Bass,
             Instrument::Piano,
             Instrument::Drums,
+            Instrument::Vocals,
         ]
     }
 }
@@ -627,6 +683,7 @@ impl Song {
             tab: String::new(),
             tab_grid: Vec::new(),
             items: chords.into_iter().map(PartItem::Chord).collect(),
+            part_text: None,
         });
         self
     }
@@ -1304,6 +1361,7 @@ mod tests {
                     PartItem::Chord(Chord::new("C", ChordQuality::Major)),
                     PartItem::Chord(Chord::new("F", ChordQuality::Major)),
                 ],
+                part_text: None,
             }],
         );
         song.transpose_to("G");
@@ -1352,6 +1410,7 @@ mod tests {
                 PartItem::Chord(Chord::new("C", ChordQuality::Major)),
                 PartItem::VoltaBracketEnd,
             ],
+            part_text: None,
         };
         let json = serde_json::to_string(&part).expect("serialize");
         let back: SongPart = serde_json::from_str(&json).expect("deserialize");

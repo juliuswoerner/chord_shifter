@@ -21,6 +21,7 @@ fn inst_icon(inst: Instrument) -> Asset {
         Instrument::Bass => ICON_BASS,
         Instrument::Piano => ICON_PIANO,
         Instrument::Drums => ICON_DRUMS,
+        Instrument::Vocals => ICON_BASE,
     }
 }
 
@@ -356,8 +357,8 @@ struct SongRow {
 }
 
 use song::{
-    apply_notation, Chord, ChordQuality, Notation, PartItem, PartKind, Song, SongPart, TabCell,
-    TabCol,
+    apply_notation, Chord, ChordQuality, Notation, PartItem, PartKind, PartTextSettings, Song,
+    SongPart, TabCell, TabCol,
 };
 
 // ── Routes ────────────────────────────────────────────────────────────────────
@@ -540,6 +541,21 @@ fn SongView(
         drop(s);
         use_signal(move || Song { parts, ..sc })
     };
+    let mut vocals_song = {
+        let s = song.read();
+        let parts = s
+            .instrument_parts
+            .get("Vocals")
+            .cloned()
+            .unwrap_or_else(|| s.parts.clone());
+        let sc = s.clone();
+        drop(s);
+        use_signal(move || Song { parts, ..sc })
+    };
+    let vocals_capo = {
+        let cap = *song.read().instrument_capos.get("Vocals").unwrap_or(&0);
+        use_signal(move || cap)
+    };
     let mut inst_save_msg: Signal<Option<&'static str>> = use_signal(|| None);
 
     // Propagate base-sheet edits to any instrument that has no saved override.
@@ -562,6 +578,9 @@ fn SongView(
         }
         if !overrides.contains_key("Drums") {
             drums_song.write().parts = base.clone();
+        }
+        if !overrides.contains_key("Vocals") {
+            vocals_song.write().parts = base.clone();
         }
     });
 
@@ -1053,6 +1072,9 @@ fn SongView(
             if render_mode() && *active_instrument.read() == Some(Instrument::Drums) {
                 RenderedSheet { song: drums_song, notation, capo: use_signal(|| 0_i8) }
             }
+            if render_mode() && *active_instrument.read() == Some(Instrument::Vocals) {
+                RenderedSheet { song: vocals_song, notation, capo: vocals_capo }
+            }
             if !render_mode() {
             if active_instrument.read().is_none() {
                 // Base sheet
@@ -1121,10 +1143,11 @@ fn SongView(
                         bass_song.write().parts = base_parts.clone();
                         piano_song.write().parts = base_parts.clone();
                         drums_song.write().parts = base_parts.clone();
+                        vocals_song.write().parts = base_parts.clone();
                         // Also overwrite saved overrides so the changes persist
                         // when the user saves an instrument sheet.
                         let mut s = song.write();
-                        for label in ["Electric", "Acoustic", "Bass", "Piano", "Drums"] {
+                        for label in ["Electric", "Acoustic", "Bass", "Piano", "Drums", "Vocals"] {
                             if s.instrument_parts.contains_key(label) {
                                 s.instrument_parts.insert(label.to_string(), base_parts.clone());
                             }
@@ -1142,6 +1165,7 @@ fn SongView(
                         Instrument::Bass => (bass_song, bass_capo),
                         Instrument::Piano => (piano_song, piano_capo),
                         Instrument::Drums => (drums_song, use_signal(|| 0_i8)),
+                        Instrument::Vocals => (vocals_song, vocals_capo),
                     };
                     let accent = inst.accent_color();
                     let inst_label = inst.label();
@@ -1152,7 +1176,37 @@ fn SongView(
                             img { src: inst_icon(inst).to_string(), style: "width: 22px; height: 22px; object-fit: contain;", alt: "{inst_label}" }
                             span { "✏️  " strong { "{inst_label}" } " sheet — edits apply to this instrument only" }
                         }
-                        // Instrument capo/transpose control (hidden for drums)
+                        // Instrument capo/transpose control (hidden for drums and vocals)
+                        if inst == Instrument::Vocals {
+                            // ── Global chords on/off for vocals ─────────────────
+                            {
+                                let all_on = act_song.read().parts.iter()
+                                    .any(|p| p.part_text.as_ref().map(|t| t.show_chords).unwrap_or(false));
+                                let btn_border = if all_on { "#7a9060" } else { "#d0cbc0" };
+                                let btn_bg     = if all_on { "#e8f0e0" } else { "#f5f2ea" };
+                                let btn_fg     = if all_on { "#4a6040" } else { "#aaa" };
+                                let btn_label  = if all_on { "\u{1F3B8} Chords: on (all parts)" } else { "\u{1F3B8} Chords: off (all parts)" };
+                                rsx! {
+                                    div {
+                                        style: "margin-bottom: 16px; display: flex; align-items: center; gap: 10px;",
+                                        button {
+                                            style: "padding: 5px 14px; font-size: 11px; font-weight: 700; border-radius: 8px; cursor: pointer; font-family: inherit; border: 1.5px solid {btn_border}; background: {btn_bg}; color: {btn_fg};",
+                                            title: "Toggle chord display for all parts",
+                                            onclick: move |_| {
+                                                let new_val = !all_on;
+                                                let mut s = act_song.write();
+                                                for part in s.parts.iter_mut() {
+                                                    if let Some(t) = part.part_text.as_mut() {
+                                                        t.show_chords = new_val;
+                                                    }
+                                                }
+                                            },
+                                            "{btn_label}"
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         if inst != Instrument::Drums {
                         div {
                             style: "margin-bottom: 20px; display: flex; align-items: center; gap: 10px;",
@@ -1232,7 +1286,7 @@ fn SongView(
                                     }
                                 }
                             }
-                            PartView { key: "{part_index}", song: act_song, part_index, notation, capo: act_capo }
+                            PartView { key: "{part_index}", song: act_song, part_index, notation, capo: act_capo, vocals_only: inst == Instrument::Vocals }
                         }
                         button {
                             style: "
@@ -1519,6 +1573,10 @@ fn SongView(
                         Some(Instrument::Drums) => {
                             let parts = drums_song.read().parts.clone();
                             (Song { parts, ..base.clone() }, 0_i8)
+                        }
+                        Some(Instrument::Vocals) => {
+                            let parts = vocals_song.read().parts.clone();
+                            (Song { parts, ..base.clone() }, vocals_capo())
                         }
                     };
                     let note = notation();
@@ -2414,83 +2472,206 @@ fn RenderedSheet(song: Signal<Song>, notation: Signal<Notation>, capo: Signal<i8
                         style: "font-size: 11px; font-weight: 700; color: #555; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 14px;",
                         "{part.name}"
                     }
-                    if part.kind == PartKind::Riff || part.kind == PartKind::BassRiff || part.kind == PartKind::DrumBeat {
-                        pre {
-                            style: "font-family: 'Courier New', monospace; font-size: 15px; color: #333; white-space: pre-wrap; margin: 0;",
-                            "{part.tab_as_ascii()}"
-                        }
-                    } else {
-                        // Chord row — split at LineBreak items
-                        {
-                            let mut rows: Vec<Vec<&PartItem>> = vec![vec![]];
-                            for item in &part.items {
-                                if matches!(item, PartItem::LineBreak) {
-                                    rows.push(vec![]);
-                                } else {
-                                    rows.last_mut().unwrap().push(item);
+                    if part.part_text.as_ref().map(|t| t.show_chords && !t.content.is_empty()).unwrap_or(false) {
+                        // ── Two-column: lyrics left, chords right ──────────────
+                        div {
+                            style: "display: flex; gap: 48px; align-items: flex-start;",
+                            // Lyrics column (left)
+                            if let Some(pt) = &part.part_text {
+                                div {
+                                    style: "flex: 1; min-width: 0; white-space: pre-wrap; font-size: {pt.size}px; color: {pt.color}; line-height: 1.8;",
+                                    "{pt.content}"
                                 }
                             }
-                            rsx! {
-                                div {
-                                    style: "display: flex; flex-direction: column; gap: 24px;",
-                                    for row in rows.iter() {
-                                        div {
-                                            style: "display: flex; flex-wrap: wrap; gap: 32px; align-items: baseline;",
-                                            for item in row.iter() {
-                                                match item {
-                                                    PartItem::Chord(chord) => {
-                                                        let root = apply_notation(&chord.root, n);
-                                                        let qual = chord.quality.symbol().to_string();
-                                                        let bass = chord.bass_note.as_ref().map(|b| apply_notation(b, n));
-                                                        rsx! {
-                                                            span {
-                                                                style: "display: inline-flex; align-items: baseline; white-space: nowrap;",
-                                                                // Root
-                                                                span {
-                                                                    style: "font-size: 28px; font-weight: 700; color: #111; line-height: 1;",
-                                                                    "{root}"
-                                                                }
-                                                                // Quality superscript
-                                                                if !qual.is_empty() {
-                                                                    sup {
-                                                                        style: "font-size: 15px; font-weight: 600; color: #111; vertical-align: super; margin-left: 1px;",
-                                                                        "{qual}"
-                                                                    }
-                                                                }
-                                                                // Bass note
-                                                                if let Some(b) = bass {
-                                                                    span {
-                                                                        style: "font-size: 19px; font-weight: 500; color: #222; vertical-align: sub; margin-left: 1px;",
-                                                                        "/{b}"
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    },
-                                                    PartItem::Repeat { times } => {
-                                                        let label = if *times == 0 { "||:".to_string() } else { format!("||: x{times}") };
-                                                        rsx! {
-                                                            span {
-                                                                style: "font-size: 22px; color: #888; font-weight: 700; letter-spacing: -1px; font-family: 'Courier New', monospace;",
-                                                                "{label}"
-                                                            }
-                                                        }
-                                                    },
-                                                    PartItem::RepeatStart => rsx! {
-                                                        span { style: "font-size: 22px; color: #888; font-weight: 700; letter-spacing: -1px; font-family: 'Courier New', monospace;", "||" }
-                                                    },
-                                                    PartItem::VoltaBracketStart { label } => rsx! {
-                                                        span {
-                                                            style: "display: inline-flex; align-items: flex-start; white-space: nowrap;",
-                                                            span { style: "font-size: 28px; font-weight: 300; color: #888; line-height: 1;", "[" }
-                                                            sup { style: "font-size: 13px; font-weight: 700; color: #555; margin-left: 1px;", "{label}" }
-                                                        }
-                                                    },
-                                                    PartItem::VoltaBracketEnd => rsx! {
-                                                        span { style: "font-size: 24px; font-weight: 300; color: #888;", "]" }
-                                                    },
-                                                    PartItem::LineBreak => rsx! { span {} },
+                            // Chords / tab column (right)
+                            div {
+                                style: "flex: 1; min-width: 0;",
+                                if part.kind == PartKind::Riff || part.kind == PartKind::BassRiff || part.kind == PartKind::DrumBeat {
+                                    pre {
+                                        style: "font-family: 'Courier New', monospace; font-size: 15px; color: #333; white-space: pre-wrap; margin: 0;",
+                                        "{part.tab_as_ascii()}"
+                                    }
+                                } else {
+                                    {
+                                        enum Row2<'a> {
+                                            Chords(Vec<&'a PartItem>),
+                                            Text { content: &'a str, color: &'a str },
+                                        }
+                                        let mut rows: Vec<Row2> = vec![Row2::Chords(vec![])];
+                                        for item in &part.items {
+                                            match item {
+                                                PartItem::LineBreak => rows.push(Row2::Chords(vec![])),
+                                                PartItem::Text { content, color } => {
+                                                    if let Some(Row2::Chords(v)) = rows.last() {
+                                                        if !v.is_empty() { rows.push(Row2::Chords(vec![])); }
+                                                    }
+                                                    rows.push(Row2::Text { content, color });
+                                                    rows.push(Row2::Chords(vec![]));
                                                 }
+                                                _ => {
+                                                    if let Some(Row2::Chords(v)) = rows.last_mut() {
+                                                        v.push(item);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        rsx! {
+                                            div {
+                                                style: "display: flex; flex-direction: column; gap: 24px;",
+                                                for (ri, row) in rows.iter().enumerate() {
+                                                    match row {
+                                                        Row2::Text { content, color } => rsx! {
+                                                            div {
+                                                                key: "text-{ri}",
+                                                                style: "width: 100%; font-size: 13px; font-style: italic; color: {color}; line-height: 1.5; padding: 2px 0;",
+                                                                "{content}"
+                                                            }
+                                                        },
+                                                        Row2::Chords(items) => rsx! {
+                                                            div {
+                                                                key: "row-{ri}",
+                                                                style: "display: flex; flex-wrap: wrap; gap: 32px; align-items: baseline;",
+                                                                for item in items.iter() {
+                                                                    match item {
+                                                                        PartItem::Chord(chord) => {
+                                                                            let root = apply_notation(&chord.root, n);
+                                                                            let qual = chord.quality.symbol().to_string();
+                                                                            let bass = chord.bass_note.as_ref().map(|b| apply_notation(b, n));
+                                                                            rsx! {
+                                                                                span {
+                                                                                    style: "display: inline-flex; align-items: baseline; white-space: nowrap;",
+                                                                                    span { style: "font-size: 28px; font-weight: 700; color: #111; line-height: 1;", "{root}" }
+                                                                                    if !qual.is_empty() {
+                                                                                        sup { style: "font-size: 15px; font-weight: 600; color: #111; vertical-align: super; margin-left: 1px;", "{qual}" }
+                                                                                    }
+                                                                                    if let Some(b) = bass {
+                                                                                        span { style: "font-size: 19px; font-weight: 500; color: #222; vertical-align: sub; margin-left: 1px;", "/{b}" }
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        },
+                                                                        PartItem::Repeat { times } => {
+                                                                            let label = if *times == 0 { "||:".to_string() } else { format!("||: x{times}") };
+                                                                            rsx! { span { style: "font-size: 22px; color: #888; font-weight: 700; letter-spacing: -1px; font-family: 'Courier New', monospace;", "{label}" } }
+                                                                        },
+                                                                        PartItem::RepeatStart => rsx! { span { style: "font-size: 22px; color: #888; font-weight: 700; letter-spacing: -1px; font-family: 'Courier New', monospace;", "||" } },
+                                                                        PartItem::VoltaBracketStart { label } => rsx! {
+                                                                            span {
+                                                                                style: "display: inline-flex; align-items: flex-start; white-space: nowrap;",
+                                                                                span { style: "font-size: 28px; font-weight: 300; color: #888; line-height: 1;", "[" }
+                                                                                sup { style: "font-size: 13px; font-weight: 700; color: #555; margin-left: 1px;", "{label}" }
+                                                                            }
+                                                                        },
+                                                                        PartItem::VoltaBracketEnd => rsx! { span { style: "font-size: 24px; font-weight: 300; color: #888;", "]" } },
+                                                                        _ => rsx! { span {} },
+                                                                    }
+                                                                }
+                                                            }
+                                                        },
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else if part.part_text.as_ref().map(|t| !t.content.is_empty()).unwrap_or(false) {
+                        // ── Vocals only: lyrics replace the chords area ─────────
+                        if let Some(pt) = &part.part_text {
+                            div {
+                                style: "white-space: pre-wrap; font-size: {pt.size}px; color: {pt.color}; line-height: 1.8;",
+                                "{pt.content}"
+                            }
+                        }
+                    } else {
+                        // ── No vocals text: normal chords / tab ─────────────────
+                        if part.kind == PartKind::Riff || part.kind == PartKind::BassRiff || part.kind == PartKind::DrumBeat {
+                            pre {
+                                style: "font-family: 'Courier New', monospace; font-size: 15px; color: #333; white-space: pre-wrap; margin: 0;",
+                                "{part.tab_as_ascii()}"
+                            }
+                        } else {
+                            {
+                                enum Row<'a> {
+                                    Chords(Vec<&'a PartItem>),
+                                    Text { content: &'a str, color: &'a str },
+                                }
+                                let mut rows: Vec<Row> = vec![Row::Chords(vec![])];
+                                for item in &part.items {
+                                    match item {
+                                        PartItem::LineBreak => rows.push(Row::Chords(vec![])),
+                                        PartItem::Text { content, color } => {
+                                            if let Some(Row::Chords(v)) = rows.last() {
+                                                if !v.is_empty() { rows.push(Row::Chords(vec![])); }
+                                            }
+                                            rows.push(Row::Text { content, color });
+                                            rows.push(Row::Chords(vec![]));
+                                        }
+                                        _ => {
+                                            if let Some(Row::Chords(v)) = rows.last_mut() {
+                                                v.push(item);
+                                            }
+                                        }
+                                    }
+                                }
+                                rsx! {
+                                    div {
+                                        style: "display: flex; flex-direction: column; gap: 24px;",
+                                        for (ri, row) in rows.iter().enumerate() {
+                                            match row {
+                                                Row::Text { content, color } => rsx! {
+                                                    div {
+                                                        key: "text-{ri}",
+                                                        style: "width: 100%; font-size: 13px; font-style: italic; color: {color}; line-height: 1.5; padding: 2px 0;",
+                                                        "{content}"
+                                                    }
+                                                },
+                                                Row::Chords(items) => rsx! {
+                                                    div {
+                                                        key: "row-{ri}",
+                                                        style: "display: flex; flex-wrap: wrap; gap: 32px; align-items: baseline;",
+                                                        for item in items.iter() {
+                                                            match item {
+                                                                PartItem::Chord(chord) => {
+                                                                    let root = apply_notation(&chord.root, n);
+                                                                    let qual = chord.quality.symbol().to_string();
+                                                                    let bass = chord.bass_note.as_ref().map(|b| apply_notation(b, n));
+                                                                    rsx! {
+                                                                        span {
+                                                                            style: "display: inline-flex; align-items: baseline; white-space: nowrap;",
+                                                                            span { style: "font-size: 28px; font-weight: 700; color: #111; line-height: 1;", "{root}" }
+                                                                            if !qual.is_empty() {
+                                                                                sup { style: "font-size: 15px; font-weight: 600; color: #111; vertical-align: super; margin-left: 1px;", "{qual}" }
+                                                                            }
+                                                                            if let Some(b) = bass {
+                                                                                span { style: "font-size: 19px; font-weight: 500; color: #222; vertical-align: sub; margin-left: 1px;", "/{b}" }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                },
+                                                                PartItem::Repeat { times } => {
+                                                                    let label = if *times == 0 { "||:".to_string() } else { format!("||: x{times}") };
+                                                                    rsx! { span { style: "font-size: 22px; color: #888; font-weight: 700; letter-spacing: -1px; font-family: 'Courier New', monospace;", "{label}" } }
+                                                                },
+                                                                PartItem::RepeatStart => rsx! {
+                                                                    span { style: "font-size: 22px; color: #888; font-weight: 700; letter-spacing: -1px; font-family: 'Courier New', monospace;", "||" }
+                                                                },
+                                                                PartItem::VoltaBracketStart { label } => rsx! {
+                                                                    span {
+                                                                        style: "display: inline-flex; align-items: flex-start; white-space: nowrap;",
+                                                                        span { style: "font-size: 28px; font-weight: 300; color: #888; line-height: 1;", "[" }
+                                                                        sup { style: "font-size: 13px; font-weight: 700; color: #555; margin-left: 1px;", "{label}" }
+                                                                    }
+                                                                },
+                                                                PartItem::VoltaBracketEnd => rsx! {
+                                                                    span { style: "font-size: 24px; font-weight: 300; color: #888;", "]" }
+                                                                },
+                                                                _ => rsx! { span {} },
+                                                            }
+                                                        }
+                                                    }
+                                                },
                                             }
                                         }
                                     }
@@ -2500,6 +2681,7 @@ fn RenderedSheet(song: Signal<Song>, notation: Signal<Notation>, capo: Signal<i8
                     }
                 }
             }
+
         }
     }
 }
@@ -2512,6 +2694,7 @@ fn PartView(
     part_index: usize,
     notation: Signal<Notation>,
     capo: Signal<i8>,
+    #[props(default = false)] vocals_only: bool,
 ) -> Element {
     let item_count = song
         .read()
@@ -2544,6 +2727,12 @@ fn PartView(
         .parts
         .get(part_index)
         .map(|p| p.kind == PartKind::DrumBeat)
+        .unwrap_or(false);
+    let show_chords_with_vocals = song
+        .read()
+        .parts
+        .get(part_index)
+        .and_then(|p| p.part_text.as_ref().map(|t| t.show_chords))
         .unwrap_or(false);
 
     let part_border = if is_drum_beat {
@@ -2640,10 +2829,10 @@ fn PartView(
                 },
             }
 
-            if is_riff {
+            if is_riff && (!vocals_only || show_chords_with_vocals) {
                 TabEditor { song, part_index, bass: is_bass_riff, drums: is_drum_beat }
             }
-            if !is_riff {
+            if !is_riff && (!vocals_only || show_chords_with_vocals) {
                 // ── Chord items + add buttons ──────────────────────────────
                 div {
                     style: "display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start;",
@@ -2781,6 +2970,15 @@ fn PartView(
                                                 is_start: false,
                                             }
                                         },
+                                        Some(PartItem::Text { content, color }) => rsx! {
+                                            TextAnnotationEditor {
+                                                song,
+                                                part_index,
+                                                item_index,
+                                                content,
+                                                color,
+                                            }
+                                        },
                                         None => rsx! { span {} },
                                     }
                                 }
@@ -2886,6 +3084,178 @@ fn PartView(
                                 },
                                 "]"
                             }
+
+                            button {
+                                style: "
+                                    padding: 3px 7px; font-size: 11px; font-weight: 700;
+                                    background: #fffde7; border: 1.5px solid #c8a800;
+                                    border-radius: 7px; color: #7a6000; cursor: pointer; font-family: inherit;
+                                ",
+                                title: "Insert text comment",
+                                onclick: move |_| {
+                                    if let Some(part) = song.write().parts.get_mut(part_index) {
+                                        part.items.push(PartItem::Text {
+                                            content: String::new(),
+                                            color: "#888888".to_string(),
+                                        });
+                                    }
+                                },
+                                "✎"
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── Per-part text / lyrics editor ─────────────────────────────
+            PartTextEditor { song, part_index }
+        }
+    }
+}
+
+// ── Per-part text / lyrics editor ─────────────────────────────────────────────
+
+#[component]
+fn PartTextEditor(song: Signal<Song>, part_index: usize) -> Element {
+    let part_text = song
+        .read()
+        .parts
+        .get(part_index)
+        .and_then(|p| p.part_text.clone());
+    let has_text = part_text.is_some();
+    let content = part_text
+        .as_ref()
+        .map(|t| t.content.clone())
+        .unwrap_or_default();
+    let color = part_text
+        .as_ref()
+        .map(|t| t.color.clone())
+        .unwrap_or_else(|| "#555555".to_string());
+    let size = part_text.as_ref().map(|t| t.size).unwrap_or(10);
+    let show_chords = part_text.as_ref().map(|t| t.show_chords).unwrap_or(false);
+    let chords_btn_border = if show_chords { "#7a9060" } else { "#d0cbc0" };
+    let chords_btn_bg = if show_chords { "#e8f0e0" } else { "#f5f2ea" };
+    let chords_btn_fg = if show_chords { "#4a6040" } else { "#aaa" };
+    let chords_btn_label = if show_chords {
+        "\u{1F3B8} Chords: on"
+    } else {
+        "\u{1F3B8} Chords: off"
+    };
+
+    rsx! {
+        div {
+            style: "margin-top: 10px; border-top: 1px dashed #e8e4d8; padding-top: 10px;",
+
+            if !has_text {
+                // Show a small "Add lyrics/text" button
+                button {
+                    style: "
+                        padding: 4px 12px; font-size: 11px; font-weight: 700;
+                        background: transparent; border: 1.5px dashed #b0c0a0;
+                        border-radius: 7px; color: #7a9060; cursor: pointer; font-family: inherit;
+                    ",
+                    title: "Add vocals / lyrics text to this part",
+                    onclick: move |_| {
+                        if let Some(part) = song.write().parts.get_mut(part_index) {
+                            part.part_text = Some(PartTextSettings::new());
+                        }
+                    },
+                    "🎤  Add vocals / text"
+                }
+            } else {
+                div {
+                    style: "display: flex; flex-direction: column; gap: 6px;",
+
+                    // Header row: label + colour + size + remove button
+                    div {
+                        style: "display: flex; align-items: center; gap: 8px; flex-wrap: wrap;",
+                        span {
+                            style: "font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #7a9060;",
+                            "🎤 Vocals / text"
+                        }
+                        // Colour picker
+                        input {
+                            r#type: "color",
+                            value: "{color}",
+                            style: "width: 24px; height: 24px; border: none; background: none; cursor: pointer; padding: 0;",
+                            title: "Text colour",
+                            oninput: move |e: Event<FormData>| {
+                                if let Some(part) = song.write().parts.get_mut(part_index) {
+                                    if let Some(t) = part.part_text.as_mut() {
+                                        t.color = e.value();
+                                    }
+                                }
+                            }
+                        }
+                        // Size stepper
+                        span { style: "font-size: 10px; color: #aaa;", "Size:" }
+                        button {
+                            style: "width: 20px; height: 20px; border-radius: 4px; border: 1px solid #d0cbc0; background: #f5f2ea; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit; display:flex; align-items:center; justify-content:center; color:#1a1a2e;",
+                            onclick: move |_| {
+                                if let Some(part) = song.write().parts.get_mut(part_index) {
+                                    if let Some(t) = part.part_text.as_mut() {
+                                        if t.size > 6 { t.size -= 1; }
+                                    }
+                                }
+                            },
+                            "−"
+                        }
+                        span { style: "font-size: 11px; font-weight: 700; color: #1a1a2e; min-width: 20px; text-align: center;", "{size}" }
+                        button {
+                            style: "width: 20px; height: 20px; border-radius: 4px; border: 1px solid #d0cbc0; background: #f5f2ea; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit; display:flex; align-items:center; justify-content:center; color:#1a1a2e;",
+                            onclick: move |_| {
+                                if let Some(part) = song.write().parts.get_mut(part_index) {
+                                    if let Some(t) = part.part_text.as_mut() {
+                                        if t.size < 36 { t.size += 1; }
+                                    }
+                                }
+                            },
+                            "+"
+                        }
+                        // Show-chords toggle
+                        button {
+                            style: "padding: 2px 8px; font-size: 10px; font-weight: 700; border-radius: 6px; cursor: pointer; font-family: inherit; border: 1.5px solid {chords_btn_border}; background: {chords_btn_bg}; color: {chords_btn_fg};",
+                            title: "Show chords alongside lyrics",
+                            onclick: move |_| {
+                                if let Some(part) = song.write().parts.get_mut(part_index) {
+                                    if let Some(t) = part.part_text.as_mut() {
+                                        t.show_chords = !t.show_chords;
+                                    }
+                                }
+                            },
+                            "{chords_btn_label}"
+                        }
+                        // Remove button
+                        button {
+                            style: "background: none; border: none; font-size: 11px; color: #ccc; cursor: pointer; padding: 0 2px; font-family: inherit; margin-left: auto;",
+                            title: "Remove vocals text",
+                            onclick: move |_| {
+                                if let Some(part) = song.write().parts.get_mut(part_index) {
+                                    part.part_text = None;
+                                }
+                            },
+                            "\u{2715}"
+                        }
+                    }
+
+                    // Textarea
+                    textarea {
+                        style: "
+                            width: 100%; box-sizing: border-box;
+                            min-height: 64px; padding: 8px 10px;
+                            border: 1px solid #d8e8c8; border-radius: 8px;
+                            background: #f8fbf5; outline: none;
+                            font-size: {size}px; color: {color};
+                            font-family: inherit; line-height: 1.55; resize: vertical;
+                        ",
+                        value: "{content}",
+                        placeholder: "Enter lyrics or notes…",
+                        oninput: move |e: Event<FormData>| {
+                            if let Some(part) = song.write().parts.get_mut(part_index) {
+                                if let Some(t) = part.part_text.as_mut() {
+                                    t.content = e.value();
+                                }
+                            }
                         }
                     }
                 }
@@ -2941,6 +3311,75 @@ fn RepeatEditor(song: Signal<Song>, part_index: usize, item_index: usize, times:
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+// ── Text annotation editor ─────────────────────────────────────────────────────
+
+#[component]
+fn TextAnnotationEditor(
+    song: Signal<Song>,
+    part_index: usize,
+    item_index: usize,
+    content: String,
+    color: String,
+) -> Element {
+    rsx! {
+        div {
+            style: "
+                width: 100%; flex-basis: 100%;
+                display: flex; align-items: center; gap: 8px;
+                padding: 8px 10px;
+                background: #fffde7; border: 1.5px solid #c8a800;
+                border-radius: 10px; position: relative;
+            ",
+            // Colour picker
+            input {
+                r#type: "color",
+                value: "{color}",
+                style: "width: 26px; height: 26px; border: none; background: none; cursor: pointer; padding: 0; flex-shrink: 0;",
+                title: "Choose text colour",
+                oninput: move |e: Event<FormData>| {
+                    if let Some(part) = song.write().parts.get_mut(part_index) {
+                        if let Some(PartItem::Text { color, .. }) = part.items.get_mut(item_index) {
+                            *color = e.value();
+                        }
+                    }
+                }
+            }
+            // Pencil icon
+            span { style: "font-size: 13px; color: #c8a800; flex-shrink: 0;", "✎" }
+            // Text input
+            input {
+                style: "
+                    flex: 1; border: none; border-bottom: 1px dashed #c8a800;
+                    background: transparent; outline: none; font-size: 13px;
+                    font-style: italic; color: {color}; font-family: inherit; padding: 2px 0;
+                ",
+                value: "{content}",
+                placeholder: "Add a comment…",
+                oninput: move |e: Event<FormData>| {
+                    if let Some(part) = song.write().parts.get_mut(part_index) {
+                        if let Some(PartItem::Text { content, .. }) = part.items.get_mut(item_index) {
+                            *content = e.value();
+                        }
+                    }
+                }
+            }
+            // Delete button
+            button {
+                style: "background: none; border: none; font-size: 12px; color: #c0bab0; cursor: pointer; padding: 0 2px; font-family: inherit; flex-shrink: 0;",
+                onclick: move |e: Event<MouseData>| {
+                    e.stop_propagation();
+                    if let Some(part) = song.write().parts.get_mut(part_index) {
+                        if item_index < part.items.len() {
+                            part.items.remove(item_index);
+                        }
+                    }
+                },
+                "\u{2715}"
             }
         }
     }
@@ -3533,11 +3972,33 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                                                 }
                                             }
                                         },
+                                        Some(PartItem::Text { content, color }) => rsx! {
+                                            div {
+                                                key: "{item_index}",
+                                                style: "flex-basis: 100%; font-size: 13px; font-style: italic; color: {color}; line-height: 1.5; padding: 2px 0;",
+                                                "{content}"
+                                            }
+                                        },
                                         None => rsx! { div { key: "{item_index}" } },
                                     }
                                 }}
                             }  // end else div
                             }  // end else branch
+
+                        // ── Part text / lyrics (read-only) ────────────────
+                        {
+                            let pt = song.read().parts.get(part_index).and_then(|p| p.part_text.clone());
+                            if let Some(t) = pt {
+                                rsx! {
+                                    div {
+                                        style: "margin-top: 14px; padding-top: 10px; border-top: 1px solid #e8e4d8; white-space: pre-wrap; font-size: {t.size}px; color: {t.color}; line-height: 1.6; font-family: inherit;",
+                                        "{t.content}"
+                                    }
+                                }
+                            } else {
+                                rsx! { span {} }
+                            }
+                        }
                         }
                     }
                 }}
