@@ -21,9 +21,19 @@ fn measure_part_height(
 
     let part_name_h = (part_name_size / 9.0) * 14.0;
 
-    if part.kind == PartKind::Riff || part.kind == PartKind::BassRiff {
+    if part.kind == PartKind::Riff
+        || part.kind == PartKind::BassRiff
+        || part.kind == PartKind::DrumBeat
+        || part.kind == PartKind::DrumBeat
+    {
         let is_bass = part.kind == PartKind::BassRiff;
-        let num_strings: usize = if is_bass { 4 } else { 6 };
+        let num_strings: usize = if is_bass {
+            4
+        } else if part.kind == PartKind::DrumBeat {
+            8
+        } else {
+            6
+        };
         let str_gap: f32 = 3.8;
         let block_h = str_gap * (num_strings as f32 - 1.0);
         let block_gap: f32 = 8.0;
@@ -161,11 +171,11 @@ pub fn generate_pdf_bytes(
     notation: Notation,
     part_name_size: f32,
     chord_size: f32,
-    capo: u8,
+    capo: i8,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    // When a capo is set, produce a capo-shifted view of the song for rendering.
+    // When a capo/transpose is set, produce a shifted view of the song for rendering.
     let capo_song: Song;
-    let effective = if capo > 0 {
+    let effective = if capo != 0 {
         capo_song = song.apply_capo(capo);
         &capo_song
     } else {
@@ -273,15 +283,26 @@ pub fn generate_pdf_bytes(
         let bass_char_w: f32 = root_char_w * (bass_size / chord_size);
 
         // ── Riff / Tab part (graphical renderer) ─────────────────────────
-        if part.kind == crate::song::PartKind::Riff || part.kind == crate::song::PartKind::BassRiff
+        if part.kind == crate::song::PartKind::Riff
+            || part.kind == crate::song::PartKind::BassRiff
+            || part.kind == crate::song::PartKind::DrumBeat
         {
             use crate::song::{TabCell, TabCol};
 
             let is_bass = part.kind == crate::song::PartKind::BassRiff;
-            let num_strings: usize = if is_bass { 4 } else { 6 };
+            let is_drums = part.kind == crate::song::PartKind::DrumBeat;
+            let num_strings: usize = if is_bass {
+                4
+            } else if is_drums {
+                8
+            } else {
+                6
+            };
             let str_offset: usize = if is_bass { 2 } else { 0 };
             let string_labels: &[&str] = if is_bass {
                 &["G", "D", "A", "E"]
+            } else if is_drums {
+                &["K", "S", "Hi", "R", "C", "T1", "T2", "T3"]
             } else {
                 &["e", "B", "G", "D", "A", "E"]
             };
@@ -895,6 +916,8 @@ mod tests {
                 TabCell::Empty,
                 TabCell::Empty,
                 TabCell::Fret(0),
+                TabCell::Empty,
+                TabCell::Empty,
             ]),
             TabCol::Barline,
             TabCol::Notes(std::array::from_fn(|_| TabCell::Muted)),
