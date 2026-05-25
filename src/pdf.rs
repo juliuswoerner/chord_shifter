@@ -97,6 +97,59 @@ fn measure_part_height(
     }
 }
 
+/// Render a single-character articulation symbol (h, p, r, b, /, \) into a tab cell,
+/// erasing the string line behind it with a white box first.
+#[allow(clippy::too_many_arguments)]
+fn pdf_tab_sym(
+    layer: &printpdf::PdfLayerReference,
+    center_x: f32,
+    sy: f32,
+    sym: &str,
+    box_w: f32,
+    font_size: f32,
+    font: &printpdf::IndirectFontRef,
+) {
+    use printpdf::{Color, Greyscale, Mm, Point, Polygon, PolygonMode, WindingOrder};
+    // Scale the white-box and text offsets proportionally to the font size.
+    // At the baseline font size of 7 pt the legacy offsets were: -1.8, +1.0, -1.3, -1.4.
+    let scale = font_size / 7.0;
+    let box_below = 1.8 * scale; // how far the box extends below the string line
+    let box_above = 1.0 * scale; // how far the box extends above the string line
+    let txt_x_off = (sym.len() as f32 * 0.65 * scale).min(box_w * 0.45); // rough half-width
+    let txt_y_off = 1.4 * scale; // baseline drop below string line
+    layer.set_fill_color(Color::Greyscale(Greyscale::new(1.0, None)));
+    layer.add_polygon(Polygon {
+        rings: vec![vec![
+            (
+                Point::new(Mm(center_x - box_w * 0.5), Mm(sy - box_below)),
+                false,
+            ),
+            (
+                Point::new(Mm(center_x + box_w * 0.5), Mm(sy - box_below)),
+                false,
+            ),
+            (
+                Point::new(Mm(center_x + box_w * 0.5), Mm(sy + box_above)),
+                false,
+            ),
+            (
+                Point::new(Mm(center_x - box_w * 0.5), Mm(sy + box_above)),
+                false,
+            ),
+        ]],
+        mode: PolygonMode::Fill,
+        winding_order: WindingOrder::NonZero,
+    });
+    layer.set_fill_color(Color::Greyscale(Greyscale::new(0.0, None)));
+    layer.use_text(
+        sym,
+        font_size,
+        Mm(center_x - txt_x_off),
+        Mm(sy - txt_y_off),
+        font,
+    );
+}
+
 /// Render `song` into a PDF and return the raw bytes.
 /// `notation`        – note-naming convention (English / German / Custom).
 /// `part_name_size`  – font size in pt for part labels (default 9).
@@ -283,7 +336,7 @@ pub fn generate_pdf_bytes(
                     .collect();
 
                 // ── Draw the 6 horizontal string lines ────────────────────
-                layer.set_outline_thickness(0.35);
+                layer.set_outline_thickness(0.35 * tab_font_size / 7.0);
                 layer.set_outline_color(Color::Greyscale(Greyscale::new(0.55, None)));
                 for &sy in &string_y {
                     layer.add_line(Line {
@@ -313,7 +366,7 @@ pub fn generate_pdf_bytes(
                     match col {
                         TabCol::Barline => {
                             // Full vertical line through all 6 strings
-                            layer.set_outline_thickness(0.6);
+                            layer.set_outline_thickness(0.6 * tab_font_size / 7.0);
                             layer.set_outline_color(Color::Greyscale(Greyscale::new(0.25, None)));
                             layer.add_line(Line {
                                 points: vec![
@@ -331,7 +384,7 @@ pub fn generate_pdf_bytes(
                                 ],
                                 is_closed: false,
                             });
-                            layer.set_outline_thickness(0.35);
+                            layer.set_outline_thickness(0.35 * tab_font_size / 7.0);
                             layer.set_outline_color(Color::Greyscale(Greyscale::new(0.55, None)));
                             cx += barline_w;
                         }
@@ -344,7 +397,12 @@ pub fn generate_pdf_bytes(
                                     TabCell::Empty => {}
                                     TabCell::Fret(n) => {
                                         let label = n.to_string();
-                                        let box_w = if *n >= 10 { 4.6 } else { 3.0 };
+                                        let scale = tab_font_size / 7.0;
+                                        let box_w =
+                                            if *n >= 10 { 4.6 * scale } else { 3.0 * scale };
+                                        let box_below = 1.8 * scale;
+                                        let box_above = 1.0 * scale;
+                                        let txt_y_off = 1.4 * scale;
                                         // white fill box to erase string line behind number
                                         layer.set_fill_color(Color::Greyscale(Greyscale::new(
                                             1.0, None,
@@ -354,28 +412,28 @@ pub fn generate_pdf_bytes(
                                                 (
                                                     Point::new(
                                                         Mm(center_x - box_w * 0.5),
-                                                        Mm(sy - 1.8),
+                                                        Mm(sy - box_below),
                                                     ),
                                                     false,
                                                 ),
                                                 (
                                                     Point::new(
                                                         Mm(center_x + box_w * 0.5),
-                                                        Mm(sy - 1.8),
+                                                        Mm(sy - box_below),
                                                     ),
                                                     false,
                                                 ),
                                                 (
                                                     Point::new(
                                                         Mm(center_x + box_w * 0.5),
-                                                        Mm(sy + 1.0),
+                                                        Mm(sy + box_above),
                                                     ),
                                                     false,
                                                 ),
                                                 (
                                                     Point::new(
                                                         Mm(center_x - box_w * 0.5),
-                                                        Mm(sy + 1.0),
+                                                        Mm(sy + box_above),
                                                     ),
                                                     false,
                                                 ),
@@ -390,12 +448,17 @@ pub fn generate_pdf_bytes(
                                             &label,
                                             tab_font_size,
                                             Mm(center_x - box_w * 0.4),
-                                            Mm(sy - 1.4),
+                                            Mm(sy - txt_y_off),
                                             &font_bold,
                                         );
                                     }
                                     TabCell::Muted => {
-                                        let box_w = 3.0_f32;
+                                        let scale = tab_font_size / 7.0;
+                                        let box_w = 3.0_f32 * scale;
+                                        let box_below = 1.8 * scale;
+                                        let box_above = 1.0 * scale;
+                                        let txt_y_off = 1.4 * scale;
+                                        let txt_x_off = 1.3 * scale;
                                         // white fill box to erase string line behind x
                                         layer.set_fill_color(Color::Greyscale(Greyscale::new(
                                             1.0, None,
@@ -405,28 +468,28 @@ pub fn generate_pdf_bytes(
                                                 (
                                                     Point::new(
                                                         Mm(center_x - box_w * 0.5),
-                                                        Mm(sy - 1.8),
+                                                        Mm(sy - box_below),
                                                     ),
                                                     false,
                                                 ),
                                                 (
                                                     Point::new(
                                                         Mm(center_x + box_w * 0.5),
-                                                        Mm(sy - 1.8),
+                                                        Mm(sy - box_below),
                                                     ),
                                                     false,
                                                 ),
                                                 (
                                                     Point::new(
                                                         Mm(center_x + box_w * 0.5),
-                                                        Mm(sy + 1.0),
+                                                        Mm(sy + box_above),
                                                     ),
                                                     false,
                                                 ),
                                                 (
                                                     Point::new(
                                                         Mm(center_x - box_w * 0.5),
-                                                        Mm(sy + 1.0),
+                                                        Mm(sy + box_above),
                                                     ),
                                                     false,
                                                 ),
@@ -440,8 +503,142 @@ pub fn generate_pdf_bytes(
                                         layer.use_text(
                                             "x",
                                             tab_font_size,
-                                            Mm(center_x - 1.3),
-                                            Mm(sy - 1.4),
+                                            Mm(center_x - txt_x_off),
+                                            Mm(sy - txt_y_off),
+                                            &font_regular,
+                                        );
+                                    }
+                                    // ── Articulation symbols ──────────────────
+                                    TabCell::Ghost(n) => {
+                                        let label = format!("({n})");
+                                        let scale = tab_font_size / 7.0;
+                                        let box_w = 5.5_f32 * scale;
+                                        let box_below = 1.8 * scale;
+                                        let box_above = 1.0 * scale;
+                                        let txt_y_off = 1.4 * scale;
+                                        layer.set_fill_color(Color::Greyscale(Greyscale::new(
+                                            1.0, None,
+                                        )));
+                                        layer.add_polygon(Polygon {
+                                            rings: vec![vec![
+                                                (
+                                                    Point::new(
+                                                        Mm(center_x - box_w * 0.5),
+                                                        Mm(sy - box_below),
+                                                    ),
+                                                    false,
+                                                ),
+                                                (
+                                                    Point::new(
+                                                        Mm(center_x + box_w * 0.5),
+                                                        Mm(sy - box_below),
+                                                    ),
+                                                    false,
+                                                ),
+                                                (
+                                                    Point::new(
+                                                        Mm(center_x + box_w * 0.5),
+                                                        Mm(sy + box_above),
+                                                    ),
+                                                    false,
+                                                ),
+                                                (
+                                                    Point::new(
+                                                        Mm(center_x - box_w * 0.5),
+                                                        Mm(sy + box_above),
+                                                    ),
+                                                    false,
+                                                ),
+                                            ]],
+                                            mode: PolygonMode::Fill,
+                                            winding_order: WindingOrder::NonZero,
+                                        });
+                                        layer.set_fill_color(Color::Greyscale(Greyscale::new(
+                                            0.0, None,
+                                        )));
+                                        layer.use_text(
+                                            &label,
+                                            tab_font_size - 1.0,
+                                            Mm(center_x - box_w * 0.45),
+                                            Mm(sy - txt_y_off),
+                                            &font_regular,
+                                        );
+                                    }
+                                    TabCell::HammerOn => {
+                                        pdf_tab_sym(
+                                            &layer,
+                                            center_x,
+                                            sy,
+                                            "h",
+                                            3.0 * tab_font_size / 7.0,
+                                            tab_font_size,
+                                            &font_regular,
+                                        );
+                                    }
+                                    TabCell::PullOff => {
+                                        pdf_tab_sym(
+                                            &layer,
+                                            center_x,
+                                            sy,
+                                            "p",
+                                            3.0 * tab_font_size / 7.0,
+                                            tab_font_size,
+                                            &font_regular,
+                                        );
+                                    }
+                                    TabCell::Release => {
+                                        pdf_tab_sym(
+                                            &layer,
+                                            center_x,
+                                            sy,
+                                            "r",
+                                            3.0 * tab_font_size / 7.0,
+                                            tab_font_size,
+                                            &font_regular,
+                                        );
+                                    }
+                                    TabCell::Bend => {
+                                        pdf_tab_sym(
+                                            &layer,
+                                            center_x,
+                                            sy,
+                                            "b",
+                                            3.0 * tab_font_size / 7.0,
+                                            tab_font_size,
+                                            &font_bold,
+                                        );
+                                    }
+                                    TabCell::SlideUp => {
+                                        pdf_tab_sym(
+                                            &layer,
+                                            center_x,
+                                            sy,
+                                            "/",
+                                            3.0 * tab_font_size / 7.0,
+                                            tab_font_size,
+                                            &font_regular,
+                                        );
+                                    }
+                                    TabCell::SlideDown => {
+                                        pdf_tab_sym(
+                                            &layer,
+                                            center_x,
+                                            sy,
+                                            "\\",
+                                            3.0 * tab_font_size / 7.0,
+                                            tab_font_size,
+                                            &font_regular,
+                                        );
+                                    }
+                                    TabCell::Custom(s) => {
+                                        pdf_tab_sym(
+                                            &layer,
+                                            center_x,
+                                            sy,
+                                            s,
+                                            (s.len() as f32 * 1.2 * tab_font_size / 7.0)
+                                                .max(3.0 * tab_font_size / 7.0),
+                                            tab_font_size - 1.0,
                                             &font_regular,
                                         );
                                     }
@@ -700,7 +897,7 @@ mod tests {
                 TabCell::Fret(0),
             ]),
             TabCol::Barline,
-            TabCol::Notes([TabCell::Muted; 6]),
+            TabCol::Notes(std::array::from_fn(|_| TabCell::Muted)),
         ];
         song.parts.push(riff);
         let bytes = generate_pdf_bytes(&song, Notation::English, 9.0, 18.0, 0).unwrap();
@@ -712,7 +909,7 @@ mod tests {
         use chord_shifter::song::{SongPart, TabCell, TabCol};
         let mut song = sample_song();
         let mut bass = SongPart::new_bass_riff("Bass Line");
-        bass.tab_grid = vec![TabCol::Notes([TabCell::Fret(5); 6])];
+        bass.tab_grid = vec![TabCol::Notes(std::array::from_fn(|_| TabCell::Fret(5)))];
         song.parts.push(bass);
         let bytes = generate_pdf_bytes(&song, Notation::English, 9.0, 18.0, 0).unwrap();
         assert!(bytes.starts_with(b"%PDF-"));

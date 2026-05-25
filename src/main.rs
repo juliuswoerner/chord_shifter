@@ -89,6 +89,8 @@ struct StoredSong {
     instrument_parts_json: String,
     #[serde(default)]
     instrument_capos_json: String,
+    #[serde(default)]
+    pdf_settings_json: String,
 }
 
 fn ls_read_users() -> Vec<StoredUser> {
@@ -171,6 +173,7 @@ impl Db {
                 user_id: 0, // sentinel: visible to all users
                 instrument_parts_json: "{}".to_string(),
                 instrument_capos_json: "{}".to_string(),
+                pdf_settings_json: "{}".to_string(),
             }]);
         }
         Ok(Self)
@@ -184,6 +187,8 @@ impl Db {
             serde_json::to_string(&song.instrument_parts).map_err(|e| e.to_string())?;
         let instrument_capos_json =
             serde_json::to_string(&song.instrument_capos).map_err(|e| e.to_string())?;
+        let pdf_settings_json =
+            serde_json::to_string(&song.pdf_settings).map_err(|e| e.to_string())?;
         let mut songs = ls_read();
         if let Some(row) = songs
             .iter_mut()
@@ -195,6 +200,7 @@ impl Db {
             row.vocals_notes = song.vocals_notes.clone();
             row.instrument_parts_json = instrument_parts_json;
             row.instrument_capos_json = instrument_capos_json;
+            row.pdf_settings_json = pdf_settings_json;
             let id = row.id;
             ls_write(&songs);
             Ok(id)
@@ -211,6 +217,7 @@ impl Db {
                 user_id,
                 instrument_parts_json,
                 instrument_capos_json,
+                pdf_settings_json,
             });
             ls_write(&songs);
             Ok(id)
@@ -266,6 +273,11 @@ impl Db {
                 } else {
                     serde_json::from_str(&s.instrument_capos_json).unwrap_or_default()
                 };
+                let pdf_settings = if s.pdf_settings_json.is_empty() {
+                    Default::default()
+                } else {
+                    serde_json::from_str(&s.pdf_settings_json).unwrap_or_default()
+                };
                 Ok(song::Song {
                     name: s.name,
                     artist: s.artist,
@@ -275,6 +287,7 @@ impl Db {
                     vocals_notes: s.vocals_notes,
                     instrument_parts,
                     instrument_capos,
+                    pdf_settings,
                 })
             })
     }
@@ -448,8 +461,6 @@ fn SongView(
     song_id: Option<i64>,
 ) -> Element {
     let nav = use_navigator();
-    let mut part_name_size = use_signal(|| 9_u32);
-    let mut chord_size = use_signal(|| 18_u32);
     let mut preview_open = use_signal(|| false);
     let mut preview_url: Signal<String> = use_signal(String::new);
     let mut notation: Signal<Notation> = use_signal(|| Notation::English);
@@ -1376,10 +1387,15 @@ fn SongView(
                             padding: 4px 6px;
                             font-family: inherit;
                         ",
-                        value: "{part_name_size}",
+                        value: {
+                            let key = (*active_instrument.read()).map(|i| i.label().to_string()).unwrap_or_else(|| "Base".to_string());
+                            song.read().pdf_settings.get(&key).map(|p| p.part_name_size).unwrap_or(9).to_string()
+                        },
                         oninput: move |e| {
                             if let Ok(v) = e.value().parse::<u32>() {
-                                *part_name_size.write() = v.clamp(6, 24);
+                                let key = (*active_instrument.read()).map(|i| i.label().to_string()).unwrap_or_else(|| "Base".to_string());
+                                let cs = song.read().pdf_settings.get(&key).map(|p| p.chord_size).unwrap_or(18);
+                                song.write().pdf_settings.insert(key, song::PdfSettings { part_name_size: v.clamp(6, 24), chord_size: cs });
                             }
                         }
                     }
@@ -1406,10 +1422,15 @@ fn SongView(
                             padding: 4px 6px;
                             font-family: inherit;
                         ",
-                        value: "{chord_size}",
+                        value: {
+                            let key = (*active_instrument.read()).map(|i| i.label().to_string()).unwrap_or_else(|| "Base".to_string());
+                            song.read().pdf_settings.get(&key).map(|p| p.chord_size).unwrap_or(18).to_string()
+                        },
                         oninput: move |e| {
                             if let Ok(v) = e.value().parse::<u32>() {
-                                *chord_size.write() = v.clamp(10, 36);
+                                let key = (*active_instrument.read()).map(|i| i.label().to_string()).unwrap_or_else(|| "Base".to_string());
+                                let pns = song.read().pdf_settings.get(&key).map(|p| p.part_name_size).unwrap_or(9);
+                                song.write().pdf_settings.insert(key, song::PdfSettings { part_name_size: pns, chord_size: v.clamp(10, 36) });
                             }
                         }
                     }
@@ -1458,9 +1479,11 @@ fn SongView(
                             (Song { parts, ..base.clone() }, drums_capo())
                         }
                     };
-                    let pns  = part_name_size() as f32;
-                    let cs   = chord_size() as f32;
                     let note = notation();
+                    let pdf_key = (*active_instrument.read()).map(|i| i.label().to_string()).unwrap_or_else(|| "Base".to_string());
+                    let pdf_s = song.read().pdf_settings.get(&pdf_key).cloned().unwrap_or_default();
+                    let pns = pdf_s.part_name_size as f32;
+                    let cs  = pdf_s.chord_size as f32;
                     use js_sys::Uint8Array;
                     use web_sys::{Blob, BlobPropertyBag, Url};
                     match pdf::generate_pdf_bytes(&preview_song, note, pns, cs, capo_val) {
@@ -1500,23 +1523,22 @@ fn SongView(
                     font-family: inherit;
                 ",
                 onclick: move |_| {
-                    let s   = song.read().clone();
-                    let pns = part_name_size() as f32;
-                    let cs  = chord_size() as f32;
-                    let cap = 0_u8;
+                    let s    = song.read().clone();
                     let note = notation();
 
                     // Collect: base sheet + one entry per instrument that has saved overrides.
-                    // Each entry is (song_with_correct_parts, filename, capo_for_that_sheet).
-                    let mut exports: Vec<(Song, String, u8)> = Vec::new();
-                    exports.push((s.clone(), s.name.clone(), cap));
+                    // Each entry is (song_with_correct_parts, filename, capo_for_that_sheet, pns, cs).
+                    let mut exports: Vec<(Song, String, u8, f32, f32)> = Vec::new();
+                    let base_pdf = s.pdf_settings.get("Base").cloned().unwrap_or_default();
+                    exports.push((s.clone(), s.name.clone(), 0_u8, base_pdf.part_name_size as f32, base_pdf.chord_size as f32));
                     for inst in Instrument::all() {
                         if let Some(parts) = s.instrument_parts.get(inst.label()).cloned() {
                             let inst_cap = *s.instrument_capos.get(inst.label()).unwrap_or(&0);
+                            let inst_pdf = s.pdf_settings.get(inst.label()).cloned().unwrap_or_default();
                             let mut inst_sheet = s.clone();
                             inst_sheet.parts = parts;
                             let filename = format!("{}_{}", s.name, inst.label());
-                            exports.push((inst_sheet, filename, inst_cap));
+                            exports.push((inst_sheet, filename, inst_cap, inst_pdf.part_name_size as f32, inst_pdf.chord_size as f32));
                         }
                     }
 
@@ -1535,8 +1557,8 @@ fn SongView(
                             let opts = zip::write::SimpleFileOptions::default()
                                 .compression_method(zip::CompressionMethod::Deflated);
 
-                            for (sheet, filename, sheet_cap) in &exports {
-                                match pdf::generate_pdf_bytes(sheet, note, pns, cs, *sheet_cap) {
+                            for (sheet, filename, sheet_cap, pns, cs) in &exports {
+                                match pdf::generate_pdf_bytes(sheet, note, *pns, *cs, *sheet_cap) {
                                     Ok(bytes) => {
                                         let _ = zip.start_file(format!("{filename}.pdf"), opts);
                                         let _ = zip.write_all(&bytes);
@@ -1589,17 +1611,17 @@ fn SongView(
                 ",
                 onclick: move |_| {
                     let s       = song.read().clone();
-                    let pns     = part_name_size() as f32;
-                    let cs      = chord_size() as f32;
-                    let cap     = 0_u8;
                     let note    = notation();
                     let user_id = current_user.read().as_ref().map(|u| u.id).unwrap_or(0);
+                    let base_pdf = s.pdf_settings.get("Base").cloned().unwrap_or_default();
+                    let pns = base_pdf.part_name_size as f32;
+                    let cs  = base_pdf.chord_size as f32;
                     if let Some(db_ref) = db.read().as_ref() {
                         match db_ref.save_song(&s, user_id) {
                             Ok(song_id) => {
                                 println!("✅  Song saved (id={song_id})");
                                 // Also generate and store the current PDF
-                                match pdf::generate_pdf_bytes(&s, note, pns, cs, cap) {
+                                match pdf::generate_pdf_bytes(&s, note, pns, cs, 0_u8) {
                                     Ok(bytes) => match db_ref.save_pdf(song_id, &bytes) {
                                         Ok(pdf_id) => println!("✅  PDF stored (id={pdf_id})"),
                                         Err(e) => eprintln!("❌  PDF store failed: {e}"),
@@ -1967,7 +1989,7 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool) -> Element {
                                             onclick: move |_| {
                                                 if let Some(part) = song.write().parts.get_mut(part_index) {
                                                     for _ in 0..4 {
-                                                        part.tab_grid.push(TabCol::Notes([TabCell::Empty; 6]));
+                                                        part.tab_grid.push(TabCol::Notes(std::array::from_fn(|_| TabCell::Empty)));
                                                     }
                                                 }
                                             },
@@ -2064,7 +2086,7 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool) -> Element {
                                                     .and_then(|p| p.tab_grid.get(col))
                                                     .and_then(|cd| {
                                                         if let TabCol::Notes(arr) = cd {
-                                                            Some(arr[str_idx])
+                                                            Some(arr[str_idx].clone())
                                                         } else {
                                                             None
                                                         }
@@ -2074,6 +2096,14 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool) -> Element {
                                                     TabCell::Fret(n) => (n.to_string(), "#1a1a2e", "background:#d8edd8;"),
                                                     TabCell::Muted => ("x".to_string(), "#c0392b", "background:#fde8e8;"),
                                                     TabCell::Empty => ("\u{2013}".to_string(), "#c8dcc8", "background:transparent;"),
+                                                    TabCell::Ghost(n) => (format!("({n})"), "#7b5ea7", "background:#f0e8f8;"),
+                                                    TabCell::HammerOn  => ("h".to_string(),  "#1a6b3c", "background:#d4f0e0;"),
+                                                    TabCell::PullOff   => ("p".to_string(),  "#1a6b3c", "background:#d4f0e0;"),
+                                                    TabCell::Release   => ("r".to_string(),  "#7a5c1e", "background:#fef3d0;"),
+                                                    TabCell::Bend      => ("b".to_string(),  "#7a5c1e", "background:#fef3d0;"),
+                                                    TabCell::SlideUp   => ("/".to_string(),  "#1a4a8a", "background:#d8e8f8;"),
+                                                    TabCell::SlideDown => ("\\".to_string(), "#1a4a8a", "background:#d8e8f8;"),
+                                                    TabCell::Custom(ref s) => (s.clone(), "#1a1a2e", "background:#e8e4da;"),
                                                 };
                                                 let has_value = !matches!(cell, TabCell::Empty);
                                                 let fw = if has_value { "700" } else { "400" };
@@ -2089,20 +2119,42 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool) -> Element {
                                                             input {
                                                                 style: "position:relative;z-index:1;width:30px;height:26px;font-family:Courier,monospace;font-size:13px;font-weight:700;text-align:center;border:2px solid #5c7a5c;border-radius:4px;background:#f6fbf6;outline:none;padding:0;box-sizing:border-box;",
                                                                 r#type: "text",
-                                                                maxlength: "2",
+                                                                maxlength: "8",
                                                                 autofocus: true,
                                                                 value: "{edit_buf}",
                                                                 oninput: move |e| { edit_buf.set(e.value()); },
                                                                 onblur: move |_| {
-                                                                    let val = edit_buf.read().trim().to_lowercase();
-                                                                    let new_cell = if val == "x" {
+                                                                    let raw = edit_buf.read();
+                                                                    let val = raw.trim();
+                                                                    let new_cell = if val.eq_ignore_ascii_case("x") {
                                                                         TabCell::Muted
+                                                                    } else if val.eq_ignore_ascii_case("h") {
+                                                                        TabCell::HammerOn
+                                                                    } else if val.eq_ignore_ascii_case("p") {
+                                                                        TabCell::PullOff
+                                                                    } else if val.eq_ignore_ascii_case("r") {
+                                                                        TabCell::Release
+                                                                    } else if val.eq_ignore_ascii_case("b") {
+                                                                        TabCell::Bend
+                                                                    } else if val == "/" {
+                                                                        TabCell::SlideUp
+                                                                    } else if val == "\\" {
+                                                                        TabCell::SlideDown
+                                                                    } else if val.starts_with('(') && val.ends_with(')') {
+                                                                        let inner = &val[1..val.len()-1];
+                                                                        if let Ok(n) = inner.parse::<u8>().map(|n| n.min(24)) {
+                                                                            TabCell::Ghost(n)
+                                                                        } else {
+                                                                            TabCell::Empty
+                                                                        }
                                                                     } else if let Some(n) =
                                                                         val.parse::<u8>().ok().filter(|&n| n <= 24)
                                                                     {
                                                                         TabCell::Fret(n)
-                                                                    } else {
+                                                                    } else if val.is_empty() {
                                                                         TabCell::Empty
+                                                                    } else {
+                                                                        TabCell::Custom(val.to_string())
                                                                     };
                                                                     if let Some(part) = song.write().parts.get_mut(part_index) {
                                                                         if let Some(TabCol::Notes(arr)) = part.tab_grid.get_mut(col) {
@@ -2127,6 +2179,14 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool) -> Element {
                                                                         TabCell::Fret(n) => n.to_string(),
                                                                         TabCell::Muted => "x".to_string(),
                                                                         TabCell::Empty => String::new(),
+                                                                        TabCell::Ghost(n) => format!("({n})"),
+                                                                        TabCell::HammerOn  => "h".to_string(),
+                                                                        TabCell::PullOff   => "p".to_string(),
+                                                                        TabCell::Release   => "r".to_string(),
+                                                                        TabCell::Bend      => "b".to_string(),
+                                                                        TabCell::SlideUp   => "/".to_string(),
+                                                                        TabCell::SlideDown => "\\".to_string(),
+                                                                        TabCell::Custom(ref s) => s.clone(),
                                                                     };
                                                                     edit_buf.set(init);
                                                                     editing.set(Some((col, str_idx)));
@@ -2151,6 +2211,33 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool) -> Element {
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            // ── Tab notation legend ───────────────────────────────────────────
+            div {
+                style: "margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 8px 12px; background: #f7fbf7; border: 1px solid #c8dcc8; border-radius: 8px;",
+                span {
+                    style: "font-size: 10px; font-weight: 700; color: #5c7a5c; text-transform: uppercase; letter-spacing: 1px; width: 100%; margin-bottom: 2px;",
+                    "Legend"
+                }
+                for (sym, label) in [
+                    ("(n)", "Ghost note"),
+                    ("h",   "Hammer-on"),
+                    ("p",   "Pull-off"),
+                    ("r",   "Release"),
+                    ("b",   "Bend"),
+                    ("/",   "Slide up"),
+                    ("\\",  "Slide down"),
+                ] {
+                    span {
+                        style: "display: inline-flex; align-items: baseline; gap: 4px; font-size: 11px; color: #555;",
+                        span {
+                            style: "font-family: Courier, monospace; font-size: 12px; font-weight: 700; color: #1a1a2e; min-width: 20px;",
+                            "{sym}"
+                        }
+                        span { "{label}" }
                     }
                 }
             }
