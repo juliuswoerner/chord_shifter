@@ -17,13 +17,11 @@ const RIGHT: f32 = PAGE_W - MARGIN;
 fn char_safe_take(s: &str, max_chars: usize) -> usize {
     // Collect char boundaries up to max_chars chars
     let mut boundary = s.len();
-    let mut count = 0usize;
-    for (byte_idx, _) in s.char_indices() {
+    for (count, (byte_idx, _)) in s.char_indices().enumerate() {
         if count == max_chars {
             boundary = byte_idx;
             break;
         }
-        count += 1;
     }
     // Try to break at a space before the boundary
     if boundary < s.len() {
