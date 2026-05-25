@@ -267,7 +267,7 @@ pub fn generate_pdf_bytes(
         y -= (part_name_size / 9.0) * 14.0;
 
         // Chords – root at chord_size pt, quality as superscript
-        let mut x: f32 = MARGIN;
+        let mut x: f32;
         // All metrics scale proportionally with chord_size (baseline: 18 pt)
         let scale: f32 = chord_size / 18.0;
         let row_h: f32 = 12.0 * scale;
