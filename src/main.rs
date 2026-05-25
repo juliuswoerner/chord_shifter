@@ -1181,7 +1181,7 @@ fn SongView(
                             // ── Global chords on/off for vocals ─────────────────
                             {
                                 let all_on = act_song.read().parts.iter()
-                                    .any(|p| p.part_text.as_ref().map(|t| t.show_chords).unwrap_or(false));
+                                    .all(|p| p.part_text.as_ref().map(|t| t.show_chords).unwrap_or(false));
                                 let btn_border = if all_on { "#7a9060" } else { "#d0cbc0" };
                                 let btn_bg     = if all_on { "#e8f0e0" } else { "#f5f2ea" };
                                 let btn_fg     = if all_on { "#4a6040" } else { "#aaa" };
@@ -1196,9 +1196,8 @@ fn SongView(
                                                 let new_val = !all_on;
                                                 let mut s = act_song.write();
                                                 for part in s.parts.iter_mut() {
-                                                    if let Some(t) = part.part_text.as_mut() {
-                                                        t.show_chords = new_val;
-                                                    }
+                                                    let t = part.part_text.get_or_insert_with(Default::default);
+                                                    t.show_chords = new_val;
                                                 }
                                             },
                                             "{btn_label}"

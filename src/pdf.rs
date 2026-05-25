@@ -12,6 +12,28 @@ const RIGHT: f32 = PAGE_W - MARGIN;
 
 /// Estimate the total height in mm that `part` will occupy when rendered.
 /// Used to decide whether to start a new page before drawing.
+/// Return a byte-aligned split index ≤ `max_chars` chars from `s`, preferring
+/// a word boundary (last space before the limit). Never panics on UTF-8 input.
+fn char_safe_take(s: &str, max_chars: usize) -> usize {
+    // Collect char boundaries up to max_chars chars
+    let mut boundary = s.len();
+    let mut count = 0usize;
+    for (byte_idx, _) in s.char_indices() {
+        if count == max_chars {
+            boundary = byte_idx;
+            break;
+        }
+        count += 1;
+    }
+    // Try to break at a space before the boundary
+    if boundary < s.len() {
+        if let Some(space_pos) = s[..boundary].rfind(' ') {
+            return space_pos + 1; // include the space in the consumed chunk
+        }
+    }
+    boundary
+}
+
 fn measure_part_height(
     part: &chord_shifter::song::SongPart,
     chord_size: f32,
@@ -102,7 +124,61 @@ fn measure_part_height(
             }
         }
 
-        part_name_h + (rows as f32) * (row_h + gap) + 8.0
+        let has_lyrics = part
+            .part_text
+            .as_ref()
+            .map(|t| !t.content.is_empty())
+            .unwrap_or(false);
+        let two_col = has_lyrics
+            && part
+                .part_text
+                .as_ref()
+                .map(|t| t.show_chords)
+                .unwrap_or(false);
+        let skip_chords = has_lyrics && !two_col;
+
+        // Estimate lyrics height
+        let lyrics_h = if has_lyrics {
+            let pt = part.part_text.as_ref().unwrap();
+            let text_size = pt.size as f32;
+            let char_w = text_size * (3.5 / 18.0);
+            let line_h = text_size * (3.5 / 18.0) * 4.5;
+            let col_w = if two_col {
+                (RIGHT - MARGIN) * 0.45
+            } else {
+                RIGHT - MARGIN
+            };
+            let max_chars = (col_w / char_w).floor().max(1.0) as usize;
+            let mut h = 0.0f32;
+            for line in pt.content.split('\n') {
+                if line.is_empty() {
+                    h += line_h;
+                } else {
+                    let wrapped_rows = (line.chars().count() as f32 / max_chars as f32)
+                        .ceil()
+                        .max(1.0);
+                    h += wrapped_rows * line_h;
+                }
+            }
+            h
+        } else {
+            0.0
+        };
+
+        // Chord-row height (0 when lyrics-only)
+        let chord_h = if skip_chords {
+            0.0
+        } else {
+            (rows as f32) * (row_h + gap) + 8.0
+        };
+
+        let content_h = if two_col {
+            lyrics_h.max(chord_h)
+        } else {
+            lyrics_h + chord_h
+        };
+
+        part_name_h + content_h
     }
 }
 
@@ -721,21 +797,20 @@ pub fn generate_pdf_bytes(
                 )));
                 let max_chars = ((x_right - MARGIN) / char_w).floor().max(1.0) as usize;
                 for line in pt.content.split('\n') {
+                    if line.is_empty() {
+                        y -= line_h;
+                        continue;
+                    }
                     let mut remaining = line;
                     while !remaining.is_empty() {
                         if y < MARGIN + 10.0 {
                             next_page!();
                         }
-                        let take = remaining.len().min(max_chars);
-                        let take = if take < remaining.len() {
-                            remaining[..take].rfind(' ').map(|i| i + 1).unwrap_or(take)
-                        } else {
-                            take
-                        };
+                        let take = char_safe_take(remaining, max_chars);
                         let (chunk, rest) = remaining.split_at(take);
                         layer.use_text(chunk, text_size, Mm(MARGIN), Mm(y + 1.5), &font_bold);
                         y -= line_h;
-                        remaining = rest;
+                        remaining = rest.trim_start_matches(' ');
                     }
                 }
                 layer.set_fill_color(Color::Greyscale(Greyscale::new(0.0, None)));
@@ -921,21 +996,20 @@ pub fn generate_pdf_bytes(
                 )));
                 let max_chars = ((RIGHT - MARGIN) / char_w).floor().max(1.0) as usize;
                 for line in pt.content.split('\n') {
+                    if line.is_empty() {
+                        y -= line_h;
+                        continue;
+                    }
                     let mut remaining = line;
                     while !remaining.is_empty() {
                         if y < MARGIN + 10.0 {
                             next_page!();
                         }
-                        let take = remaining.len().min(max_chars);
-                        let take = if take < remaining.len() {
-                            remaining[..take].rfind(' ').map(|i| i + 1).unwrap_or(take)
-                        } else {
-                            take
-                        };
+                        let take = char_safe_take(remaining, max_chars);
                         let (chunk, rest) = remaining.split_at(take);
                         layer.use_text(chunk, text_size, Mm(MARGIN), Mm(y + 1.5), &font_bold);
                         y -= line_h;
-                        remaining = rest;
+                        remaining = rest.trim_start_matches(' ');
                     }
                 }
                 layer.set_fill_color(Color::Greyscale(Greyscale::new(0.0, None)));
