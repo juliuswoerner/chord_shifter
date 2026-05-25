@@ -1340,8 +1340,8 @@ mod tests {
     }
 
     #[test]
-    fn instrument_all_returns_five_instruments() {
-        assert_eq!(Instrument::all().len(), 5);
+    fn instrument_all_returns_six_instruments() {
+        assert_eq!(Instrument::all().len(), 6);
     }
 
     // ── transpose_to with instrument_parts overrides ──────────────────────────
