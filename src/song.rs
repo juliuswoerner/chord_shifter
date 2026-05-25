@@ -186,7 +186,7 @@ pub enum TabCell {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum TabCol {
     /// Six note cells (one per string), index 0 = high e.
-    Notes([TabCell; 6]),
+    Notes([TabCell; 8]),
     /// A vertical barline (end-of-bar marker).
     Barline,
     /// Ends the current row and starts a new one with fresh string labels.
@@ -204,6 +204,8 @@ pub enum PartKind {
     Riff,
     /// 4-string bass tab (G, D, A, E — indices 2-5 of the shared TabCol array).
     BassRiff,
+    /// 8-track drum beat grid (K, S, Hi, R, C, T1, T2, T3 — all 8 cells).
+    DrumBeat,
 }
 
 // ── Part items ────────────────────────────────────────────────────────────────
@@ -239,7 +241,7 @@ pub struct SongPart {
     #[serde(default)]
     pub tab: String,
     /// Structured tab grid — 6 strings × N beats. Index 0 = high e.
-    /// Each column is either `Notes([TabCell; 6])` or a `Barline`.
+    /// Each column is either `Notes([TabCell; 8])` or a `Barline`.
     #[serde(default)]
     pub tab_grid: Vec<TabCol>,
     /// All items in this part in order — only used when `kind == PartKind::Chords`.
@@ -278,6 +280,16 @@ impl SongPart {
         }
     }
 
+    pub fn new_drum_beat(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            kind: PartKind::DrumBeat,
+            tab: String::new(),
+            tab_grid: Vec::new(),
+            items: Vec::new(),
+        }
+    }
+
     /// Iterate mutably over only the `Chord` items in this part.
     pub fn chords_mut(&mut self) -> impl Iterator<Item = &mut Chord> {
         self.items.iter_mut().filter_map(|item| {
@@ -302,6 +314,8 @@ impl SongPart {
         let (labels, string_range): (&[&str], std::ops::Range<usize>) =
             if self.kind == PartKind::BassRiff {
                 (&["G", "D", "A", "E"], 2..6)
+            } else if self.kind == PartKind::DrumBeat {
+                (&["K", "S", "Hi", "R", "C", "T1", "T2", "T3"], 0..8)
             } else {
                 (&["e", "B", "G", "D", "A", "E"], 0..6)
             };
@@ -582,9 +596,9 @@ pub struct Song {
     /// Per-instrument chord overrides. Key = Instrument::label().
     #[serde(default)]
     pub instrument_parts: HashMap<String, Vec<SongPart>>,
-    /// Per-instrument capo settings. Key = Instrument::label().
+    /// Per-instrument capo/transpose settings. Key = Instrument::label(). Positive = capo (shift down), negative = transpose up.
     #[serde(default)]
-    pub instrument_capos: HashMap<String, u8>,
+    pub instrument_capos: HashMap<String, i8>,
     /// Per-sheet PDF font-size settings. Key = "Base" or Instrument::label().
     #[serde(default)]
     pub pdf_settings: HashMap<String, PdfSettings>,
@@ -710,12 +724,12 @@ impl Song {
         };
     }
 
-    /// Return a copy of this song with every chord root shifted **down** by
-    /// `capo` semitones — the shapes you need to play when you place a capo
-    /// on fret `capo` to sound in the original key.
+    /// Return a copy of this song with every chord root shifted by
+    /// `capo` semitones.  Positive = shift **down** (capo on a string instrument);
+    /// negative = shift **up** (transpose up for piano etc.).
     ///
     /// When `capo == 0` returns an unchanged clone.
-    pub fn apply_capo(&self, capo: u8) -> Song {
+    pub fn apply_capo(&self, capo: i8) -> Song {
         if capo == 0 {
             return self.clone();
         }
@@ -753,9 +767,16 @@ impl Song {
         let _prefer = prefer_sharps_for_key(key_root, is_minor);
         for part in &mut result.parts {
             for chord in part.chords_mut() {
-                chord.root = shift_note(&chord.root, capo, is_minor);
-                if let Some(bass) = &chord.bass_note {
-                    chord.bass_note = Some(shift_note(bass, capo, is_minor));
+                if capo > 0 {
+                    chord.root = shift_note(&chord.root, capo as u8, is_minor);
+                    if let Some(bass) = &chord.bass_note {
+                        chord.bass_note = Some(shift_note(bass, capo as u8, is_minor));
+                    }
+                } else {
+                    chord.root = shift_note_up(&chord.root, (-capo) as u8, is_minor);
+                    if let Some(bass) = &chord.bass_note {
+                        chord.bass_note = Some(shift_note_up(bass, (-capo) as u8, is_minor));
+                    }
                 }
             }
         }
@@ -1080,6 +1101,8 @@ mod tests {
             TabCell::Fret(0),
             TabCell::Fret(0),
             TabCell::Fret(0),
+            TabCell::Empty,
+            TabCell::Empty,
         ])];
         let ascii = p.tab_as_ascii();
         assert!(
@@ -1095,7 +1118,7 @@ mod tests {
     #[test]
     fn tab_as_ascii_muted_string_shows_x() {
         let mut p = SongPart::new_riff("Riff");
-        let mut cells: [TabCell; 6] = std::array::from_fn(|_| TabCell::Empty);
+        let mut cells: [TabCell; 8] = std::array::from_fn(|_| TabCell::Empty);
         cells[0] = TabCell::Muted; // high e muted
         p.tab_grid = vec![TabCol::Notes(cells)];
         let ascii = p.tab_as_ascii();

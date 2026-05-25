@@ -465,7 +465,7 @@ fn SongView(
     let mut preview_url: Signal<String> = use_signal(String::new);
     let mut notation: Signal<Notation> = use_signal(|| Notation::English);
     let mut render_mode: Signal<bool> = use_signal(|| false);
-    let base_capo: Signal<u8> = use_signal(|| 0_u8);
+    let base_capo: Signal<i8> = use_signal(|| 0_i8);
     // None = base sheet; Some(inst) = that instrument's sheet
     let mut active_instrument: Signal<Option<Instrument>> = use_signal(|| None);
     // Per-instrument working copies — each instrument has its own isolated signal
@@ -525,7 +525,7 @@ fn SongView(
         drop(s);
         use_signal(move || Song { parts, ..sc })
     };
-    let piano_capo = {
+    let mut piano_capo = {
         let cap = *song.read().instrument_capos.get("Piano").unwrap_or(&0);
         use_signal(move || cap)
     };
@@ -539,10 +539,6 @@ fn SongView(
         let sc = s.clone();
         drop(s);
         use_signal(move || Song { parts, ..sc })
-    };
-    let drums_capo = {
-        let cap = *song.read().instrument_capos.get("Drums").unwrap_or(&0);
-        use_signal(move || cap)
     };
     let mut inst_save_msg: Signal<Option<&'static str>> = use_signal(|| None);
 
@@ -577,7 +573,6 @@ fn SongView(
             ("Acoustic", acoustic_capo()),
             ("Bass", bass_capo()),
             ("Piano", piano_capo()),
-            ("Drums", drums_capo()),
         ];
         let mut s = song.write();
         for (label, cap) in caps {
@@ -1031,10 +1026,32 @@ fn SongView(
                 RenderedSheet { song: bass_song, notation, capo: bass_capo }
             }
             if render_mode() && *active_instrument.read() == Some(Instrument::Piano) {
+                div {
+                    style: "display: flex; align-items: center; gap: 10px; margin-top: 16px;",
+                    span { style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;", "Transpose:" }
+                    button {
+                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                        onclick: move |_| { if piano_capo() > -12 { *piano_capo.write() -= 1; } },
+                        "−"
+                    }
+                    span { style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #1a1a2e;",
+                        if piano_capo() == 0 { "Off" } else if piano_capo() > 0 { "+{piano_capo()}" } else { "{piano_capo()}" }
+                    }
+                    button {
+                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                        onclick: move |_| { if piano_capo() < 12 { *piano_capo.write() += 1; } },
+                        "+"
+                    }
+                    if piano_capo() != 0 {
+                        span { style: "font-size: 11px; color: #888; font-style: italic;",
+                            "→ sounds in {piano_song.read().apply_capo(-piano_capo()).key}"
+                        }
+                    }
+                }
                 RenderedSheet { song: piano_song, notation, capo: piano_capo }
             }
             if render_mode() && *active_instrument.read() == Some(Instrument::Drums) {
-                RenderedSheet { song: drums_song, notation, capo: drums_capo }
+                RenderedSheet { song: drums_song, notation, capo: use_signal(|| 0_i8) }
             }
             if !render_mode() {
             if active_instrument.read().is_none() {
@@ -1062,7 +1079,7 @@ fn SongView(
                             }
                         }
                     }
-                    PartView { key: "{part_index}", song, part_index, notation, capo: use_signal(|| 0_u8) }
+                    PartView { key: "{part_index}", song, part_index, notation, capo: use_signal(|| 0_i8) }
                 }
                 button {
                     style: "
@@ -1124,7 +1141,7 @@ fn SongView(
                         Instrument::AcousticGuitar => (acoustic_song, acoustic_capo),
                         Instrument::Bass => (bass_song, bass_capo),
                         Instrument::Piano => (piano_song, piano_capo),
-                        Instrument::Drums => (drums_song, drums_capo),
+                        Instrument::Drums => (drums_song, use_signal(|| 0_i8)),
                     };
                     let accent = inst.accent_color();
                     let inst_label = inst.label();
@@ -1135,34 +1152,40 @@ fn SongView(
                             img { src: inst_icon(inst).to_string(), style: "width: 22px; height: 22px; object-fit: contain;", alt: "{inst_label}" }
                             span { "✏️  " strong { "{inst_label}" } " sheet — edits apply to this instrument only" }
                         }
-                        // Instrument capo control
+                        // Instrument capo/transpose control (hidden for drums)
+                        if inst != Instrument::Drums {
                         div {
                             style: "margin-bottom: 20px; display: flex; align-items: center; gap: 10px;",
                             span {
                                 style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;",
-                                "Capo:"
+                                if inst == Instrument::Piano { "Transpose:" } else { "Capo:" }
                             }
                             button {
                                 style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
-                                onclick: move |_| { if act_capo() > 0 { *act_capo.write() -= 1; } },
+                                onclick: move |_| { if act_capo() > if inst == Instrument::Piano { -12 } else { 0 } { *act_capo.write() -= 1; } },
                                 "−"
                             }
                             span {
                                 style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #1a1a2e;",
-                                if act_capo() == 0 { "Off" } else { "{act_capo()}" }
+                                if act_capo() == 0 { "Off" } else if act_capo() > 0 { "+{act_capo()}" } else { "{act_capo()}" }
                             }
                             button {
                                 style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
                                 onclick: move |_| { if act_capo() < 12 { *act_capo.write() += 1; } },
                                 "+"
                             }
-                            if act_capo() > 0 {
+                            if act_capo() != 0 {
                                 span {
                                     style: "font-size: 11px; color: #888; font-style: italic;",
-                                    "→ play in {act_song.read().apply_capo(act_capo()).key}"
+                                    if inst == Instrument::Piano {
+                                        "→ sounds in {act_song.read().apply_capo(-act_capo()).key}"
+                                    } else {
+                                        "→ play in {act_song.read().apply_capo(act_capo()).key}"
+                                    }
                                 }
                             }
                         }
+                        } // end if inst != Drums
                         // Editable chord parts
                         for part_index in 0..act_song.read().parts.len() {
                             // Insert-between divider
@@ -1265,6 +1288,25 @@ fn SongView(
                                 ",
                                 onclick: move |_| { act_song.write().parts.push(SongPart::new_bass_riff("Bass")); },
                                 "+ Add Bass Tab"
+                            }
+                        }
+                        if inst == Instrument::Drums {
+                            button {
+                                style: "
+                                    margin-bottom: 12px;
+                                    padding: 10px 20px;
+                                    background: transparent;
+                                    color: #7a5a10;
+                                    border: 2px dashed #d4b040;
+                                    border-radius: 10px;
+                                    font-size: 13px;
+                                    font-weight: 600;
+                                    cursor: pointer;
+                                    font-family: inherit;
+                                    width: 100%;
+                                ",
+                                onclick: move |_| { act_song.write().parts.push(SongPart::new_drum_beat("Beat")); },
+                                "+ Add Beat"
                             }
                         }
                         div {
@@ -1457,7 +1499,7 @@ fn SongView(
                 onclick: move |_| {
                     let base = song.read().clone();
                     let (preview_song, capo_val) = match *active_instrument.read() {
-                        None => (base.clone(), 0_u8),
+                        None => (base.clone(), 0_i8),
                         Some(Instrument::Guitar) => {
                             let parts = guitar_song.read().parts.clone();
                             (Song { parts, ..base.clone() }, guitar_capo())
@@ -1476,7 +1518,7 @@ fn SongView(
                         }
                         Some(Instrument::Drums) => {
                             let parts = drums_song.read().parts.clone();
-                            (Song { parts, ..base.clone() }, drums_capo())
+                            (Song { parts, ..base.clone() }, 0_i8)
                         }
                     };
                     let note = notation();
@@ -1528,9 +1570,9 @@ fn SongView(
 
                     // Collect: base sheet + one entry per instrument that has saved overrides.
                     // Each entry is (song_with_correct_parts, filename, capo_for_that_sheet, pns, cs).
-                    let mut exports: Vec<(Song, String, u8, f32, f32)> = Vec::new();
+                    let mut exports: Vec<(Song, String, i8, f32, f32)> = Vec::new();
                     let base_pdf = s.pdf_settings.get("Base").cloned().unwrap_or_default();
-                    exports.push((s.clone(), s.name.clone(), 0_u8, base_pdf.part_name_size as f32, base_pdf.chord_size as f32));
+                    exports.push((s.clone(), s.name.clone(), 0_i8, base_pdf.part_name_size as f32, base_pdf.chord_size as f32));
                     for inst in Instrument::all() {
                         if let Some(parts) = s.instrument_parts.get(inst.label()).cloned() {
                             let inst_cap = *s.instrument_capos.get(inst.label()).unwrap_or(&0);
@@ -1621,7 +1663,7 @@ fn SongView(
                             Ok(song_id) => {
                                 println!("✅  Song saved (id={song_id})");
                                 // Also generate and store the current PDF
-                                match pdf::generate_pdf_bytes(&s, note, pns, cs, 0_u8) {
+                                match pdf::generate_pdf_bytes(&s, note, pns, cs, 0_i8) {
                                     Ok(bytes) => match db_ref.save_pdf(song_id, &bytes) {
                                         Ok(pdf_id) => println!("✅  PDF stored (id={pdf_id})"),
                                         Err(e) => eprintln!("❌  PDF store failed: {e}"),
@@ -1874,15 +1916,29 @@ fn LoginScreen(db: Signal<Option<Db>>, mut current_user: Signal<Option<User>>) -
 // ── Tab grid editor ───────────────────────────────────────────────────────────
 
 #[component]
-fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool) -> Element {
+fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool, drums: bool) -> Element {
     let mut editing: Signal<Option<(usize, usize)>> = use_signal(|| None);
     let mut edit_buf: Signal<String> = use_signal(String::new);
 
     const STRING_NAMES_GUITAR: [&str; 6] = ["e", "B", "G", "D", "A", "E"];
     const STRING_NAMES_BASS: [&str; 4] = ["G", "D", "A", "E"];
-    let num_strings: usize = if bass { 4 } else { 6 };
+    #[allow(dead_code)]
+    const STRING_NAMES_DRUMS: [&str; 8] = ["K", "S", "Hi", "R", "C", "T1", "T2", "T3"];
+    let num_strings: usize = if bass {
+        4
+    } else if drums {
+        8
+    } else {
+        6
+    };
     // For bass: indices 2-5 of the 6-cell array map to G,D,A,E
     let str_offset: usize = if bass { 2 } else { 0 };
+    // Colour theme: green for guitar/bass, amber for drums.
+    let (grid_line_color, grid_border_color, grid_bg_color, lbl_color) = if drums {
+        ("#c8a840", "#d4b040", "#fffbf0", "#7a5a10")
+    } else {
+        ("#aac8aa", "#b5d6b5", "#f6fbf6", "#5c7a5c")
+    };
 
     // Pre-compute segments: each is a Vec of global column indices (skipping LineBreaks).
     // lb_indices[i] = global index of the LineBreak that follows segment i.
@@ -1921,7 +1977,7 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool) -> Element {
                             div {
                                 key: "lb-{seg_idx}",
                                 style: "display: flex; align-items: center; gap: 8px;",
-                                div { style: "height: 1px; flex: 1; background: #b5d6b5;" }
+                                div { style: "height: 1px; flex: 1; background: {grid_border_color};" }
                                 button {
                                     style: "font-size: 11px; color: #9b6fc4; background: none; border: 1px dashed #c8a8e8; border-radius: 4px; padding: 1px 8px; cursor: pointer; font-family: inherit;",
                                     title: "Remove line break",
@@ -1934,14 +1990,14 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool) -> Element {
                                     },
                                     "\u{21b5} \u{00d7}"
                                 }
-                                div { style: "height: 1px; flex: 1; background: #b5d6b5;" }
+                                div { style: "height: 1px; flex: 1; background: {grid_border_color};" }
                             }
                         }
 
                         // ── Segment block ─────────────────────────────────────────
                         div {
                             key: "seg-{seg_idx}",
-                            style: "display: inline-block; background: #fff; border: 1.5px solid #b5d6b5; border-radius: 8px; padding: 10px 14px 12px;",
+                            style: "display: inline-block; background: {grid_bg_color}; border: 1.5px solid {grid_border_color}; border-radius: 8px; padding: 10px 14px 12px;",
 
                             // Header row: delete buttons + (on last segment) add buttons
                             div {
@@ -1984,7 +2040,7 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool) -> Element {
                                     div {
                                         style: "display: flex; gap: 4px; margin-left: 6px;",
                                         button {
-                                            style: "background: none; border: 1px dashed #8fba8f; border-radius: 4px; font-size: 12px; color: #5c7a5c; cursor: pointer; padding: 1px 7px; font-family: inherit;",
+                                            style: "background: none; border: 1px dashed {grid_border_color}; border-radius: 4px; font-size: 12px; color: {lbl_color}; cursor: pointer; padding: 1px 7px; font-family: inherit;",
                                             title: "Add 4 beats",
                                             onclick: move |_| {
                                                 if let Some(part) = song.write().parts.get_mut(part_index) {
@@ -2029,9 +2085,11 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool) -> Element {
                                             key: "lbl-{seg_idx}-{si}",
                                             style: "height: 32px; width: 20px; display: flex; align-items: center; justify-content: flex-end;",
                                             span {
-                                                style: "font-family: Courier, monospace; font-size: 12px; font-weight: 700; color: #5c7a5c;",
+                                                style: "font-family: Courier, monospace; font-size: 12px; font-weight: 700; color: {lbl_color};",
                                                 if bass {
                                                     "{STRING_NAMES_BASS[si]}"
+                                                } else if drums {
+                                                    "{STRING_NAMES_DRUMS[si]}"
                                                 } else {
                                                     "{STRING_NAMES_GUITAR[si]}"
                                                 }
@@ -2092,7 +2150,24 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool) -> Element {
                                                         }
                                                     })
                                                     .unwrap_or(TabCell::Empty);
-                                                let (cell_label, label_color, cell_bg) = match cell {
+                                                let (cell_label, label_color, cell_bg) = if drums {
+                                                    match &cell {
+                                                        TabCell::Empty     => ("\u{00b7}".to_string(), "#c8a840", "background:transparent;"),
+                                                        TabCell::Muted     => ("x".to_string(),  "#2a2a2a", "background:#e8d8a0;"),
+                                                        TabCell::Custom(s) => {
+                                                            let (c, bg) = match s.as_str() {
+                                                                "X"       => ("#8a1a1a", "background:#fde8e8;"),
+                                                                "o" | "O" => ("#1a5c5c", "background:#d0f0ec;"),
+                                                                "f"       => ("#6b1a8a", "background:#f0e8f8;"),
+                                                                _         => ("#2a2a2a", "background:#e8d8a0;"),
+                                                            };
+                                                            (s.clone(), c, bg)
+                                                        }
+                                                        TabCell::Fret(n) => (n.to_string(), "#2a2a2a", "background:#e8d8a0;"),
+                                                        _                => ("?".to_string(), "#2a2a2a", "background:#e8d8a0;"),
+                                                    }
+                                                } else {
+                                                    match cell {
                                                     TabCell::Fret(n) => (n.to_string(), "#1a1a2e", "background:#d8edd8;"),
                                                     TabCell::Muted => ("x".to_string(), "#c0392b", "background:#fde8e8;"),
                                                     TabCell::Empty => ("\u{2013}".to_string(), "#c8dcc8", "background:transparent;"),
@@ -2104,6 +2179,7 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool) -> Element {
                                                     TabCell::SlideUp   => ("/".to_string(),  "#1a4a8a", "background:#d8e8f8;"),
                                                     TabCell::SlideDown => ("\\".to_string(), "#1a4a8a", "background:#d8e8f8;"),
                                                     TabCell::Custom(ref s) => (s.clone(), "#1a1a2e", "background:#e8e4da;"),
+                                                    }
                                                 };
                                                 let has_value = !matches!(cell, TabCell::Empty);
                                                 let fw = if has_value { "700" } else { "400" };
@@ -2115,9 +2191,9 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool) -> Element {
                                                         div {
                                                             key: "{col}",
                                                             style: "position:relative;width:36px;height:32px;display:flex;align-items:center;justify-content:center;flex-shrink:0;",
-                                                            div { style: "position:absolute;top:50%;left:0;right:0;height:2px;background:#aac8aa;transform:translateY(-50%);z-index:0;" }
+                                                            div { style: "position:absolute;top:50%;left:0;right:0;height:2px;background:{grid_line_color};transform:translateY(-50%);z-index:0;" }
                                                             input {
-                                                                style: "position:relative;z-index:1;width:30px;height:26px;font-family:Courier,monospace;font-size:13px;font-weight:700;text-align:center;border:2px solid #5c7a5c;border-radius:4px;background:#f6fbf6;outline:none;padding:0;box-sizing:border-box;",
+                                                                style: "position:relative;z-index:1;width:30px;height:26px;font-family:Courier,monospace;font-size:13px;font-weight:700;text-align:center;border:2px solid {lbl_color};border-radius:4px;background:{grid_bg_color};outline:none;padding:0;box-sizing:border-box;",
                                                                 r#type: "text",
                                                                 maxlength: "8",
                                                                 autofocus: true,
@@ -2171,7 +2247,7 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool) -> Element {
                                                         div {
                                                             key: "{col}",
                                                             style: "position:relative;width:36px;height:32px;display:flex;align-items:center;justify-content:center;flex-shrink:0;",
-                                                            div { style: "position:absolute;top:50%;left:0;right:0;height:2px;background:#aac8aa;transform:translateY(-50%);z-index:0;" }
+                                                            div { style: "position:absolute;top:50%;left:0;right:0;height:2px;background:{grid_line_color};transform:translateY(-50%);z-index:0;" }
                                                             div {
                                                                 style: "{cell_style}",
                                                                 onclick: move |_| {
@@ -2217,27 +2293,46 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool) -> Element {
 
             // ── Tab notation legend ───────────────────────────────────────────
             div {
-                style: "margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 8px 12px; background: #f7fbf7; border: 1px solid #c8dcc8; border-radius: 8px;",
+                style: "margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 8px 12px; background: {grid_bg_color}; border: 1px solid {grid_border_color}; border-radius: 8px;",
                 span {
-                    style: "font-size: 10px; font-weight: 700; color: #5c7a5c; text-transform: uppercase; letter-spacing: 1px; width: 100%; margin-bottom: 2px;",
+                    style: "font-size: 10px; font-weight: 700; color: {lbl_color}; text-transform: uppercase; letter-spacing: 1px; width: 100%; margin-bottom: 2px;",
                     "Legend"
                 }
-                for (sym, label) in [
-                    ("(n)", "Ghost note"),
-                    ("h",   "Hammer-on"),
-                    ("p",   "Pull-off"),
-                    ("r",   "Release"),
-                    ("b",   "Bend"),
-                    ("/",   "Slide up"),
-                    ("\\",  "Slide down"),
-                ] {
-                    span {
-                        style: "display: inline-flex; align-items: baseline; gap: 4px; font-size: 11px; color: #555;",
+                if drums {
+                    for (sym, label) in [
+                        ("x",  "Closed hit"),
+                        ("X",  "Accent"),
+                        ("o",  "Open / soft"),
+                        ("O",  "Loud open"),
+                        ("f",  "Flam"),
+                    ] {
                         span {
-                            style: "font-family: Courier, monospace; font-size: 12px; font-weight: 700; color: #1a1a2e; min-width: 20px;",
-                            "{sym}"
+                            style: "display: inline-flex; align-items: baseline; gap: 4px; font-size: 11px; color: #555;",
+                            span {
+                                style: "font-family: Courier, monospace; font-size: 12px; font-weight: 700; color: #1a1a2e; min-width: 20px;",
+                                "{sym}"
+                            }
+                            span { "{label}" }
                         }
-                        span { "{label}" }
+                    }
+                } else {
+                    for (sym, label) in [
+                        ("(n)", "Ghost note"),
+                        ("h",   "Hammer-on"),
+                        ("p",   "Pull-off"),
+                        ("r",   "Release"),
+                        ("b",   "Bend"),
+                        ("/",   "Slide up"),
+                        ("\\",  "Slide down"),
+                    ] {
+                        span {
+                            style: "display: inline-flex; align-items: baseline; gap: 4px; font-size: 11px; color: #555;",
+                            span {
+                                style: "font-family: Courier, monospace; font-size: 12px; font-weight: 700; color: #1a1a2e; min-width: 20px;",
+                                "{sym}"
+                            }
+                            span { "{label}" }
+                        }
                     }
                 }
             }
@@ -2248,15 +2343,15 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool) -> Element {
 // ── Rendered Sheet ────────────────────────────────────────────────────────────
 
 #[component]
-fn RenderedSheet(song: Signal<Song>, notation: Signal<Notation>, capo: Signal<u8>) -> Element {
+fn RenderedSheet(song: Signal<Song>, notation: Signal<Notation>, capo: Signal<i8>) -> Element {
     let s = song.read();
     let n = notation();
     let cap = capo();
     let title = s.name.clone();
     let artist = s.artist.clone();
     let key = s.key.clone();
-    // Apply capo shift (same as PDF: render shape chords, show shape key)
-    let effective = if cap > 0 {
+    // Apply capo/transpose shift (positive = capo down, negative = transpose up)
+    let effective = if cap != 0 {
         s.apply_capo(cap)
     } else {
         s.clone()
@@ -2295,11 +2390,17 @@ fn RenderedSheet(song: Signal<Song>, notation: Signal<Notation>, capo: Signal<u8
                     "Key: {key}"
                 }
             }
-            // Capo
+            // Capo / Transpose annotation
             if cap > 0 {
                 div {
                     style: "font-size: 14px; color: #333; margin-bottom: 4px;",
                     "Capo: fret {cap}  (shapes in {shape_key})"
+                }
+            }
+            if cap < 0 {
+                div {
+                    style: "font-size: 14px; color: #333; margin-bottom: 4px;",
+                    "Transpose: {cap} semitones  (sounds in {shape_key})"
                 }
             }
             // Horizontal rule
@@ -2313,10 +2414,10 @@ fn RenderedSheet(song: Signal<Song>, notation: Signal<Notation>, capo: Signal<u8
                         style: "font-size: 11px; font-weight: 700; color: #555; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 14px;",
                         "{part.name}"
                     }
-                    if part.kind == PartKind::Riff || part.kind == PartKind::BassRiff {
+                    if part.kind == PartKind::Riff || part.kind == PartKind::BassRiff || part.kind == PartKind::DrumBeat {
                         pre {
                             style: "font-family: 'Courier New', monospace; font-size: 15px; color: #333; white-space: pre-wrap; margin: 0;",
-                            "{part.tab}"
+                            "{part.tab_as_ascii()}"
                         }
                     } else {
                         // Chord row — split at LineBreak items
@@ -2410,7 +2511,7 @@ fn PartView(
     song: Signal<Song>,
     part_index: usize,
     notation: Signal<Notation>,
-    capo: Signal<u8>,
+    capo: Signal<i8>,
 ) -> Element {
     let item_count = song
         .read()
@@ -2428,7 +2529,9 @@ fn PartView(
         .read()
         .parts
         .get(part_index)
-        .map(|p| p.kind == PartKind::Riff || p.kind == PartKind::BassRiff)
+        .map(|p| {
+            p.kind == PartKind::Riff || p.kind == PartKind::BassRiff || p.kind == PartKind::DrumBeat
+        })
         .unwrap_or(false);
     let is_bass_riff = song
         .read()
@@ -2436,10 +2539,34 @@ fn PartView(
         .get(part_index)
         .map(|p| p.kind == PartKind::BassRiff)
         .unwrap_or(false);
+    let is_drum_beat = song
+        .read()
+        .parts
+        .get(part_index)
+        .map(|p| p.kind == PartKind::DrumBeat)
+        .unwrap_or(false);
 
-    let part_border = if is_riff { "#b5d6b5" } else { "#ece8df" };
-    let part_bg = if is_riff { "#f6fbf6" } else { "#fff" };
-    let part_name_color = if is_riff { "#5c7a5c" } else { "#aaa" };
+    let part_border = if is_drum_beat {
+        "#d4b040"
+    } else if is_riff {
+        "#b5d6b5"
+    } else {
+        "#ece8df"
+    };
+    let part_bg = if is_drum_beat {
+        "#fffbf0"
+    } else if is_riff {
+        "#f6fbf6"
+    } else {
+        "#fff"
+    };
+    let part_name_color = if is_drum_beat {
+        "#7a5a10"
+    } else if is_riff {
+        "#5c7a5c"
+    } else {
+        "#aaa"
+    };
     let mut drag_source: Signal<Option<usize>> = use_signal(|| None);
     let card_style = format!(
         "margin-bottom: 32px; border: 1px solid {part_border}; border-radius: 12px; padding: 18px 20px 16px; position: relative; background: {part_bg};"
@@ -2514,7 +2641,7 @@ fn PartView(
             }
 
             if is_riff {
-                TabEditor { song, part_index, bass: is_bass_riff }
+                TabEditor { song, part_index, bass: is_bass_riff, drums: is_drum_beat }
             }
             if !is_riff {
                 // ── Chord items + add buttons ──────────────────────────────
@@ -3133,7 +3260,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
         .map(|i| i.label())
         .unwrap_or_else(|| instrument.as_str());
 
-    let mut capo = use_signal(|| 0_u8);
+    let mut capo = use_signal(|| 0_i8);
     let notation: Signal<Notation> = use_signal(|| Notation::English);
 
     rsx! {
@@ -3201,31 +3328,35 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                         "Key: {song.read().key}"
                     }
 
-                    // Capo control
+                    // Capo / Transpose control
                     div {
                         style: "margin-top: 14px; display: flex; align-items: center; gap: 10px;",
                         span {
                             style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;",
-                            "Capo:"
+                            if inst == Some(Instrument::Piano) { "Transpose:" } else { "Capo:" }
                         }
                         button {
                             style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
-                            onclick: move |_| { if capo() > 0 { *capo.write() -= 1; } },
+                            onclick: move |_| { if capo() > if inst == Some(Instrument::Piano) { -12 } else { 0 } { *capo.write() -= 1; } },
                             "−"
                         }
                         span {
                             style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #1a1a2e;",
-                            if capo() == 0 { "Off" } else { "{capo()}" }
+                            if capo() == 0 { "Off" } else if capo() > 0 { "+{capo()}" } else { "{capo()}" }
                         }
                         button {
                             style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
                             onclick: move |_| { if capo() < 12 { *capo.write() += 1; } },
                             "+"
                         }
-                        if capo() > 0 {
+                        if capo() != 0 {
                             span {
                                 style: "font-size: 11px; color: #888; font-style: italic;",
-                                "→ play in {song.read().apply_capo(capo()).key}"
+                                if inst == Some(Instrument::Piano) {
+                                    "→ sounds in {song.read().apply_capo(-capo()).key}"
+                                } else {
+                                    "→ play in {song.read().apply_capo(capo()).key}"
+                                }
                             }
                         }
                     }
@@ -3243,7 +3374,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                         .read()
                         .parts
                         .get(part_index)
-                        .map(|p| p.kind == PartKind::Riff || p.kind == PartKind::BassRiff)
+                        .map(|p| p.kind == PartKind::Riff || p.kind == PartKind::BassRiff || p.kind == PartKind::DrumBeat)
                         .unwrap_or(false);
                     let item_count = song
                         .read()
@@ -3297,9 +3428,13 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                                         .cloned();
                                     match item {
                                         Some(PartItem::Chord(chord)) => {
-                                            let capo_label = if capo() > 0 {
+                                            let capo_label = if capo() != 0 {
                                                 let is_minor = song.read().key.to_lowercase().contains("minor");
-                                                let shifted = song::shift_note(&chord.root, capo(), is_minor);
+                                                let shifted = if capo() > 0 {
+                                                    song::shift_note(&chord.root, capo() as u8, is_minor)
+                                                } else {
+                                                    song::shift_note_up(&chord.root, (-capo()) as u8, is_minor)
+                                                };
                                                 let note = notation();
                                                 format!("{}{}", apply_notation(&shifted, note), chord.quality.symbol())
                                             } else {
@@ -3438,7 +3573,7 @@ fn ChordEditor(
     part_index: usize,
     item_index: usize,
     notation: Signal<Notation>,
-    capo: Signal<u8>,
+    capo: Signal<i8>,
 ) -> Element {
     let chord = song
         .read()
@@ -3454,17 +3589,24 @@ fn ChordEditor(
         })
         .unwrap_or_else(|| Chord::new("C", ChordQuality::Major));
 
-    let display_label = if capo() > 0 {
-        // Show the chord shape the player needs to play with the capo.
+    let display_label = if capo() != 0 {
+        // Show the chord shape the player needs to play with the capo/transpose.
         let is_minor = song.read().key.to_lowercase().contains("minor");
-        let shifted_root =
-            apply_notation(&song::shift_note(&chord.root, capo(), is_minor), notation());
-        let shifted_bass = chord.bass_note.as_deref().map(|b| {
-            format!(
-                "/{}",
-                apply_notation(&song::shift_note(b, capo(), is_minor), notation())
-            )
-        });
+        let shift_fn = |root: &str| -> String {
+            if capo() > 0 {
+                apply_notation(&song::shift_note(root, capo() as u8, is_minor), notation())
+            } else {
+                apply_notation(
+                    &song::shift_note_up(root, (-capo()) as u8, is_minor),
+                    notation(),
+                )
+            }
+        };
+        let shifted_root = shift_fn(&chord.root);
+        let shifted_bass = chord
+            .bass_note
+            .as_deref()
+            .map(|b| format!("/{}", shift_fn(b)));
         format!(
             "{}{}{}",
             shifted_root,
