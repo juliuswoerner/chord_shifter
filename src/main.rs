@@ -7,12 +7,12 @@ use manganis::Asset;
 
 use chord_shifter::song::Instrument;
 
-const ICON_BASE: Asset = manganis::asset!("/assets/icons/base.png");
-const ICON_ELECTRIC: Asset = manganis::asset!("/assets/icons/electric.png");
-const ICON_ACOUSTIC: Asset = manganis::asset!("/assets/icons/acoustic.png");
-const ICON_BASS: Asset = manganis::asset!("/assets/icons/bass.png");
-const ICON_PIANO: Asset = manganis::asset!("/assets/icons/piano.png");
-const ICON_DRUMS: Asset = manganis::asset!("/assets/icons/drums.png");
+const ICON_BASE: Asset = manganis::asset!("/assets/icons/base_icon.png");
+const ICON_ELECTRIC: Asset = manganis::asset!("/assets/icons/electric_icon.png");
+const ICON_ACOUSTIC: Asset = manganis::asset!("/assets/icons/acoustic_icon.png");
+const ICON_BASS: Asset = manganis::asset!("/assets/icons/bass_icon.png");
+const ICON_PIANO: Asset = manganis::asset!("/assets/icons/piano_icon.png");
+const ICON_DRUMS: Asset = manganis::asset!("/assets/icons/drums_icon.png");
 const LOGO: Asset = manganis::asset!("/assets/icons/sheetwave_logo.png");
 
 fn inst_icon(inst: Instrument) -> Asset {
