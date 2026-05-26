@@ -449,7 +449,7 @@ fn App() -> Element {
             style: "
                 font-family: 'Helvetica Neue', Arial, sans-serif;
                 min-height: 100vh;
-                background: #f0ece2;
+                background: #f0f4ff;
             ",
 
             if current_user.read().is_some() {
@@ -458,7 +458,7 @@ fn App() -> Element {
                 LandingPage { screen }
             } else {
                 div {
-                    style: "display: flex; align-items: flex-start; justify-content: center; padding: 48px 20px;",
+                    style: "min-height: 100vh; background: linear-gradient(180deg, #ffffff 0%, #eef3fc 100%); display: flex; align-items: flex-start; justify-content: center; padding: 60px 20px;",
                     LoginScreen { db, current_user, screen }
                 }
             }
@@ -474,50 +474,50 @@ fn LandingPage(mut screen: Signal<AppScreen>) -> Element {
         div {
             style: "
                 min-height: 100vh;
-                background: linear-gradient(160deg, #0f0f1e 0%, #1a1a2e 50%, #16213e 100%);
+                background: #ffffff;
                 display: flex;
                 flex-direction: column;
                 font-family: 'Helvetica Neue', Arial, sans-serif;
             ",
 
-            // ── Nav bar ────────────────────────────────────────────────────────
+            // ── Nav bar ───────────────────────────────────────────────────────
             div {
                 style: "
                     display: flex;
                     align-items: center;
                     justify-content: space-between;
-                    padding: 20px 48px;
-                    border-bottom: 1px solid rgba(255,255,255,0.07);
+                    padding: 18px 52px;
+                    border-bottom: 1.5px solid #e8edf5;
+                    background: #ffffff;
                 ",
-                // Logo mark
+                // Logo + wordmark
                 div {
                     style: "display: flex; align-items: center; gap: 10px;",
                     img {
                         src: LOGO.to_string(),
-                        style: "height: 36px; width: auto; object-fit: contain;",
+                        style: "height: 38px; width: auto; object-fit: contain;",
                         alt: "SheetWave"
                     }
                     span {
-                        style: "font-size: 18px; font-weight: 800; color: #f0ece2; letter-spacing: -0.3px;",
+                        style: "font-size: 19px; font-weight: 900; color: #0a0f1e; letter-spacing: -0.4px;",
                         "SheetWave"
                     }
                 }
                 // Nav actions
                 div {
-                    style: "display: flex; align-items: center; gap: 12px;",
+                    style: "display: flex; align-items: center; gap: 10px;",
                     button {
                         style: "
                             padding: 9px 22px;
                             background: transparent;
-                            border: 1.5px solid rgba(240,236,226,0.35);
+                            border: 1.5px solid #2563eb;
                             border-radius: 8px;
                             font-size: 13px;
                             font-weight: 700;
-                            color: #f0ece2;
+                            color: #2563eb;
                             cursor: pointer;
                             font-family: inherit;
-                            letter-spacing: 0.3px;
-                            transition: background 0.15s;
+                            letter-spacing: 0.2px;
                         ",
                         onclick: move |_| *screen.write() = AppScreen::Login,
                         "Log in"
@@ -525,15 +525,15 @@ fn LandingPage(mut screen: Signal<AppScreen>) -> Element {
                     button {
                         style: "
                             padding: 9px 22px;
-                            background: #c8a96e;
+                            background: #2563eb;
                             border: none;
                             border-radius: 8px;
                             font-size: 13px;
                             font-weight: 700;
-                            color: #1a1a2e;
+                            color: #ffffff;
                             cursor: pointer;
                             font-family: inherit;
-                            letter-spacing: 0.3px;
+                            letter-spacing: 0.2px;
                         ",
                         onclick: move |_| *screen.write() = AppScreen::Register,
                         "Get started"
@@ -541,7 +541,7 @@ fn LandingPage(mut screen: Signal<AppScreen>) -> Element {
                 }
             }
 
-            // ── Hero ───────────────────────────────────────────────────────────
+            // ── Hero ──────────────────────────────────────────────────────────
             div {
                 style: "
                     flex: 1;
@@ -549,14 +549,15 @@ fn LandingPage(mut screen: Signal<AppScreen>) -> Element {
                     flex-direction: column;
                     align-items: center;
                     justify-content: center;
-                    padding: 72px 24px 40px;
+                    padding: 64px 24px 40px;
                     text-align: center;
+                    background: linear-gradient(180deg, #ffffff 0%, #eef3fc 100%);
                 ",
 
-                // Logo
+                // Large logo
                 img {
                     src: LOGO.to_string(),
-                    style: "width: 120px; height: 120px; object-fit: contain; margin-bottom: 28px; filter: drop-shadow(0 8px 32px rgba(200,169,110,0.35));",
+                    style: "width: 180px; height: 180px; object-fit: contain; margin-bottom: 32px; filter: drop-shadow(0 6px 24px rgba(37,99,235,0.18));",
                     alt: "SheetWave"
                 }
 
@@ -564,16 +565,16 @@ fn LandingPage(mut screen: Signal<AppScreen>) -> Element {
                 h1 {
                     style: "
                         margin: 0 0 16px;
-                        font-size: clamp(36px, 6vw, 64px);
+                        font-size: clamp(34px, 5.5vw, 60px);
                         font-weight: 900;
-                        color: #f0ece2;
+                        color: #0a0f1e;
                         letter-spacing: -1.5px;
                         line-height: 1.1;
                     ",
                     "Your songs."
                     br {}
                     span {
-                        style: "color: #c8a96e;",
+                        style: "color: #2563eb;",
                         "Every instrument."
                     }
                 }
@@ -582,10 +583,10 @@ fn LandingPage(mut screen: Signal<AppScreen>) -> Element {
                 p {
                     style: "
                         margin: 0 auto 48px;
-                        max-width: 520px;
+                        max-width: 500px;
                         font-size: 18px;
-                        line-height: 1.6;
-                        color: rgba(240,236,226,0.7);
+                        line-height: 1.65;
+                        color: #4b5563;
                         font-weight: 400;
                     ",
                     "Write chord sheets, tabs, and lyrics for every instrument in one place — "
@@ -594,21 +595,21 @@ fn LandingPage(mut screen: Signal<AppScreen>) -> Element {
 
                 // CTA buttons
                 div {
-                    style: "display: flex; align-items: center; gap: 16px; flex-wrap: wrap; justify-content: center; margin-bottom: 72px;",
+                    style: "display: flex; align-items: center; gap: 14px; flex-wrap: wrap; justify-content: center; margin-bottom: 72px;",
 
                     button {
                         style: "
-                            padding: 16px 40px;
-                            background: #c8a96e;
+                            padding: 16px 44px;
+                            background: #2563eb;
                             border: none;
                             border-radius: 12px;
                             font-size: 16px;
                             font-weight: 800;
-                            color: #1a1a2e;
+                            color: #ffffff;
                             cursor: pointer;
                             font-family: inherit;
-                            letter-spacing: 0.4px;
-                            box-shadow: 0 4px 24px rgba(200,169,110,0.4);
+                            letter-spacing: 0.3px;
+                            box-shadow: 0 4px 20px rgba(37,99,235,0.35);
                         ",
                         onclick: move |_| *screen.write() = AppScreen::Register,
                         "✦  Let's get started"
@@ -616,16 +617,16 @@ fn LandingPage(mut screen: Signal<AppScreen>) -> Element {
 
                     button {
                         style: "
-                            padding: 16px 40px;
-                            background: transparent;
-                            border: 2px solid rgba(240,236,226,0.3);
+                            padding: 16px 44px;
+                            background: #ffffff;
+                            border: 2px solid #2563eb;
                             border-radius: 12px;
                             font-size: 16px;
                             font-weight: 700;
-                            color: #f0ece2;
+                            color: #2563eb;
                             cursor: pointer;
                             font-family: inherit;
-                            letter-spacing: 0.4px;
+                            letter-spacing: 0.3px;
                         ",
                         onclick: move |_| *screen.write() = AppScreen::Login,
                         "Log in to my account"
@@ -636,78 +637,83 @@ fn LandingPage(mut screen: Signal<AppScreen>) -> Element {
                 div {
                     style: "
                         display: grid;
-                        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+                        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
                         gap: 16px;
-                        max-width: 860px;
+                        max-width: 880px;
                         width: 100%;
                     ",
 
                     // Card 1
                     div {
                         style: "
-                            background: rgba(255,255,255,0.05);
-                            border: 1px solid rgba(255,255,255,0.09);
+                            background: #ffffff;
+                            border: 1.5px solid #dbeafe;
                             border-radius: 14px;
                             padding: 24px 22px;
                             text-align: left;
+                            box-shadow: 0 2px 12px rgba(37,99,235,0.07);
                         ",
                         div { style: "font-size: 28px; margin-bottom: 12px;", "🎸" }
-                        div { style: "font-size: 14px; font-weight: 800; color: #f0ece2; margin-bottom: 6px;", "Multi-instrument sheets" }
-                        div { style: "font-size: 13px; color: rgba(240,236,226,0.55); line-height: 1.5;", "Guitar, bass, piano, drums, and vocals — all in one song." }
+                        div { style: "font-size: 14px; font-weight: 800; color: #0a0f1e; margin-bottom: 6px;", "Multi-instrument sheets" }
+                        div { style: "font-size: 13px; color: #6b7280; line-height: 1.55;", "Guitar, bass, piano, drums, and vocals — all in one song." }
                     }
 
                     // Card 2
                     div {
                         style: "
-                            background: rgba(255,255,255,0.05);
-                            border: 1px solid rgba(255,255,255,0.09);
+                            background: #ffffff;
+                            border: 1.5px solid #dbeafe;
                             border-radius: 14px;
                             padding: 24px 22px;
                             text-align: left;
+                            box-shadow: 0 2px 12px rgba(37,99,235,0.07);
                         ",
                         div { style: "font-size: 28px; margin-bottom: 12px;", "🎼" }
-                        div { style: "font-size: 14px; font-weight: 800; color: #f0ece2; margin-bottom: 6px;", "Chord transposition & capo" }
-                        div { style: "font-size: 13px; color: rgba(240,236,226,0.55); line-height: 1.5;", "Shift any chord sheet to a new key or capo position instantly." }
+                        div { style: "font-size: 14px; font-weight: 800; color: #0a0f1e; margin-bottom: 6px;", "Chord transposition & capo" }
+                        div { style: "font-size: 13px; color: #6b7280; line-height: 1.55;", "Shift any chord sheet to a new key or capo position instantly." }
                     }
 
                     // Card 3
                     div {
                         style: "
-                            background: rgba(255,255,255,0.05);
-                            border: 1px solid rgba(255,255,255,0.09);
+                            background: #ffffff;
+                            border: 1.5px solid #dbeafe;
                             border-radius: 14px;
                             padding: 24px 22px;
                             text-align: left;
+                            box-shadow: 0 2px 12px rgba(37,99,235,0.07);
                         ",
                         div { style: "font-size: 28px; margin-bottom: 12px;", "📄" }
-                        div { style: "font-size: 14px; font-weight: 800; color: #f0ece2; margin-bottom: 6px;", "One-click PDF export" }
-                        div { style: "font-size: 13px; color: rgba(240,236,226,0.55); line-height: 1.5;", "Export print-ready PDF sheets for rehearsals and gigs." }
+                        div { style: "font-size: 14px; font-weight: 800; color: #0a0f1e; margin-bottom: 6px;", "One-click PDF export" }
+                        div { style: "font-size: 13px; color: #6b7280; line-height: 1.55;", "Export print-ready PDF sheets for rehearsals and gigs." }
                     }
 
                     // Card 4
                     div {
                         style: "
-                            background: rgba(255,255,255,0.05);
-                            border: 1px solid rgba(255,255,255,0.09);
+                            background: #ffffff;
+                            border: 1.5px solid #dbeafe;
                             border-radius: 14px;
                             padding: 24px 22px;
                             text-align: left;
+                            box-shadow: 0 2px 12px rgba(37,99,235,0.07);
                         ",
                         div { style: "font-size: 28px; margin-bottom: 12px;", "☁️" }
-                        div { style: "font-size: 14px; font-weight: 800; color: #f0ece2; margin-bottom: 6px;", "Cloud library" }
-                        div { style: "font-size: 13px; color: rgba(240,236,226,0.55); line-height: 1.5;", "Your song library syncs automatically and is always with you." }
+                        div { style: "font-size: 14px; font-weight: 800; color: #0a0f1e; margin-bottom: 6px;", "Cloud library" }
+                        div { style: "font-size: 13px; color: #6b7280; line-height: 1.55;", "Your song library syncs automatically and is always with you." }
                     }
                 }
             }
 
-            // ── Footer ─────────────────────────────────────────────────────────
+            // ── Footer ──────────────────────────────────────────────────────
             div {
                 style: "
                     text-align: center;
                     padding: 24px;
                     font-size: 12px;
-                    color: rgba(240,236,226,0.3);
-                    border-top: 1px solid rgba(255,255,255,0.06);
+                    color: #9ca3af;
+                    border-top: 1.5px solid #e8edf5;
+                    background: #ffffff;
                 ",
                 "© 2026 APSOS — App and Software Solutions Wörner"
             }
@@ -2114,8 +2120,9 @@ fn LoginScreen(
             style: "
                 background: #ffffff;
                 border-radius: 20px;
-                padding: 48px 52px;
-                box-shadow: 0 8px 48px rgba(0,0,0,0.14);
+                padding: 44px 48px;
+                box-shadow: 0 4px 32px rgba(37,99,235,0.12), 0 1px 4px rgba(0,0,0,0.06);
+                border: 1.5px solid #dbeafe;
                 width: 400px;
                 display: flex;
                 flex-direction: column;
@@ -2131,7 +2138,7 @@ fn LoginScreen(
                     cursor: pointer;
                     font-family: inherit;
                     font-size: 13px;
-                    color: #999;
+                    color: #6b7280;
                     padding: 0 0 4px 0;
                     display: flex;
                     align-items: center;
@@ -2150,17 +2157,17 @@ fn LoginScreen(
                     alt: "SheetWave"
                 }
                 span {
-                    style: "font-size: 20px; font-weight: 900; color: #1a1a2e; letter-spacing: -0.3px;",
+                    style: "font-size: 20px; font-weight: 900; color: #0a0f1e; letter-spacing: -0.3px;",
                     "SheetWave"
                 }
             }
 
             h2 {
-                style: "margin: 0 0 2px; font-size: 22px; font-weight: 800; color: #1a1a2e;",
+                style: "margin: 0 0 2px; font-size: 22px; font-weight: 800; color: #0a0f1e;",
                 "{form_title}"
             }
             p {
-                style: "margin: 0 0 8px; font-size: 14px; color: #888;",
+                style: "margin: 0 0 8px; font-size: 14px; color: #6b7280;",
                 if is_register() {
                     "Join SheetWave and start building your song library."
                 } else {
@@ -2172,8 +2179,9 @@ fn LoginScreen(
             input {
                 style: "
                     width: 100%; padding: 12px 14px; font-size: 14px;
-                    border: 1.5px solid #d0cbc0; border-radius: 8px;
+                    border: 1.5px solid #dbeafe; border-radius: 8px;
                     outline: none; font-family: inherit; box-sizing: border-box;
+                    color: #0a0f1e;
                 ",
                 r#type: "email",
                 placeholder: "Email address",
@@ -2188,8 +2196,9 @@ fn LoginScreen(
             input {
                 style: "
                     width: 100%; padding: 12px 14px; font-size: 14px;
-                    border: 1.5px solid #d0cbc0; border-radius: 8px;
+                    border: 1.5px solid #dbeafe; border-radius: 8px;
                     outline: none; font-family: inherit; box-sizing: border-box;
+                    color: #0a0f1e;
                 ",
                 r#type: "password",
                 placeholder: "Password",
@@ -2211,10 +2220,10 @@ fn LoginScreen(
             // Submit
             button {
                 style: "
-                    padding: 14px; background: #1a1a2e; color: #f0ece2;
+                    padding: 14px; background: #2563eb; color: #ffffff;
                     border: none; border-radius: 10px; font-size: 15px;
                     font-weight: 700; cursor: pointer; font-family: inherit;
-                    letter-spacing: 0.5px;
+                    letter-spacing: 0.4px;
                 ",
                 onclick: move |_| {
                     let u = email.read().trim().to_lowercase();
