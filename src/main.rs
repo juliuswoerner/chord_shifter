@@ -882,7 +882,7 @@ fn SongView(
             // ── Editable header ───────────────────────────────────────────────
             div {
                 style: "
-                    border-bottom: 2px solid #e8e4da;
+                    border-bottom: 2px solid #dbeafe;
                     padding-bottom: 24px;
                     margin-bottom: 36px;
                 ",
@@ -940,10 +940,10 @@ fn SongView(
                         padding: 2px 0;
                         font-size: 38px;
                         font-weight: 800;
-                        color: #1a1a2e;
+                        color: #0a0f1e;
                         letter-spacing: -0.5px;
                         border: none;
-                        border-bottom: 2px dashed #e0dbd0;
+                        border-bottom: 2px dashed #bfdbfe;
                         background: transparent;
                         outline: none;
                         font-family: inherit;
@@ -965,7 +965,7 @@ fn SongView(
                         color: #666;
                         font-style: italic;
                         border: none;
-                        border-bottom: 1px dashed #e0dbd0;
+                        border-bottom: 1px dashed #bfdbfe;
                         background: transparent;
                         outline: none;
                         font-family: inherit;
@@ -982,14 +982,14 @@ fn SongView(
 
                     // ── Key root pill (− root +) ───────────────────────────
                     div {
-                        style: "display: inline-flex; align-items: center; background: #1a1a2e; border-radius: 20px; overflow: hidden;",
+                        style: "display: inline-flex; align-items: center; background: #2563eb; border-radius: 20px; overflow: hidden;",
                         span {
-                            style: "color: #f0ece2; padding: 5px 6px 5px 14px; font-size: 12px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; white-space: nowrap;",
+                            style: "color: #ffffff; padding: 5px 6px 5px 14px; font-size: 12px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; white-space: nowrap;",
                             "Key:"
                         }
                         // − button
                         button {
-                            style: "background: rgba(255,255,255,0.10); border: none; color: #f0ece2; font-size: 16px; font-weight: 700; padding: 0 8px; cursor: pointer; font-family: inherit; line-height: 1; height: 30px;",
+                            style: "background: rgba(255,255,255,0.10); border: none; color: #ffffff; font-size: 16px; font-weight: 700; padding: 0 8px; cursor: pointer; font-family: inherit; line-height: 1; height: 30px;",
                             onclick: move |_| {
                                 let key = song.read().key.clone();
                                 let is_minor = key.to_lowercase().contains("minor");
@@ -1001,7 +1001,7 @@ fn SongView(
                         }
                         // Key root display (read-only)
                         span {
-                            style: "color: #f0ece2; padding: 5px 6px; font-size: 14px; font-weight: 800; letter-spacing: 0.5px; min-width: 28px; text-align: center;",
+                            style: "color: #ffffff; padding: 5px 6px; font-size: 14px; font-weight: 800; letter-spacing: 0.5px; min-width: 28px; text-align: center;",
                             {
                                 let k = song.read().key.clone();
                                 k.split_whitespace().next().unwrap_or("C").to_string()
@@ -1028,7 +1028,7 @@ fn SongView(
                             rsx! {
                                 if let Some(enh) = enharmonic {
                                     button {
-                                        style: "background: rgba(255,255,255,0.18); border: none; color: #f0ece2; font-size: 11px; font-weight: 700; padding: 0 7px; cursor: pointer; font-family: inherit; line-height: 1; height: 30px; white-space: nowrap;",
+                                        style: "background: rgba(255,255,255,0.18); border: none; color: #ffffff; font-size: 11px; font-weight: 700; padding: 0 7px; cursor: pointer; font-family: inherit; line-height: 1; height: 30px; white-space: nowrap;",
                                         title: "Switch to {enh}",
                                         onclick: move |_| {
                                             let mode = if is_minor { "Minor" } else { "Major" };
@@ -1042,7 +1042,7 @@ fn SongView(
                         }
                         // + button
                         button {
-                            style: "background: rgba(255,255,255,0.10); border: none; color: #f0ece2; font-size: 16px; font-weight: 700; padding: 0 8px; cursor: pointer; font-family: inherit; line-height: 1; height: 30px;",
+                            style: "background: rgba(255,255,255,0.10); border: none; color: #ffffff; font-size: 16px; font-weight: 700; padding: 0 8px; cursor: pointer; font-family: inherit; line-height: 1; height: 30px;",
                             onclick: move |_| {
                                 let key = song.read().key.clone();
                                 let is_minor = key.to_lowercase().contains("minor");
@@ -1059,14 +1059,14 @@ fn SongView(
                         let key = song.read().key.clone();
                         let is_minor = key.to_lowercase().contains("minor");
                         let maj_style = if !is_minor {
-                            "padding: 5px 12px; border-radius: 16px 0 0 16px; border: none; font-size: 11px; font-weight: 700; font-family: inherit; cursor: pointer; background: #1a1a2e; color: #f0ece2;"
+                            "padding: 5px 12px; border-radius: 16px 0 0 16px; border: none; font-size: 11px; font-weight: 700; font-family: inherit; cursor: pointer; background: #2563eb; color: #ffffff;"
                         } else {
-                            "padding: 5px 12px; border-radius: 16px 0 0 16px; border: 1.5px solid #d9d4c5; border-right: none; font-size: 11px; font-weight: 700; font-family: inherit; cursor: pointer; background: #f0ece2; color: #888;"
+                            "padding: 5px 12px; border-radius: 16px 0 0 16px; border: 1.5px solid #bfdbfe; border-right: none; font-size: 11px; font-weight: 700; font-family: inherit; cursor: pointer; background: #eff6ff; color: #888;"
                         };
                         let min_style = if is_minor {
-                            "padding: 5px 12px; border-radius: 0 16px 16px 0; border: none; font-size: 11px; font-weight: 700; font-family: inherit; cursor: pointer; background: #1a1a2e; color: #f0ece2;"
+                            "padding: 5px 12px; border-radius: 0 16px 16px 0; border: none; font-size: 11px; font-weight: 700; font-family: inherit; cursor: pointer; background: #2563eb; color: #ffffff;"
                         } else {
-                            "padding: 5px 12px; border-radius: 0 16px 16px 0; border: 1.5px solid #d9d4c5; border-left: none; font-size: 11px; font-weight: 700; font-family: inherit; cursor: pointer; background: #f0ece2; color: #888;"
+                            "padding: 5px 12px; border-radius: 0 16px 16px 0; border: 1.5px solid #bfdbfe; border-left: none; font-size: 11px; font-weight: 700; font-family: inherit; cursor: pointer; background: #eff6ff; color: #888;"
                         };
                         rsx! {
                             div {
@@ -1111,7 +1111,7 @@ fn SongView(
                                 "Set key:"
                             }
                             select {
-                                style: "font-size: 13px; font-weight: 700; color: #1a1a2e; background: #f0ece2; border: 1.5px solid #d9d4c5; border-radius: 10px; padding: 4px 10px; outline: none; cursor: pointer; font-family: inherit;",
+                                style: "font-size: 13px; font-weight: 700; color: #0a0f1e; background: #eff6ff; border: 1.5px solid #bfdbfe; border-radius: 10px; padding: 4px 10px; outline: none; cursor: pointer; font-family: inherit;",
                                 title: "Change key without transposing chords",
                                 onchange: move |e| {
                                     let new_root = e.value();
@@ -1148,7 +1148,7 @@ fn SongView(
                         "Notation:"
                     }
                     select {
-                        style: "font-size: 13px; font-weight: 700; color: #1a1a2e; background: #f0ece2; border: 1.5px solid #d9d4c5; border-radius: 10px; padding: 4px 10px; outline: none; cursor: pointer; font-family: inherit;",
+                        style: "font-size: 13px; font-weight: 700; color: #0a0f1e; background: #eff6ff; border: 1.5px solid #bfdbfe; border-radius: 10px; padding: 4px 10px; outline: none; cursor: pointer; font-family: inherit;",
                         onchange: move |e| {
                             *notation.write() = match e.value().as_str() {
                                 "german" => Notation::German,
@@ -1176,12 +1176,12 @@ fn SongView(
                         {
                             let is_base = active_instrument.read().is_none();
                             let s = if is_base {
-                                "display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:#1a1a2e;border:none;border-radius:10px;cursor:pointer;font-family:inherit;"
+                                "display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:#2563eb;border:none;border-radius:10px;cursor:pointer;font-family:inherit;"
                             } else {
-                                "display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:#f0ece2;border:1.5px solid #d8d4ca;border-radius:10px;cursor:pointer;font-family:inherit;"
+                                "display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:#eff6ff;border:1.5px solid #dbeafe;border-radius:10px;cursor:pointer;font-family:inherit;"
                             };
                             let lbl_s = if is_base {
-                                "font-size:9px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#f0ece2;"
+                                "font-size:9px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#ffffff;"
                             } else {
                                 "font-size:9px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#888;"
                             };
@@ -1207,9 +1207,9 @@ fn SongView(
                                 let btn_s = if is_active {
                                     format!("display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:{accent};border:none;border-radius:10px;cursor:pointer;font-family:inherit;")
                                 } else if has_override {
-                                    format!("display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:#f0ece2;border:2px solid {accent};border-radius:10px;cursor:pointer;font-family:inherit;")
+                                    format!("display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:#eff6ff;border:2px solid {accent};border-radius:10px;cursor:pointer;font-family:inherit;")
                                 } else {
-                                    "display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:#f0ece2;border:1.5px solid #d8d4ca;border-radius:10px;cursor:pointer;font-family:inherit;".to_string()
+                                    "display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 14px;background:#eff6ff;border:1.5px solid #dbeafe;border-radius:10px;cursor:pointer;font-family:inherit;".to_string()
                                 };
                                 let lbl_s = if is_active {
                                     "font-size:9px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#fff;".to_string()
@@ -1246,9 +1246,9 @@ fn SongView(
                 button {
                     style: {
                         if render_mode() {
-                            "display: inline-flex; align-items: center; gap: 6px; padding: 7px 18px; background: #1a1a2e; color: #f0ece2; border: 2px solid #1a1a2e; border-radius: 20px; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit; letter-spacing: 0.4px;"
+                            "display: inline-flex; align-items: center; gap: 6px; padding: 7px 18px; background: #2563eb; color: #ffffff; border: 2px solid #2563eb; border-radius: 20px; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit; letter-spacing: 0.4px;"
                         } else {
-                            "display: inline-flex; align-items: center; gap: 6px; padding: 7px 18px; background: #f5f2ea; color: #1a1a2e; border: 2px solid #d9d4c5; border-radius: 20px; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit; letter-spacing: 0.4px;"
+                            "display: inline-flex; align-items: center; gap: 6px; padding: 7px 18px; background: #eff6ff; color: #0a0f1e; border: 2px solid #bfdbfe; border-radius: 20px; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit; letter-spacing: 0.4px;"
                         }
                     },
                     onclick: move |_| { *render_mode.write() = !render_mode(); },
@@ -1265,15 +1265,15 @@ fn SongView(
                     style: "display: flex; align-items: center; gap: 10px; margin-top: 16px;",
                     span { style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;", "Capo:" }
                     button {
-                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #bfdbfe; background: #eff6ff; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #0a0f1e;",
                         onclick: move |_| { if guitar_capo() > 0 { *guitar_capo.write() -= 1; } },
                         "−"
                     }
-                    span { style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #1a1a2e;",
+                    span { style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #0a0f1e;",
                         if guitar_capo() == 0 { "Off" } else { "{guitar_capo()}" }
                     }
                     button {
-                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #bfdbfe; background: #eff6ff; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #0a0f1e;",
                         onclick: move |_| { if guitar_capo() < 12 { *guitar_capo.write() += 1; } },
                         "+"
                     }
@@ -1290,15 +1290,15 @@ fn SongView(
                     style: "display: flex; align-items: center; gap: 10px; margin-top: 16px;",
                     span { style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;", "Capo:" }
                     button {
-                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #bfdbfe; background: #eff6ff; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #0a0f1e;",
                         onclick: move |_| { if acoustic_capo() > 0 { *acoustic_capo.write() -= 1; } },
                         "−"
                     }
-                    span { style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #1a1a2e;",
+                    span { style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #0a0f1e;",
                         if acoustic_capo() == 0 { "Off" } else { "{acoustic_capo()}" }
                     }
                     button {
-                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #bfdbfe; background: #eff6ff; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #0a0f1e;",
                         onclick: move |_| { if acoustic_capo() < 12 { *acoustic_capo.write() += 1; } },
                         "+"
                     }
@@ -1318,15 +1318,15 @@ fn SongView(
                     style: "display: flex; align-items: center; gap: 10px; margin-top: 16px;",
                     span { style: "font-size: 11px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 1.2px;", "Transpose:" }
                     button {
-                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #bfdbfe; background: #eff6ff; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #0a0f1e;",
                         onclick: move |_| { if piano_capo() > -12 { *piano_capo.write() -= 1; } },
                         "−"
                     }
-                    span { style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #1a1a2e;",
+                    span { style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #0a0f1e;",
                         if piano_capo() == 0 { "Off" } else if piano_capo() > 0 { "+{piano_capo()}" } else { "{piano_capo()}" }
                     }
                     button {
-                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                        style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #bfdbfe; background: #eff6ff; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #0a0f1e;",
                         onclick: move |_| { if piano_capo() < 12 { *piano_capo.write() += 1; } },
                         "+"
                     }
@@ -1358,7 +1358,7 @@ fn SongView(
                                 class: "insert-divider",
                                 div { style: "flex: 1; height: 1px; background: #ddd;" }
                                 button {
-                                    style: "padding: 2px 10px; background: transparent; color: #999; border: 1.5px dashed #c8c3b3; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit; white-space: nowrap;",
+                                    style: "padding: 2px 10px; background: transparent; color: #999; border: 1.5px dashed #93c5fd; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit; white-space: nowrap;",
                                     title: "Insert part here",
                                     onclick: move |_| {
                                         let mut s = song.write();
@@ -1379,7 +1379,7 @@ fn SongView(
                         padding: 10px 20px;
                         background: transparent;
                         color: #999;
-                        border: 2px dashed #c8c3b3;
+                        border: 2px dashed #93c5fd;
                         border-radius: 10px;
                         font-size: 13px;
                         font-weight: 600;
@@ -1441,7 +1441,7 @@ fn SongView(
                     rsx! {
                         // Info banner
                         div {
-                            style: "margin-bottom: 18px; background: #fff8e1; border: 1px solid #ffe082; border-radius: 8px; padding: 10px 16px; font-size: 12px; color: #795548; display: flex; align-items: center; gap: 8px;",
+                            style: "margin-bottom: 18px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 10px 16px; font-size: 12px; color: #1d4ed8; display: flex; align-items: center; gap: 8px;",
                             img { src: inst_icon(inst).to_string(), style: "width: 22px; height: 22px; object-fit: contain;", alt: "{inst_label}" }
                             span { "✏️  " strong { "{inst_label}" } " sheet — edits apply to this instrument only" }
                         }
@@ -1452,7 +1452,7 @@ fn SongView(
                                 let all_on = act_song.read().parts.iter()
                                     .all(|p| p.part_text.as_ref().map(|t| t.show_chords).unwrap_or(false));
                                 let btn_border = if all_on { "#7a9060" } else { "#d0cbc0" };
-                                let btn_bg     = if all_on { "#e8f0e0" } else { "#f5f2ea" };
+                                let btn_bg     = if all_on { "#e8f0e0" } else { "#eff6ff" };
                                 let btn_fg     = if all_on { "#4a6040" } else { "#aaa" };
                                 let btn_label  = if all_on { "\u{1F3B8} Chords: on (all parts)" } else { "\u{1F3B8} Chords: off (all parts)" };
                                 rsx! {
@@ -1483,16 +1483,16 @@ fn SongView(
                                 if inst == Instrument::Piano { "Transpose:" } else { "Capo:" }
                             }
                             button {
-                                style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                                style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #bfdbfe; background: #eff6ff; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #0a0f1e;",
                                 onclick: move |_| { if act_capo() > if inst == Instrument::Piano { -12 } else { 0 } { *act_capo.write() -= 1; } },
                                 "−"
                             }
                             span {
-                                style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #1a1a2e;",
+                                style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #0a0f1e;",
                                 if act_capo() == 0 { "Off" } else if act_capo() > 0 { "+{act_capo()}" } else { "{act_capo()}" }
                             }
                             button {
-                                style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                                style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #bfdbfe; background: #eff6ff; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #0a0f1e;",
                                 onclick: move |_| { if act_capo() < 12 { *act_capo.write() += 1; } },
                                 "+"
                             }
@@ -1520,7 +1520,7 @@ fn SongView(
                                         class: "insert-divider",
                                         div { style: "flex: 1; height: 1px; background: #ddd;" }
                                         button {
-                                            style: "padding: 2px 10px; background: transparent; color: #999; border: 1.5px dashed #c8c3b3; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit; white-space: nowrap;",
+                                            style: "padding: 2px 10px; background: transparent; color: #999; border: 1.5px dashed #93c5fd; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit; white-space: nowrap;",
                                             title: "Insert part here",
                                             onclick: move |_| {
                                                 let mut s = act_song.write();
@@ -1563,7 +1563,7 @@ fn SongView(
                                 padding: 10px 20px;
                                 background: transparent;
                                 color: #999;
-                                border: 2px dashed #c8c3b3;
+                                border: 2px dashed #93c5fd;
                                 border-radius: 10px;
                                 font-size: 13px;
                                 font-weight: 600;
@@ -1681,7 +1681,7 @@ fn SongView(
             div {
                 style: "
                     margin-bottom: 24px;
-                    border: 1.5px solid #e8e4da;
+                    border: 1.5px solid #dbeafe;
                     border-radius: 12px;
                     overflow: hidden;
                 ",
@@ -1742,9 +1742,9 @@ fn SongView(
                             width: 52px;
                             font-size: 13px;
                             font-weight: 600;
-                            color: #1a1a2e;
+                            color: #0a0f1e;
                             text-align: center;
-                            border: 1px solid #d0cbc0;
+                            border: 1px solid #bfdbfe;
                             border-radius: 6px;
                             background: #fff;
                             outline: none;
@@ -1777,9 +1777,9 @@ fn SongView(
                             width: 52px;
                             font-size: 13px;
                             font-weight: 600;
-                            color: #1a1a2e;
+                            color: #0a0f1e;
                             text-align: center;
-                            border: 1px solid #d0cbc0;
+                            border: 1px solid #bfdbfe;
                             border-radius: 6px;
                             background: #fff;
                             outline: none;
@@ -1808,9 +1808,9 @@ fn SongView(
                     margin-top: 24px;
                     width: 100%;
                     padding: 14px;
-                    background: #f5f2ea;
-                    color: #1a1a2e;
-                    border: 2px solid #d9d4c5;
+                    background: #eff6ff;
+                    color: #0a0f1e;
+                    border: 2px solid #bfdbfe;
                     border-radius: 10px;
                     font-size: 15px;
                     font-weight: 700;
@@ -1880,8 +1880,8 @@ fn SongView(
                     margin-top: 32px;
                     width: 100%;
                     padding: 15px;
-                    background: #1a1a2e;
-                    color: #f0ece2;
+                    background: #2563eb;
+                    color: #ffffff;
                     border: none;
                     border-radius: 10px;
                     font-size: 15px;
@@ -1968,7 +1968,7 @@ fn SongView(
                     width: 100%;
                     padding: 15px;
                     background: #2d6a4f;
-                    color: #f0ece2;
+                    color: #ffffff;
                     border: none;
                     border-radius: 10px;
                     font-size: 15px;
@@ -2040,11 +2040,11 @@ fn SongView(
                                 align-items: center;
                                 justify-content: space-between;
                                 padding: 14px 20px;
-                                border-bottom: 1px solid #ece8df;
+                                border-bottom: 1px solid #dbeafe;
                                 flex-shrink: 0;
                             ",
                             span {
-                                style: "font-size: 15px; font-weight: 700; color: #1a1a2e; font-family: inherit;",
+                                style: "font-size: 15px; font-weight: 700; color: #0a0f1e; font-family: inherit;",
                                 "PDF Preview"
                             }
                             button {
@@ -2537,7 +2537,7 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool, drums: bool) -> 
                                                     }
                                                 } else {
                                                     match cell {
-                                                    TabCell::Fret(n) => (n.to_string(), "#1a1a2e", "background:#d8edd8;"),
+                                                    TabCell::Fret(n) => (n.to_string(), "#0a0f1e", "background:#d8edd8;"),
                                                     TabCell::Muted => ("x".to_string(), "#c0392b", "background:#fde8e8;"),
                                                     TabCell::Empty => ("\u{2013}".to_string(), "#c8dcc8", "background:transparent;"),
                                                     TabCell::Ghost(n) => (format!("({n})"), "#7b5ea7", "background:#f0e8f8;"),
@@ -2547,7 +2547,7 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool, drums: bool) -> 
                                                     TabCell::Bend      => ("b".to_string(),  "#7a5c1e", "background:#fef3d0;"),
                                                     TabCell::SlideUp   => ("/".to_string(),  "#1a4a8a", "background:#d8e8f8;"),
                                                     TabCell::SlideDown => ("\\".to_string(), "#1a4a8a", "background:#d8e8f8;"),
-                                                    TabCell::Custom(ref s) => (s.clone(), "#1a1a2e", "background:#e8e4da;"),
+                                                    TabCell::Custom(ref s) => (s.clone(), "#0a0f1e", "background:#eff6ff;"),
                                                     }
                                                 };
                                                 let has_value = !matches!(cell, TabCell::Empty);
@@ -2678,7 +2678,7 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool, drums: bool) -> 
                         span {
                             style: "display: inline-flex; align-items: baseline; gap: 4px; font-size: 11px; color: #555;",
                             span {
-                                style: "font-family: Courier, monospace; font-size: 12px; font-weight: 700; color: #1a1a2e; min-width: 20px;",
+                                style: "font-family: Courier, monospace; font-size: 12px; font-weight: 700; color: #0a0f1e; min-width: 20px;",
                                 "{sym}"
                             }
                             span { "{label}" }
@@ -2697,7 +2697,7 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool, drums: bool) -> 
                         span {
                             style: "display: inline-flex; align-items: baseline; gap: 4px; font-size: 11px; color: #555;",
                             span {
-                                style: "font-family: Courier, monospace; font-size: 12px; font-weight: 700; color: #1a1a2e; min-width: 20px;",
+                                style: "font-family: Courier, monospace; font-size: 12px; font-weight: 700; color: #0a0f1e; min-width: 20px;",
                                 "{sym}"
                             }
                             span { "{label}" }
@@ -3051,7 +3051,7 @@ fn PartView(
     } else if is_riff {
         "#b5d6b5"
     } else {
-        "#ece8df"
+        "#dbeafe"
     };
     let part_bg = if is_drum_beat {
         "#fffbf0"
@@ -3305,7 +3305,7 @@ fn PartView(
                             style: "
                                 display: flex; align-items: center; justify-content: center;
                                 width: 44px; height: 44px;
-                                background: #f5f2ea; border: 2px dashed #c8c3b3;
+                                background: #eff6ff; border: 2px dashed #93c5fd;
                                 border-radius: 10px; font-size: 22px; color: #bbb;
                                 cursor: pointer; padding: 0; font-family: inherit;
                             ",
@@ -3324,7 +3324,7 @@ fn PartView(
                             button {
                                 style: "
                                     padding: 3px 7px; font-size: 11px; font-weight: 700;
-                                    background: #f5f2ea; border: 1.5px solid #d0cbc0;
+                                    background: #eff6ff; border: 1.5px solid #d0cbc0;
                                     border-radius: 7px; color: #888; cursor: pointer; font-family: inherit;
                                 ",
                                 title: "Insert line break",
@@ -3339,7 +3339,7 @@ fn PartView(
                             button {
                                 style: "
                                     padding: 3px 7px; font-size: 11px; font-weight: 700;
-                                    background: #f5f2ea; border: 1.5px solid #d0cbc0;
+                                    background: #eff6ff; border: 1.5px solid #d0cbc0;
                                     border-radius: 7px; color: #888; cursor: pointer; font-family: inherit;
                                 ",
                                 title: "Insert repeat sign",
@@ -3369,7 +3369,7 @@ fn PartView(
                             button {
                                 style: "
                                     padding: 3px 7px; font-size: 11px; font-weight: 700;
-                                    background: #f5f2ea; border: 1.5px solid #d0cbc0;
+                                    background: #eff6ff; border: 1.5px solid #d0cbc0;
                                     border-radius: 7px; color: #888; cursor: pointer; font-family: inherit;
                                 ",
                                 title: "Insert volta bracket (e.g. 1st ending)",
@@ -3384,7 +3384,7 @@ fn PartView(
                             button {
                                 style: "
                                     padding: 3px 7px; font-size: 11px; font-weight: 700;
-                                    background: #f5f2ea; border: 1.5px solid #d0cbc0;
+                                    background: #eff6ff; border: 1.5px solid #d0cbc0;
                                     border-radius: 7px; color: #888; cursor: pointer; font-family: inherit;
                                 ",
                                 title: "Close volta bracket",
@@ -3445,7 +3445,7 @@ fn PartTextEditor(song: Signal<Song>, part_index: usize) -> Element {
     let size = part_text.as_ref().map(|t| t.size).unwrap_or(10);
     let show_chords = part_text.as_ref().map(|t| t.show_chords).unwrap_or(false);
     let chords_btn_border = if show_chords { "#7a9060" } else { "#d0cbc0" };
-    let chords_btn_bg = if show_chords { "#e8f0e0" } else { "#f5f2ea" };
+    let chords_btn_bg = if show_chords { "#e8f0e0" } else { "#eff6ff" };
     let chords_btn_fg = if show_chords { "#4a6040" } else { "#aaa" };
     let chords_btn_label = if show_chords {
         "\u{1F3B8} Chords: on"
@@ -3501,7 +3501,7 @@ fn PartTextEditor(song: Signal<Song>, part_index: usize) -> Element {
                         // Size stepper
                         span { style: "font-size: 10px; color: #aaa;", "Size:" }
                         button {
-                            style: "width: 20px; height: 20px; border-radius: 4px; border: 1px solid #d0cbc0; background: #f5f2ea; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit; display:flex; align-items:center; justify-content:center; color:#1a1a2e;",
+                            style: "width: 20px; height: 20px; border-radius: 4px; border: 1px solid #bfdbfe; background: #eff6ff; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit; display:flex; align-items:center; justify-content:center; color:#0a0f1e;",
                             onclick: move |_| {
                                 if let Some(part) = song.write().parts.get_mut(part_index) {
                                     if let Some(t) = part.part_text.as_mut() {
@@ -3511,9 +3511,9 @@ fn PartTextEditor(song: Signal<Song>, part_index: usize) -> Element {
                             },
                             "−"
                         }
-                        span { style: "font-size: 11px; font-weight: 700; color: #1a1a2e; min-width: 20px; text-align: center;", "{size}" }
+                        span { style: "font-size: 11px; font-weight: 700; color: #0a0f1e; min-width: 20px; text-align: center;", "{size}" }
                         button {
-                            style: "width: 20px; height: 20px; border-radius: 4px; border: 1px solid #d0cbc0; background: #f5f2ea; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit; display:flex; align-items:center; justify-content:center; color:#1a1a2e;",
+                            style: "width: 20px; height: 20px; border-radius: 4px; border: 1px solid #bfdbfe; background: #eff6ff; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit; display:flex; align-items:center; justify-content:center; color:#0a0f1e;",
                             onclick: move |_| {
                                 if let Some(part) = song.write().parts.get_mut(part_index) {
                                     if let Some(t) = part.part_text.as_mut() {
@@ -3584,7 +3584,7 @@ fn RepeatEditor(song: Signal<Song>, part_index: usize, item_index: usize, times:
             style: "
                 display: flex; flex-direction: column; align-items: center; gap: 6px;
                 padding: 10px 14px 8px;
-                background: #f5f2ea; border: 2px solid #d9d4c5; border-radius: 12px;
+                background: #eff6ff; border: 2px solid #bfdbfe; border-radius: 12px;
                 min-width: 68px; position: relative;
             ",
             button {
@@ -3599,7 +3599,7 @@ fn RepeatEditor(song: Signal<Song>, part_index: usize, item_index: usize, times:
                 "\u{2715}"
             }
             span {
-                style: "font-size: 24px; font-weight: 800; color: #1a1a2e; line-height: 1;",
+                style: "font-size: 24px; font-weight: 800; color: #0a0f1e; line-height: 1;",
                 "‖:"
             }
             div {
@@ -3607,8 +3607,8 @@ fn RepeatEditor(song: Signal<Song>, part_index: usize, item_index: usize, times:
                 span { style: "font-size: 11px; color: #888; font-weight: 700;", "×" }
                 input {
                     style: "width: 36px; text-align: center; font-size: 12px; font-weight: 700;
-                        border: 1px solid #d0cbc0; border-radius: 5px; background: #fff;
-                        outline: none; padding: 3px; font-family: inherit; color: #1a1a2e;",
+                        border: 1px solid #bfdbfe; border-radius: 5px; background: #fff;
+                        outline: none; padding: 3px; font-family: inherit; color: #0a0f1e;",
                     r#type: "number",
                     min: "0",
                     max: "99",
@@ -3730,7 +3730,7 @@ fn VoltaEditor(
                 input {
                     style: "width: 38px; text-align: center; font-size: 12px; font-weight: 700;
                         border: 1px solid #c5bad9; border-radius: 5px; background: #fff;
-                        outline: none; padding: 3px; font-family: inherit; color: #1a1a2e;",
+                        outline: none; padding: 3px; font-family: inherit; color: #0a0f1e;",
                     value: "{label}",
                     placeholder: "1.",
                     oninput: move |e: Event<FormData>| {
@@ -3788,7 +3788,7 @@ fn LibraryPage() -> Element {
                 div {
                     style: "display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px;",
                     h2 {
-                        style: "margin: 0; font-size: 22px; font-weight: 800; color: #1a1a2e; letter-spacing: -0.3px;",
+                        style: "margin: 0; font-size: 22px; font-weight: 800; color: #0a0f1e; letter-spacing: -0.3px;",
                         "🎵  Chord Shifter"
                     }
                     div {
@@ -3821,7 +3821,7 @@ fn LibraryPage() -> Element {
                 div {
                     style: "display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;",
                     h3 {
-                        style: "margin: 0; font-size: 16px; font-weight: 800; color: #1a1a2e; letter-spacing: 0.3px;",
+                        style: "margin: 0; font-size: 16px; font-weight: 800; color: #0a0f1e; letter-spacing: 0.3px;",
                         "📚  My Songs"
                     }
                     button {
@@ -3831,8 +3831,8 @@ fn LibraryPage() -> Element {
                             justify-content: center;
                             width: 36px;
                             height: 36px;
-                            background: #1a1a2e;
-                            color: #f0ece2;
+                            background: #2563eb;
+                            color: #ffffff;
                             border: none;
                             border-radius: 50%;
                             font-size: 24px;
@@ -4006,7 +4006,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
     });
 
     let inst = Instrument::from_label(&instrument);
-    let accent = inst.map(|i| i.accent_color()).unwrap_or("#1a1a2e");
+    let accent = inst.map(|i| i.accent_color()).unwrap_or("#2563eb");
     let inst_icon_asset = inst.map(inst_icon).unwrap_or(ICON_BASE);
     let inst_label = inst
         .map(|i| i.label())
@@ -4031,7 +4031,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
 
                 // ── Page header ───────────────────────────────────────────────────────────────
                 div {
-                    style: "border-bottom: 2px solid #e8e4da; padding-bottom: 28px; margin-bottom: 36px;",
+                    style: "border-bottom: 2px solid #dbeafe; padding-bottom: 28px; margin-bottom: 36px;",
 
                     // Top nav: back + user + logout
                     div {
@@ -4066,7 +4066,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
 
                     // Song title + artist
                     h1 {
-                        style: "margin: 0 0 6px; font-size: 38px; font-weight: 800; color: #1a1a2e; letter-spacing: -0.5px;",
+                        style: "margin: 0 0 6px; font-size: 38px; font-weight: 800; color: #0a0f1e; letter-spacing: -0.5px;",
                         "{song.read().name}"
                     }
                     p {
@@ -4088,16 +4088,16 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                             if inst == Some(Instrument::Piano) { "Transpose:" } else { "Capo:" }
                         }
                         button {
-                            style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                            style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #bfdbfe; background: #eff6ff; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #0a0f1e;",
                             onclick: move |_| { if capo() > if inst == Some(Instrument::Piano) { -12 } else { 0 } { *capo.write() -= 1; } },
                             "−"
                         }
                         span {
-                            style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #1a1a2e;",
+                            style: "min-width: 52px; text-align: center; font-size: 13px; font-weight: 800; color: #0a0f1e;",
                             if capo() == 0 { "Off" } else if capo() > 0 { "+{capo()}" } else { "{capo()}" }
                         }
                         button {
-                            style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #d9d4c5; background: #f0ece2; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #1a1a2e;",
+                            style: "width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid #bfdbfe; background: #eff6ff; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; color: #0a0f1e;",
                             onclick: move |_| { if capo() < 12 { *capo.write() += 1; } },
                             "+"
                         }
@@ -4140,7 +4140,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                         .get(part_index)
                         .map(|p| p.tab_as_ascii())
                         .unwrap_or_default();
-                    let part_border = if is_riff { "#b5d6b5" } else { "#ece8df" };
+                    let part_border = if is_riff { "#b5d6b5" } else { "#dbeafe" };
                     let part_bg = if is_riff { "#f6fbf6" } else { "transparent" };
                     let label_color = if is_riff { "#5c7a5c" } else { "#aaa" };
                     rsx! {
@@ -4157,7 +4157,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                                         font-family: Courier, monospace;
                                         font-size: 13px;
                                         line-height: 1.7;
-                                        color: #1a1a2e;
+                                        color: #0a0f1e;
                                         background: #fff;
                                         border: 1.5px solid #b5d6b5;
                                         border-radius: 8px;
@@ -4197,7 +4197,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                                                 div {
                                                     key: "{item_index}",
                                                     style: "
-                                                        background: #f5f2ea;
+                                                        background: #eff6ff;
                                                         border: 2px solid {accent};
                                                         border-radius: 12px;
                                                         padding: 14px 18px;
@@ -4205,7 +4205,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                                                         text-align: center;
                                                     ",
                                                     span {
-                                                        style: "font-size: 36px; font-weight: 800; color: #1a1a2e; letter-spacing: -1px; line-height: 1; display: block;",
+                                                        style: "font-size: 36px; font-weight: 800; color: #0a0f1e; letter-spacing: -1px; line-height: 1; display: block;",
                                                         "{capo_label}"
                                                     }
                                                 }
@@ -4221,7 +4221,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                                             div {
                                                 key: "{item_index}",
                                                 style: "
-                                                    background: #f0ece0;
+                                                    background: #eff6ff;
                                                     border: 2px solid {accent};
                                                     border-radius: 12px;
                                                     padding: 14px 18px;
@@ -4229,7 +4229,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                                                     text-align: center;
                                                 ",
                                                 span {
-                                                    style: "font-size: 28px; font-weight: 800; color: #1a1a2e; line-height: 1; display: block;",
+                                                    style: "font-size: 28px; font-weight: 800; color: #0a0f1e; line-height: 1; display: block;",
                                                     "‖: ×{times}"
                                                 }
                                             }
@@ -4304,7 +4304,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                             if let Some(t) = pt {
                                 rsx! {
                                     div {
-                                        style: "margin-top: 14px; padding-top: 10px; border-top: 1px solid #e8e4d8; white-space: pre-wrap; font-size: {t.size}px; color: {t.color}; line-height: 1.6; font-family: inherit;",
+                                        style: "margin-top: 14px; padding-top: 10px; border-top: 1px solid #dbeafe; white-space: pre-wrap; font-size: {t.size}px; color: {t.color}; line-height: 1.6; font-family: inherit;",
                                         "{t.content}"
                                     }
                                 }
@@ -4319,7 +4319,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                 // ── Vocals / notes (read-only) ─────────────────────────────────────────────
                 if !song.read().vocals_notes.is_empty() {
                     div {
-                        style: "border: 1.5px solid #e8e4da; border-radius: 12px; overflow: hidden;",
+                        style: "border: 1.5px solid #dbeafe; border-radius: 12px; overflow: hidden;",
                         div {
                             style: "display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: #eff6ff; border-bottom: 1.5px solid #dbeafe;",
                             span { style: "font-size: 18px; line-height: 1;", "🎤" }
@@ -4394,8 +4394,8 @@ fn ChordEditor(
     rsx! {
         div {
             style: "
-                background: #f5f2ea;
-                border: 2px solid #d9d4c5;
+                background: #eff6ff;
+                border: 2px solid #bfdbfe;
                 border-radius: 12px;
                 padding: 18px 18px 12px;
                 display: flex;
@@ -4437,7 +4437,7 @@ fn ChordEditor(
                 style: "
                     font-size: 42px;
                     font-weight: 800;
-                    color: #1a1a2e;
+                    color: #0a0f1e;
                     letter-spacing: -1px;
                     line-height: 1;
                 ",
@@ -4451,7 +4451,7 @@ fn ChordEditor(
                     flex-direction: column;
                     align-items: center;
                     gap: 5px;
-                    border-top: 1px solid #d9d4c5;
+                    border-top: 1px solid #bfdbfe;
                     padding-top: 8px;
                     width: 100%;
                 ",
@@ -4462,9 +4462,9 @@ fn ChordEditor(
                         width: 70px;
                         font-size: 13px;
                         font-weight: 600;
-                        color: #1a1a2e;
+                        color: #0a0f1e;
                         text-align: center;
-                        border: 1px solid #d0cbc0;
+                        border: 1px solid #bfdbfe;
                         border-radius: 6px;
                         background: #fff;
                         outline: none;
@@ -4488,7 +4488,7 @@ fn ChordEditor(
                         font-size: 12px;
                         color: #555;
                         background: #fff;
-                        border: 1px solid #d0cbc0;
+                        border: 1px solid #bfdbfe;
                         border-radius: 6px;
                         outline: none;
                         cursor: pointer;
@@ -4520,9 +4520,9 @@ fn ChordEditor(
                         width: 70px;
                         font-size: 13px;
                         font-weight: 600;
-                        color: #1a1a2e;
+                        color: #0a0f1e;
                         text-align: center;
-                        border: 1px solid #d0cbc0;
+                        border: 1px solid #bfdbfe;
                         border-radius: 6px;
                         background: #fff;
                         outline: none;
