@@ -337,6 +337,7 @@ impl Db {
             }))
     }
 
+    #[allow(dead_code)]
     fn has_users(&self) -> Result<bool, String> {
         Ok(!ls_read_users().is_empty())
     }
