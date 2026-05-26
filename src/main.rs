@@ -1691,8 +1691,8 @@ fn SongView(
                         align-items: center;
                         gap: 8px;
                         padding: 10px 16px;
-                        background: #f7f5f0;
-                        border-bottom: 1.5px solid #e8e4da;
+                        background: #eff6ff;
+                        border-bottom: 1.5px solid #dbeafe;
                     ",
                     span { style: "font-size: 18px; line-height: 1;", "\u{1F3A4}" }
                     span {
@@ -3877,22 +3877,24 @@ fn LibraryPage() -> Element {
                                     display: flex;
                                     align-items: center;
                                     gap: 8px;
-                                    background: #f7f5f0;
-                                    border-radius: 10px;
+                                    background: #ffffff;
+                                    border: 1.5px solid #dbeafe;
+                                    border-radius: 12px;
                                     padding: 12px 14px;
                                     margin-bottom: 8px;
                                     cursor: pointer;
+                                    box-shadow: 0 1px 6px rgba(37,99,235,0.06);
                                 ",
                                 onclick: move |_| { nav.push(Route::SongPage { id: row_id }); },
 
                                 div {
                                     style: "flex: 1; overflow: hidden;",
                                     div {
-                                        style: "font-size: 14px; font-weight: 700; color: #1a1a2e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;",
+                                        style: "font-size: 14px; font-weight: 700; color: #0a0f1e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;",
                                         "{row.name}"
                                     }
                                     div {
-                                        style: "font-size: 12px; color: #777; margin-top: 2px;",
+                                        style: "font-size: 12px; color: #6b7280; margin-top: 2px;",
                                         "{row.artist}"
                                     }
                                     // Instruments + username chips
@@ -3901,14 +3903,14 @@ fn LibraryPage() -> Element {
                                         for inst in row.instruments.iter().cloned() {
                                             span {
                                                 key: "{inst.label()}",
-                                                style: "display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600; background: #f0ece2; border: 1px solid #d8d4ca; border-radius: 6px; padding: 2px 7px; color: #555;",
+                                                style: "display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 2px 7px; color: #1d4ed8;",
                                                 img { src: inst_icon(inst).to_string(), style: "width: 16px; height: 16px; object-fit: contain;", alt: "{inst.label()}" }
                                                 "{inst.label()}"
                                             }
                                         }
                                         if !row.username.is_empty() {
                                             span {
-                                                style: "display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600; background: #e8f0e8; border: 1px solid #c8d8c8; border-radius: 6px; padding: 2px 7px; color: #2d6a4f;",
+                                                style: "display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 2px 7px; color: #1d4ed8;",
                                                 "👤  {row.username}"
                                             }
                                         }
@@ -4319,7 +4321,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                     div {
                         style: "border: 1.5px solid #e8e4da; border-radius: 12px; overflow: hidden;",
                         div {
-                            style: "display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: #f7f5f0; border-bottom: 1.5px solid #e8e4da;",
+                            style: "display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: #eff6ff; border-bottom: 1.5px solid #dbeafe;",
                             span { style: "font-size: 18px; line-height: 1;", "🎤" }
                             span {
                                 style: "font-size: 11px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: 1.2px;",
