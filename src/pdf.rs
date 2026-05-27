@@ -1592,6 +1592,7 @@ mod tests {
                 PartItem::Repeat { times: 2 },
             ],
             part_text: None,
+            time_sig: "4/4".to_string(),
         };
         song.parts.push(part);
         let bytes = generate_pdf_bytes(&song, Notation::English, 9.0, 18.0, 0).unwrap();
@@ -1613,6 +1614,7 @@ mod tests {
                 PartItem::Chord(Chord::new("G", ChordQuality::Major)),
             ],
             part_text: None,
+            time_sig: "4/4".to_string(),
         };
         song.parts.push(part);
         let bytes = generate_pdf_bytes(&song, Notation::English, 9.0, 18.0, 0).unwrap();
