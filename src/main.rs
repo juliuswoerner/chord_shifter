@@ -337,11 +337,6 @@ impl Db {
                 }
             }))
     }
-
-    #[allow(dead_code)]
-    fn has_users(&self) -> Result<bool, String> {
-        Ok(!ls_read_users().is_empty())
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -1452,7 +1447,7 @@ fn SongView(
                             {
                                 let all_on = act_song.read().parts.iter()
                                     .all(|p| p.part_text.as_ref().map(|t| t.show_chords).unwrap_or(false));
-                                let btn_border = if all_on { "#7a9060" } else { "#d0cbc0" };
+                                let btn_border = if all_on { "#7a9060" } else { "#bfdbfe" };
                                 let btn_bg     = if all_on { "#e8f0e0" } else { "#eff6ff" };
                                 let btn_fg     = if all_on { "#4a6040" } else { "#aaa" };
                                 let btn_label  = if all_on { "\u{1F3B8} Chords: on (all parts)" } else { "\u{1F3B8} Chords: off (all parts)" };
@@ -3325,7 +3320,7 @@ fn PartView(
                             button {
                                 style: "
                                     padding: 3px 7px; font-size: 11px; font-weight: 700;
-                                    background: #eff6ff; border: 1.5px solid #d0cbc0;
+                                    background: #eff6ff; border: 1.5px solid #bfdbfe;
                                     border-radius: 7px; color: #888; cursor: pointer; font-family: inherit;
                                 ",
                                 title: "Insert line break",
@@ -3340,7 +3335,7 @@ fn PartView(
                             button {
                                 style: "
                                     padding: 3px 7px; font-size: 11px; font-weight: 700;
-                                    background: #eff6ff; border: 1.5px solid #d0cbc0;
+                                    background: #eff6ff; border: 1.5px solid #bfdbfe;
                                     border-radius: 7px; color: #888; cursor: pointer; font-family: inherit;
                                 ",
                                 title: "Insert repeat sign",
@@ -3370,7 +3365,7 @@ fn PartView(
                             button {
                                 style: "
                                     padding: 3px 7px; font-size: 11px; font-weight: 700;
-                                    background: #eff6ff; border: 1.5px solid #d0cbc0;
+                                    background: #eff6ff; border: 1.5px solid #bfdbfe;
                                     border-radius: 7px; color: #888; cursor: pointer; font-family: inherit;
                                 ",
                                 title: "Insert volta bracket (e.g. 1st ending)",
@@ -3385,7 +3380,7 @@ fn PartView(
                             button {
                                 style: "
                                     padding: 3px 7px; font-size: 11px; font-weight: 700;
-                                    background: #eff6ff; border: 1.5px solid #d0cbc0;
+                                    background: #eff6ff; border: 1.5px solid #bfdbfe;
                                     border-radius: 7px; color: #888; cursor: pointer; font-family: inherit;
                                 ",
                                 title: "Close volta bracket",
@@ -3445,7 +3440,7 @@ fn PartTextEditor(song: Signal<Song>, part_index: usize) -> Element {
         .unwrap_or_else(|| "#555555".to_string());
     let size = part_text.as_ref().map(|t| t.size).unwrap_or(10);
     let show_chords = part_text.as_ref().map(|t| t.show_chords).unwrap_or(false);
-    let chords_btn_border = if show_chords { "#7a9060" } else { "#d0cbc0" };
+    let chords_btn_border = if show_chords { "#7a9060" } else { "#bfdbfe" };
     let chords_btn_bg = if show_chords { "#e8f0e0" } else { "#eff6ff" };
     let chords_btn_fg = if show_chords { "#4a6040" } else { "#aaa" };
     let chords_btn_label = if show_chords {
@@ -3790,7 +3785,7 @@ fn LibraryPage() -> Element {
                     style: "display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px;",
                     h2 {
                         style: "margin: 0; font-size: 22px; font-weight: 800; color: #0a0f1e; letter-spacing: -0.3px;",
-                        "🎵  Chord Shifter"
+                        "🎵  SheetWave"
                     }
                     div {
                         style: "display: flex; align-items: center; gap: 10px;",
