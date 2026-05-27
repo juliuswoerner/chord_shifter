@@ -1000,6 +1000,7 @@ async fn load_song(
         vocals_notes: row.5,
         instrument_parts,
         instrument_capos,
+        pdf_settings: std::collections::HashMap::new(),
     }))
 }
 
