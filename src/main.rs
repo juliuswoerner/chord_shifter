@@ -13,6 +13,7 @@ const ICON_ACOUSTIC: Asset = manganis::asset!("/assets/icons/acoustic_icon.png")
 const ICON_BASS: Asset = manganis::asset!("/assets/icons/bass_icon.png");
 const ICON_PIANO: Asset = manganis::asset!("/assets/icons/piano_icon.png");
 const ICON_DRUMS: Asset = manganis::asset!("/assets/icons/drums_icon.png");
+const ICON_VOCALS: Asset = manganis::asset!("/assets/icons/vocals_icon.png");
 const LOGO: Asset = manganis::asset!("/assets/icons/sheetwave_logo.png");
 
 fn inst_icon(inst: Instrument) -> Asset {
@@ -22,7 +23,7 @@ fn inst_icon(inst: Instrument) -> Asset {
         Instrument::Bass => ICON_BASS,
         Instrument::Piano => ICON_PIANO,
         Instrument::Drums => ICON_DRUMS,
-        Instrument::Vocals => ICON_BASE,
+        Instrument::Vocals => ICON_VOCALS,
     }
 }
 
@@ -1192,7 +1193,7 @@ fn SongView(
                                         *active_instrument.write() = None;
                                         *inst_save_msg.write() = None;
                                     },
-                                    img { src: ICON_BASE.to_string(), style: "width: 28px; height: 28px; object-fit: contain;", alt: "Base" }
+                                    img { src: ICON_BASE.to_string(), style: "width: 36px; height: 36px; object-fit: contain;", alt: "Base" }
                                     span { style: "{lbl_s}", "Base" }
                                 }
                             }
@@ -1230,7 +1231,7 @@ fn SongView(
                                                 *inst_save_msg.write() = None;
                                             }
                                         },
-                                        img { src: inst_icon(inst).to_string(), style: "width: 28px; height: 28px; object-fit: contain;", alt: "{inst.label()}" }
+                                        img { src: inst_icon(inst).to_string(), style: "width: 36px; height: 36px; object-fit: contain;", alt: "{inst.label()}" }
                                         span { style: "{lbl_s}", "{inst.label()}" }
                                     }
                                 }
