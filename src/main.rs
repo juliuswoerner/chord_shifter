@@ -2957,7 +2957,7 @@ fn PianoSheetEditor(song: Signal<Song>, part_index: usize) -> Element {
                             // ── Edit popup ───────────────────────────────────────
                             {
                                 let ec = *editing_col.read();
-                                if ec.is_some() && ec.map_or(false, |ci| seg_cols.contains(&ci)) {
+                                if ec.is_some() && ec.is_some_and(|ci| seg_cols.contains(&ci)) {
                                     let ci = ec.unwrap();
                                     rsx! {
                                         div {
