@@ -1546,6 +1546,17 @@ fn SongView(
                                                 "~ Bass Tab"
                                             }
                                         }
+                                        if inst == Instrument::Piano {
+                                            button {
+                                                style: "padding: 2px 10px; background: transparent; color: #6b1a8a; border: 1.5px dashed #c4a8e8; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit; white-space: nowrap;",
+                                                title: "Insert piano sheet here",
+                                                onclick: move |_| {
+                                                    let mut s = act_song.write();
+                                                    s.parts.insert(insert_index, SongPart::new_piano_riff("Piano"));
+                                                },
+                                                "~ Piano Sheet"
+                                            }
+                                        }
                                         div { style: "flex: 1; height: 1px; background: #ddd;" }
                                     }
                                 }
@@ -1606,6 +1617,25 @@ fn SongView(
                                 ",
                                 onclick: move |_| { act_song.write().parts.push(SongPart::new_bass_riff("Bass")); },
                                 "+ Add Bass Tab"
+                            }
+                        }
+                        if inst == Instrument::Piano {
+                            button {
+                                style: "
+                                    margin-bottom: 12px;
+                                    padding: 10px 20px;
+                                    background: transparent;
+                                    color: #6b1a8a;
+                                    border: 2px dashed #c4a8e8;
+                                    border-radius: 10px;
+                                    font-size: 13px;
+                                    font-weight: 600;
+                                    cursor: pointer;
+                                    font-family: inherit;
+                                    width: 100%;
+                                ",
+                                onclick: move |_| { act_song.write().parts.push(SongPart::new_piano_riff("Piano")); },
+                                "+ Add Piano Sheet"
                             }
                         }
                         if inst == Instrument::Drums {
@@ -2278,10 +2308,846 @@ fn LoginScreen(
     }
 }
 
+// ── Piano sheet-music editor ──────────────────────────────────────────────────
+
+#[component]
+fn PianoSheetEditor(song: Signal<Song>, part_index: usize) -> Element {
+    let mut editing_col: Signal<Option<usize>> = use_signal(|| None);
+    let mut edit_rh: Signal<String> = use_signal(String::new);
+    let mut edit_lh: Signal<String> = use_signal(String::new);
+    let mut edit_dur: Signal<u8> = use_signal(|| 4u8);
+    let mut editing_time_sig: Signal<bool> = use_signal(|| false);
+    let mut edit_time_sig_buf: Signal<String> = use_signal(String::new);
+
+    // ── Layout constants (px) ────────────────────────────────────────────────
+    const LG: f32 = 7.0; // gap between adjacent staff lines
+    const LP: f32 = 11.0; // ledger-line padding above/below the 5 lines
+    const SH: f32 = 28.0; // staff height (LG × 4)
+    const SSH: f32 = 50.0; // per-staff section height  (LP + SH + LP)
+    const SG: f32 = 16.0; // gap between treble and bass staves
+    const GH: f32 = 116.0 + 14.0; // SVG height (SSH×2 + SG + label row)
+    const CW: f32 = 60.0; // clef area width
+    const BW: f32 = 34.0; // note-column width
+    const BLW: f32 = 14.0; // barline-column width
+    const NRX: f32 = 5.5; // note-head x radius
+    const NRY: f32 = 3.5; // note-head y radius
+    const TREBLE_TOP: f32 = 0.0;
+    const BASS_TOP: f32 = SSH + SG; // = 66.0
+    const STEM_LEN: f32 = 26.0; // stem length in px
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /// Parse a single note name like "C4", "F#5", "Bb3" → SVG y-coordinate.
+    fn note_svg_y(name: &str, is_treble: bool) -> Option<f32> {
+        let b = name.trim().as_bytes();
+        if b.is_empty() {
+            return None;
+        }
+        let letter = (b[0] as char).to_ascii_uppercase();
+        let diatonic: i32 = match letter {
+            'C' => 0,
+            'D' => 1,
+            'E' => 2,
+            'F' => 3,
+            'G' => 4,
+            'A' => 5,
+            'B' => 6,
+            _ => return None,
+        };
+        let acc_skip: usize = if b.len() > 1 && (b[1] == b'#' || b[1] == b'b') {
+            1
+        } else {
+            0
+        };
+        let oct: i32 = std::str::from_utf8(&b[1 + acc_skip..])
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?;
+        let abs_pos = oct * 7 + diatonic;
+        let bottom_abs: i32 = if is_treble { 30 } else { 18 };
+        let steps = abs_pos - bottom_abs;
+        let section_top = if is_treble { TREBLE_TOP } else { BASS_TOP };
+        let bottom_y = section_top + LP + SH;
+        Some(bottom_y - steps as f32 * (LG / 2.0))
+    }
+
+    /// Parse a comma-separated chord string → Vec of (y, accidental_str).
+    fn chord_notes(chord_str: &str, is_treble: bool) -> Vec<(f32, &'static str)> {
+        chord_str
+            .split(',')
+            .filter_map(|n| {
+                let n = n.trim();
+                let y = note_svg_y(n, is_treble)?;
+                let b = n.as_bytes();
+                let acc: &'static str = if b.len() >= 2 {
+                    match b[1] {
+                        b'#' => "♯",
+                        b'b' => "♭",
+                        _ => "",
+                    }
+                } else {
+                    ""
+                };
+                Some((y, acc))
+            })
+            .collect()
+    }
+
+    /// Collect all unique ledger-line y positions needed for a set of notes.
+    fn chord_ledger_ys(notes: &[(f32, &str)], is_treble: bool) -> Vec<f32> {
+        let section_top = if is_treble { TREBLE_TOP } else { BASS_TOP };
+        let top_line_y = section_top + LP;
+        let bot_line_y = section_top + LP + SH;
+        let mut set: Vec<f32> = Vec::new();
+        for &(ny, _) in notes {
+            let mut ly = bot_line_y + LG;
+            while ly <= ny + 0.5 {
+                if !set.iter().any(|&v: &f32| (v - ly).abs() < 0.1) {
+                    set.push(ly);
+                }
+                ly += LG;
+            }
+            let mut ly = top_line_y - LG;
+            while ly >= ny - 0.5 {
+                if !set.iter().any(|&v: &f32| (v - ly).abs() < 0.1) {
+                    set.push(ly);
+                }
+                ly -= LG;
+            }
+        }
+        set
+    }
+
+    // ── Build segments (split at LineBreak columns) ──────────────────────────
+    let mut segments: Vec<Vec<usize>> = vec![vec![]];
+    let mut lb_indices: Vec<usize> = vec![];
+    {
+        let p = song.read();
+        if let Some(part) = p.parts.get(part_index) {
+            for (i, col) in part.tab_grid.iter().enumerate() {
+                match col {
+                    TabCol::LineBreak => {
+                        lb_indices.push(i);
+                        segments.push(vec![]);
+                    }
+                    _ => segments.last_mut().unwrap().push(i),
+                }
+            }
+        }
+    }
+    let seg_count = segments.len();
+    let song_key: String = song.read().key.clone();
+    let time_sig: String = song
+        .read()
+        .parts
+        .get(part_index)
+        .map(|p| p.time_sig.clone())
+        .unwrap_or_else(|| "4/4".to_string());
+    let ts_parts: Vec<String> = time_sig.splitn(2, '/').map(|s| s.to_string()).collect();
+    let ts_top: String = ts_parts.first().cloned().unwrap_or_else(|| "4".to_string());
+    let ts_bot: String = ts_parts.get(1).cloned().unwrap_or_else(|| "4".to_string());
+
+    // ── Key-signature accidentals ─────────────────────────────────────────────
+    // Returns (symbol, treble_steps, bass_steps) per accidental in standard order.
+    // Steps are diatonic positions from the BOTTOM staff line upward
+    //   (0 = bottom line, 1 = 1st space, 2 = 2nd line, …)
+    // Each step = LG/2 in SVG pixels.  Negative = below bottom line.
+    //
+    // Treble bottom = E4.   Notes: E=0 F=1 G=2 A=3 B=4 C=5 D=6 E=7 F=8 G=9 A=10 …
+    // Bass   bottom = G2.   Notes: G=0 A=1 B=2 C=3 D=4 E=5 F=6 G=7 A=8 …
+    //
+    // Sharp order (F C G D A E B) — traditional positions:
+    //   treble: F5=8  C5=5  G5=9  D5=6  A5=10  E5=7  B4=4
+    //   bass  : F3=6  C3=3  G3=7  D3=4  A3=8   E3=5  B2=2
+    // Flat order  (B E A D G C F):
+    //   treble: B4=4  E5=7  A4=3  D5=6  G4=2  C5=5  F4=1
+    //   bass  : B2=2  E3=5  A2=1  D3=4  G2=0  C3=3  F2=-1
+    fn key_sig_accidentals(key: &str) -> Vec<(&'static str, i32, i32)> {
+        // Key is stored as "G Major", "Bb Minor", "F#m", "C", etc.
+        let key = key.trim();
+        let mut parts = key.splitn(2, ' ');
+        let root = parts.next().unwrap_or("").trim_end_matches('m');
+        let mode_word = parts.next().unwrap_or("").to_ascii_lowercase();
+        let is_minor = mode_word.starts_with("min") || key.ends_with('m');
+
+        const SHARPS: [(&str, i32, i32); 7] = [
+            ("♯", 8, 6),  // F#
+            ("♯", 5, 3),  // C#
+            ("♯", 9, 7),  // G#
+            ("♯", 6, 4),  // D#
+            ("♯", 10, 8), // A#
+            ("♯", 7, 5),  // E#
+            ("♯", 4, 2),  // B#
+        ];
+        const FLATS: [(&str, i32, i32); 7] = [
+            ("♭", 4, 2),  // Bb
+            ("♭", 7, 5),  // Eb
+            ("♭", 3, 1),  // Ab
+            ("♭", 6, 4),  // Db
+            ("♭", 2, 0),  // Gb
+            ("♭", 5, 3),  // Cb
+            ("♭", 1, -1), // Fb
+        ];
+
+        let (count, use_sharps) = if is_minor {
+            match root {
+                "A" => (0, true),
+                "E" => (1, true),
+                "B" => (2, true),
+                "F#" => (3, true),
+                "C#" => (4, true),
+                "G#" => (5, true),
+                "D#" => (6, true),
+                "A#" => (7, true),
+                "D" => (1, false),
+                "G" => (2, false),
+                "C" => (3, false),
+                "F" => (4, false),
+                "Bb" => (5, false),
+                "Eb" => (6, false),
+                "Ab" => (7, false),
+                _ => (0, true),
+            }
+        } else {
+            match root {
+                "C" => (0, true),
+                "G" => (1, true),
+                "D" => (2, true),
+                "A" => (3, true),
+                "E" => (4, true),
+                "B" => (5, true),
+                "F#" => (6, true),
+                "C#" => (7, true),
+                "F" => (1, false),
+                "Bb" => (2, false),
+                "Eb" => (3, false),
+                "Ab" => (4, false),
+                "Db" => (5, false),
+                "Gb" => (6, false),
+                "Cb" => (7, false),
+                _ => (0, true),
+            }
+        };
+
+        if count == 0 {
+            vec![]
+        } else if use_sharps {
+            SHARPS[..count.min(7)].to_vec()
+        } else {
+            FLATS[..count.min(7)].to_vec()
+        }
+    }
+    let key_acc = key_sig_accidentals(&song_key);
+    let key_acc_count = key_acc.len();
+    const ACC_START_X: f32 = 32.0; // x of first accidental (right after clef)
+    const ACC_STEP_X: f32 = 10.0; // horizontal spacing
+    let ks_width = key_acc_count as f32 * ACC_STEP_X;
+    let ts_x_actual = ACC_START_X + ks_width + 12.0; // time-sig shifts right
+    let extra_cw = ks_width + if key_acc_count > 0 { 14.0 } else { 0.0 };
+    // Build raw SVG markup for key-sig accidentals (injected via dangerous_inner_html)
+    let ks_svg_html: String = key_acc.iter().enumerate().map(|(ai, &(sym, t_steps, b_steps))| {
+        let ax = ACC_START_X + ai as f32 * ACC_STEP_X;
+        let ty = TREBLE_TOP + LP + SH - t_steps as f32 * (LG / 2.0) + 4.0;
+        let by = BASS_TOP   + LP + SH - b_steps as f32 * (LG / 2.0) + 4.0;
+        format!(
+            r##"<text x="{ax:.1}" y="{ty:.1}" font-size="13" font-family="serif" font-weight="bold" fill="#111" text-anchor="middle">{sym}</text><text x="{ax:.1}" y="{by:.1}" font-size="13" font-family="serif" font-weight="bold" fill="#111" text-anchor="middle">{sym}</text>"##
+        )
+    }).collect();
+
+    rsx! {
+        div {
+            style: "display: flex; flex-direction: column; gap: 28px; padding: 4px 0;",
+
+            for seg_idx in 0..seg_count {
+                {
+                    let seg_cols = segments[seg_idx].clone();
+                    let has_lb_before = seg_idx > 0;
+                    let lb_col = if has_lb_before { lb_indices[seg_idx - 1] } else { 0 };
+                    let is_last_seg = seg_idx + 1 == seg_count;
+
+                    #[derive(Clone)]
+                    struct ColLayout { col_idx: usize, x_center: f32, width: f32, is_barline: bool, rh: String, lh: String, dur: u8 }
+
+                    let eff_cw = CW + extra_cw;
+                    let col_layouts: Vec<ColLayout> = {
+                        let p = song.read();
+                        let mut x = eff_cw;
+                        seg_cols.iter().map(|&ci| {
+                            let is_bl = matches!(p.parts.get(part_index).and_then(|p| p.tab_grid.get(ci)), Some(TabCol::Barline));
+                            let w = if is_bl { BLW } else { BW };
+                            let xc = x + w / 2.0;
+                            let (rh, lh, dur) = if !is_bl {
+                                if let Some(TabCol::Notes(arr)) = p.parts.get(part_index).and_then(|p| p.tab_grid.get(ci)) {
+                                    let r = match &arr[0] { TabCell::Custom(s) => s.clone(), _ => String::new() };
+                                    let l = match &arr[1] { TabCell::Custom(s) => s.clone(), _ => String::new() };
+                                    let d: u8 = match &arr[2] { TabCell::Custom(s) => s.parse().unwrap_or(4), _ => 4 };
+                                    (r, l, d)
+                                } else { (String::new(), String::new(), 4u8) }
+                            } else { (String::new(), String::new(), 4u8) };
+                            let cl = ColLayout { col_idx: ci, x_center: xc, width: w, is_barline: is_bl, rh, lh, dur };
+                            x += w;
+                            cl
+                        }).collect()
+                    };
+                    let content_w: f32 = col_layouts.iter().map(|cl| cl.width).sum::<f32>();
+                    let svg_w = eff_cw + content_w + 10.0;
+
+                    rsx! {
+                        // ── Linebreak separator ──────────────────────────────────
+                        if has_lb_before {
+                            div {
+                                key: "lb-{seg_idx}",
+                                style: "display: flex; align-items: center; gap: 8px;",
+                                div { style: "height: 1px; flex: 1; background: #c4a8e8;" }
+                                button {
+                                    style: "font-size: 11px; color: #9b6fc4; background: none; border: 1px dashed #c8a8e8; border-radius: 4px; padding: 1px 8px; cursor: pointer; font-family: inherit;",
+                                    title: "Remove line break",
+                                    onclick: move |_| {
+                                        if let Some(part) = song.write().parts.get_mut(part_index) {
+                                            if lb_col < part.tab_grid.len() { part.tab_grid.remove(lb_col); }
+                                        }
+                                    },
+                                    "↵ ×"
+                                }
+                                div { style: "height: 1px; flex: 1; background: #c4a8e8;" }
+                            }
+                        }
+
+                        // ── Grand staff block ────────────────────────────────────
+                        div {
+                            key: "seg-{seg_idx}",
+                            style: "display: inline-block; background: #f8f3fd; border: 1.5px solid #c4a8e8; border-radius: 8px; padding: 12px 16px 10px; position: relative;",
+
+                            // Delete-column buttons
+                            div {
+                                style: "display: flex; align-items: center; padding-left: {eff_cw}px; margin-bottom: 2px; min-height: 14px;",
+                                for col_i in 0..col_layouts.len() {
+                                    {
+                                        let cl = col_layouts[col_i].clone();
+                                        let ci = cl.col_idx;
+                                        rsx! {
+                                            div {
+                                                key: "del-{ci}",
+                                                style: "width: {cl.width}px; display: flex; justify-content: center;",
+                                                button {
+                                                    style: "background: none; border: none; font-size: 10px; color: #ccc; cursor: pointer; padding: 0; line-height: 1; font-family: inherit;",
+                                                    title: "Remove",
+                                                    onclick: move |_| {
+                                                        if let Some(part) = song.write().parts.get_mut(part_index) {
+                                                            if ci < part.tab_grid.len() { part.tab_grid.remove(ci); }
+                                                        }
+                                                        editing_col.set(None);
+                                                    },
+                                                    "×"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ── SVG grand staff ──────────────────────────────────
+                            svg {
+                                width: "{svg_w}",
+                                height: "{GH}",
+                                style: "display: block; overflow: visible;",
+
+                                // Grand-staff brace
+                                line {
+                                    x1: "3", y1: "{TREBLE_TOP + LP}",
+                                    x2: "3", y2: "{BASS_TOP + LP + SH}",
+                                    stroke: "#333", stroke_width: "3"
+                                }
+                                line {
+                                    x1: "{eff_cw - 5.0}", y1: "{TREBLE_TOP + LP}",
+                                    x2: "{eff_cw - 5.0}", y2: "{BASS_TOP + LP + SH}",
+                                    stroke: "#444", stroke_width: "1.5"
+                                }
+
+                                // Treble staff lines
+                                for li in 0usize..5 {
+                                    line {
+                                        key: "tsl-{li}",
+                                        x1: "4", y1: "{TREBLE_TOP + LP + li as f32 * LG}",
+                                        x2: "{svg_w - 4.0}", y2: "{TREBLE_TOP + LP + li as f32 * LG}",
+                                        stroke: "#333", stroke_width: "1.0"
+                                    }
+                                }
+                                // Bass staff lines
+                                for li in 0usize..5 {
+                                    line {
+                                        key: "bsl-{li}",
+                                        x1: "4", y1: "{BASS_TOP + LP + li as f32 * LG}",
+                                        x2: "{svg_w - 4.0}", y2: "{BASS_TOP + LP + li as f32 * LG}",
+                                        stroke: "#333", stroke_width: "1.0"
+                                    }
+                                }
+
+                                // Treble clef 𝄞
+                                text {
+                                    x: "5", y: "{TREBLE_TOP + LP + SH + LG * 0.5}",
+                                    font_size: "46", font_family: "serif", fill: "#222",
+                                    "𝄞"
+                                }
+                                // Bass clef 𝄢
+                                text {
+                                    x: "6", y: "{BASS_TOP + LP + LG * 2.2}",
+                                    font_size: "26", font_family: "serif", fill: "#222",
+                                    "𝄢"
+                                }
+
+                                // Key-signature accidentals (first segment only)
+                                if seg_idx == 0 && !ks_svg_html.is_empty() {
+                                    g {
+                                        key: "ks",
+                                        dangerous_inner_html: "{ks_svg_html}"
+                                    }
+                                }
+
+                                // Time signature (first segment only)
+                                if seg_idx == 0 {
+                                    {
+                                        let ts_click = time_sig.clone();
+                                        rsx! {
+                                            g {
+                                                style: "cursor: pointer;",
+                                                onclick: move |_| {
+                                                    edit_time_sig_buf.set(ts_click.clone());
+                                                    editing_time_sig.set(true);
+                                                },
+                                                // numerator (treble staff centre)
+                                                text {
+                                                    x: "{ts_x_actual}", y: "{TREBLE_TOP + LP + LG}",
+                                                    font_size: "15", font_family: "sans-serif",
+                                                    font_weight: "700", fill: "#333",
+                                                    text_anchor: "middle", "{ts_top}"
+                                                }
+                                                text {
+                                                    x: "{ts_x_actual}", y: "{TREBLE_TOP + LP + SH}",
+                                                    font_size: "15", font_family: "sans-serif",
+                                                    font_weight: "700", fill: "#333",
+                                                    text_anchor: "middle", "{ts_bot}"
+                                                }
+                                                // same for bass staff
+                                                text {
+                                                    x: "{ts_x_actual}", y: "{BASS_TOP + LP + LG}",
+                                                    font_size: "15", font_family: "sans-serif",
+                                                    font_weight: "700", fill: "#333",
+                                                    text_anchor: "middle", "{ts_top}"
+                                                }
+                                                text {
+                                                    x: "{ts_x_actual}", y: "{BASS_TOP + LP + SH}",
+                                                    font_size: "15", font_family: "sans-serif",
+                                                    font_weight: "700", fill: "#333",
+                                                    text_anchor: "middle", "{ts_bot}"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Closing barline
+                                line {
+                                    x1: "{svg_w - 5.0}", y1: "{TREBLE_TOP + LP}",
+                                    x2: "{svg_w - 5.0}", y2: "{BASS_TOP + LP + SH}",
+                                    stroke: "#444", stroke_width: "1.5"
+                                }
+
+                                // ── Per-column rendering ─────────────────────────
+                                for col_i in 0..col_layouts.len() {
+                                    {
+                                        let cl = col_layouts[col_i].clone();
+                                        let ci = cl.col_idx;
+                                        let x = cl.x_center;
+
+                                        if cl.is_barline {
+                                            rsx! {
+                                                line {
+                                                    key: "bline-{ci}",
+                                                    x1: "{x}", y1: "{TREBLE_TOP + LP}",
+                                                    x2: "{x}", y2: "{BASS_TOP + LP + SH}",
+                                                    stroke: "#555", stroke_width: "1.5"
+                                                }
+                                            }
+                                        } else {
+                                            let is_editing = *editing_col.read() == Some(ci);
+                                            // Parse comma-separated chords
+                                            let rh_notes: Vec<(f32, &'static str)> = chord_notes(&cl.rh, true);
+                                            let lh_notes: Vec<(f32, &'static str)> = chord_notes(&cl.lh, false);
+                                            let rh_ledgers = chord_ledger_ys(&rh_notes, true);
+                                            let lh_ledgers = chord_ledger_ys(&lh_notes, false);
+                                            let rect_fill = if is_editing { "#e8d0f8" } else { "transparent" };
+                                            let cur_rh = cl.rh.clone();
+                                            let cur_lh = cl.lh.clone();
+                                            let cur_dur = cl.dur;
+                                            let note_fill = if cl.dur == 1 || cl.dur == 2 { "white" } else { "#1a0a3a" };
+                                            let dur_sym = match cl.dur { 1 => "𝅝", 2 => "𝅗𝅥", 8 => "♪", _ => "♩" };
+                                            // For staggering overlapping note heads
+                                            let rh_ys: Vec<f32> = rh_notes.iter().map(|&(y,_)| y).collect();
+                                            let lh_ys: Vec<f32> = lh_notes.iter().map(|&(y,_)| y).collect();
+                                            let rh_top_y = rh_notes.iter().map(|&(y,_)| y).fold(f32::INFINITY, f32::min);
+                                            let lh_bot_y = lh_notes.iter().map(|&(y,_)| y).fold(f32::NEG_INFINITY, f32::max);
+
+                                            rsx! {
+                                                g {
+                                                    key: "col-{ci}",
+                                                    style: "cursor: pointer;",
+                                                    onclick: move |_| {
+                                                        edit_rh.set(cur_rh.clone());
+                                                        edit_lh.set(cur_lh.clone());
+                                                        edit_dur.set(cur_dur);
+                                                        editing_col.set(Some(ci));
+                                                    },
+
+                                                    // Highlight rect
+                                                    rect {
+                                                        x: "{x - BW / 2.0}", y: "{TREBLE_TOP}",
+                                                        width: "{BW}", height: "{GH}",
+                                                        fill: "{rect_fill}", fill_opacity: "0.45", rx: "3"
+                                                    }
+
+                                                    // Beat guide lines (dashed)
+                                                    line {
+                                                        x1: "{x}", y1: "{TREBLE_TOP + LP - 1.0}",
+                                                        x2: "{x}", y2: "{TREBLE_TOP + LP + SH + 1.0}",
+                                                        stroke: "#d0b8f0", stroke_width: "0.7",
+                                                        stroke_dasharray: "2,3"
+                                                    }
+                                                    line {
+                                                        x1: "{x}", y1: "{BASS_TOP + LP - 1.0}",
+                                                        x2: "{x}", y2: "{BASS_TOP + LP + SH + 1.0}",
+                                                        stroke: "#d0b8f0", stroke_width: "0.7",
+                                                        stroke_dasharray: "2,3"
+                                                    }
+
+                                                    // ── Treble (RH) chord ────────────────────────
+                                                    // Ledger lines first
+                                                    for &ly in rh_ledgers.iter() {
+                                                        line {
+                                                            key: "rhl-{ly as i32}",
+                                                            x1: "{x - NRX - 4.0}", y1: "{ly}",
+                                                            x2: "{x + NRX + 4.0}", y2: "{ly}",
+                                                            stroke: "#333", stroke_width: "1.0"
+                                                        }
+                                                    }
+                                                    // Note heads
+                                                    for (ni, &(ty, acc)) in rh_notes.iter().enumerate() {
+                                                        {
+                                                            // Stagger adjacent note heads (interval of a 2nd = LG/2 apart)
+                                                            let stagger = rh_ys.iter().enumerate()
+                                                                .any(|(j, &oy)| j < ni && (ty - oy).abs() < LG / 2.0 + 1.0);
+                                                            let nx = if stagger { x + NRX + 1.0 } else { x };
+                                                            rsx! {
+                                                                g { key: "rhn-{ni}",
+                                                                    if !acc.is_empty() {
+                                                                        text {
+                                                                            x: "{nx - NRX - 6.0}", y: "{ty + 4.0}",
+                                                                            font_size: "11", font_family: "serif",
+                                                                            fill: "#222", text_anchor: "middle",
+                                                                            "{acc}"
+                                                                        }
+                                                                    }
+                                                                    ellipse {
+                                                                        cx: "{nx}", cy: "{ty}",
+                                                                        rx: "{NRX}", ry: "{NRY}",
+                                                                        fill: "{note_fill}", stroke: "#1a0a3a", stroke_width: "1.5",
+                                                                        transform: "rotate(-15 {nx} {ty})"
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    // RH stem (up) + eighth flag
+                                                    if !rh_notes.is_empty() && cur_dur != 1 {
+                                                        {
+                                                            let sx = x + NRX;
+                                                            let sy_top = rh_top_y - STEM_LEN;
+                                                            rsx! {
+                                                                line {
+                                                                    key: "rh-stem",
+                                                                    x1: "{sx}", y1: "{rh_top_y}",
+                                                                    x2: "{sx}", y2: "{sy_top}",
+                                                                    stroke: "#1a0a3a", stroke_width: "1.5"
+                                                                }
+                                                                if cur_dur == 8 {
+                                                                    path {
+                                                                        key: "rh-flag",
+                                                                        d: "M {sx} {sy_top} C {sx+12.0} {sy_top+6.0}, {sx+10.0} {sy_top+18.0}, {sx+2.0} {sy_top+22.0}",
+                                                                        stroke: "#1a0a3a", stroke_width: "1.5", fill: "none"
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+
+                                                    // ── Bass (LH) chord ──────────────────────────
+                                                    // Ledger lines
+                                                    for &ly in lh_ledgers.iter() {
+                                                        line {
+                                                            key: "lhl-{ly as i32}",
+                                                            x1: "{x - NRX - 4.0}", y1: "{ly}",
+                                                            x2: "{x + NRX + 4.0}", y2: "{ly}",
+                                                            stroke: "#333", stroke_width: "1.0"
+                                                        }
+                                                    }
+                                                    // Note heads
+                                                    for (ni, &(by, acc)) in lh_notes.iter().enumerate() {
+                                                        {
+                                                            let stagger = lh_ys.iter().enumerate()
+                                                                .any(|(j, &oy)| j < ni && (by - oy).abs() < LG / 2.0 + 1.0);
+                                                            let nx = if stagger { x + NRX + 1.0 } else { x };
+                                                            rsx! {
+                                                                g { key: "lhn-{ni}",
+                                                                    if !acc.is_empty() {
+                                                                        text {
+                                                                            x: "{nx - NRX - 6.0}", y: "{by + 4.0}",
+                                                                            font_size: "11", font_family: "serif",
+                                                                            fill: "#222", text_anchor: "middle",
+                                                                            "{acc}"
+                                                                        }
+                                                                    }
+                                                                    ellipse {
+                                                                        cx: "{nx}", cy: "{by}",
+                                                                        rx: "{NRX}", ry: "{NRY}",
+                                                                        fill: "{note_fill}", stroke: "#1a0a3a", stroke_width: "1.5",
+                                                                        transform: "rotate(-15 {nx} {by})"
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    // LH stem (down) + eighth flag
+                                                    if !lh_notes.is_empty() && cur_dur != 1 {
+                                                        {
+                                                            let sx = x - NRX;
+                                                            let sy_bot = lh_bot_y + STEM_LEN;
+                                                            rsx! {
+                                                                line {
+                                                                    key: "lh-stem",
+                                                                    x1: "{sx}", y1: "{lh_bot_y}",
+                                                                    x2: "{sx}", y2: "{sy_bot}",
+                                                                    stroke: "#1a0a3a", stroke_width: "1.5"
+                                                                }
+                                                                if cur_dur == 8 {
+                                                                    path {
+                                                                        key: "lh-flag",
+                                                                        d: "M {sx} {sy_bot} C {sx+12.0} {sy_bot-6.0}, {sx+10.0} {sy_bot-18.0}, {sx+2.0} {sy_bot-22.0}",
+                                                                        stroke: "#1a0a3a", stroke_width: "1.5", fill: "none"
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    // Duration label below staff
+                                                    text {
+                                                        key: "dur-lbl",
+                                                        x: "{x}", y: "{BASS_TOP + LP + SH + 14.0}",
+                                                        font_size: "12", font_family: "serif",
+                                                        fill: "#9060b8", text_anchor: "middle",
+                                                        "{dur_sym}"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ── Edit popup ───────────────────────────────────────
+                            {
+                                let ec = *editing_col.read();
+                                if ec.is_some() && ec.map_or(false, |ci| seg_cols.contains(&ci)) {
+                                    let ci = ec.unwrap();
+                                    rsx! {
+                                        div {
+                                            style: "margin-top: 10px; padding: 8px 14px; background: #ede0f8; border: 1.5px solid #b890d8; border-radius: 8px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;",
+                                            div {
+                                                style: "display: flex; flex-direction: column; gap: 5px;",
+                                                // RH input
+                                                div {
+                                                    style: "display: flex; align-items: center; gap: 8px;",
+                                                    span { style: "font-size: 18px; font-family: serif; color: #6b1a8a; width: 22px;", "𝄞" }
+                                                    span { style: "font-size: 10px; font-weight: 700; color: #888; width: 24px;", "RH" }
+                                                    input {
+                                                        style: "width: 160px; font-family: 'Courier New', monospace; font-size: 13px; border: 1.5px solid #b890d8; border-radius: 5px; padding: 3px 7px; background: white; outline: none;",
+                                                        r#type: "text",
+                                                        placeholder: "e.g. C5,E5,G5",
+                                                        value: "{edit_rh}",
+                                                        oninput: move |e| edit_rh.set(e.value()),
+                                                        onkeydown: move |e: Event<KeyboardData>| {
+                                                            if e.key() == Key::Enter { editing_col.set(None); }
+                                                        },
+                                                    }
+                                                }
+                                                // LH input
+                                                div {
+                                                    style: "display: flex; align-items: center; gap: 8px;",
+                                                    span { style: "font-size: 18px; font-family: serif; color: #6b1a8a; width: 22px;", "𝄢" }
+                                                    span { style: "font-size: 10px; font-weight: 700; color: #888; width: 24px;", "LH" }
+                                                    input {
+                                                        style: "width: 160px; font-family: 'Courier New', monospace; font-size: 13px; border: 1.5px solid #b890d8; border-radius: 5px; padding: 3px 7px; background: white; outline: none;",
+                                                        r#type: "text",
+                                                        placeholder: "e.g. C3,G3",
+                                                        value: "{edit_lh}",
+                                                        oninput: move |e| edit_lh.set(e.value()),
+                                                        onkeydown: move |e: Event<KeyboardData>| {
+                                                            if e.key() == Key::Enter { editing_col.set(None); }
+                                                        },
+                                                    }
+                                                }
+                                                // Duration selector
+                                                div {
+                                                    style: "display: flex; align-items: center; gap: 6px; margin-top: 4px;",
+                                                    span { style: "font-size: 10px; font-weight: 700; color: #888; width: 50px;", "Duration" }
+                                                    for (label, val) in [("1", 1u8), ("1/2", 2u8), ("1/4", 4u8), ("1/8", 8u8)] {
+                                                        {
+                                                            let is_sel = *edit_dur.read() == val;
+                                                            rsx! {
+                                                                button {
+                                                                    key: "dur-{val}",
+                                                                    style: if is_sel {
+                                                                        "padding: 2px 9px; background: #6b1a8a; color: white; border: 1.5px solid #6b1a8a; border-radius: 4px; font-size: 12px; cursor: pointer; font-family: inherit; font-weight: 700;"
+                                                                    } else {
+                                                                        "padding: 2px 9px; background: white; color: #6b1a8a; border: 1.5px solid #b890d8; border-radius: 4px; font-size: 12px; cursor: pointer; font-family: inherit;"
+                                                                    },
+                                                                    onclick: move |_| edit_dur.set(val),
+                                                                    "{label}"
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                span {
+                                                    style: "font-size: 10px; color: #a078c0; margin-top: 2px;",
+                                                    "Separate notes with commas for chords"
+                                                }
+                                            }
+                                            button {
+                                                style: "padding: 6px 14px; background: #6b1a8a; color: white; border: none; border-radius: 6px; font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit;",
+                                                onclick: move |_| {
+                                                    let rh_val = edit_rh.read().trim().to_string();
+                                                    let lh_val = edit_lh.read().trim().to_string();
+                                                    if let Some(part) = song.write().parts.get_mut(part_index) {
+                                                        if let Some(TabCol::Notes(arr)) = part.tab_grid.get_mut(ci) {
+                                                            arr[0] = if rh_val.is_empty() { TabCell::Empty } else { TabCell::Custom(rh_val) };
+                                                            arr[1] = if lh_val.is_empty() { TabCell::Empty } else { TabCell::Custom(lh_val) };
+                                                            arr[2] = TabCell::Custom(edit_dur.read().to_string());
+                                                        }
+                                                    }
+                                                    editing_col.set(None);
+                                                },
+                                                "✓ Apply"
+                                            }
+                                            button {
+                                                style: "padding: 6px 10px; background: transparent; color: #888; border: 1px solid #ccc; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: inherit;",
+                                                onclick: move |_| { editing_col.set(None); },
+                                                "✕"
+                                            }
+                                        }
+                                    }
+                                } else { rsx! {} }
+                            }
+
+                            // ── Add-beat / barline / linebreak buttons ────────────
+                            if is_last_seg {
+                                // Time-sig editor (opens when time-sig is clicked)
+                                if *editing_time_sig.read() {
+                                    div {
+                                        style: "display: flex; align-items: center; gap: 8px; margin-top: 8px;",
+                                        span { style: "font-size: 11px; font-weight: 700; color: #888;", "Time sig:" }
+                                        input {
+                                            style: "width: 60px; font-family: 'Courier New', monospace; font-size: 13px; border: 1.5px solid #b890d8; border-radius: 5px; padding: 2px 6px; background: white; outline: none; text-align: center;",
+                                            r#type: "text",
+                                            placeholder: "4/4",
+                                            value: "{edit_time_sig_buf}",
+                                            oninput: move |e| edit_time_sig_buf.set(e.value()),
+                                            onkeydown: move |e: Event<KeyboardData>| {
+                                                if e.key() == Key::Enter {
+                                                    let v = edit_time_sig_buf.read().trim().to_string();
+                                                    if !v.is_empty() {
+                                                        if let Some(part) = song.write().parts.get_mut(part_index) {
+                                                            part.time_sig = v;
+                                                        }
+                                                    }
+                                                    editing_time_sig.set(false);
+                                                }
+                                            },
+                                        }
+                                        button {
+                                            style: "padding: 2px 10px; background: #6b1a8a; color: white; border: none; border-radius: 5px; font-size: 12px; cursor: pointer; font-family: inherit;",
+                                            onclick: move |_| {
+                                                let v = edit_time_sig_buf.read().trim().to_string();
+                                                if !v.is_empty() {
+                                                    if let Some(part) = song.write().parts.get_mut(part_index) {
+                                                        part.time_sig = v;
+                                                    }
+                                                }
+                                                editing_time_sig.set(false);
+                                            },
+                                            "✓"
+                                        }
+                                        button {
+                                            style: "padding: 2px 8px; background: transparent; color: #888; border: 1px solid #ccc; border-radius: 5px; font-size: 12px; cursor: pointer; font-family: inherit;",
+                                            onclick: move |_| editing_time_sig.set(false),
+                                            "✕"
+                                        }
+                                    }
+                                }
+                                div {
+                                    style: "display: flex; gap: 4px; margin-top: 8px;",
+                                    button {
+                                        style: "background: none; border: 1px dashed #b890d8; border-radius: 4px; font-size: 12px; color: #6b1a8a; cursor: pointer; padding: 2px 10px; font-family: inherit;",
+                                        title: "Add 8 beats",
+                                        onclick: move |_| {
+                                            if let Some(part) = song.write().parts.get_mut(part_index) {
+                                                for _ in 0..8 {
+                                                    part.tab_grid.push(TabCol::Notes(std::array::from_fn(|_| TabCell::Empty)));
+                                                }
+                                            }
+                                        },
+                                        "+ 8 beats"
+                                    }
+                                    button {
+                                        style: "background: none; border: 1px dashed #a0b4cc; border-radius: 4px; font-size: 13px; font-weight: 700; color: #6a7fa6; cursor: pointer; padding: 1px 9px; font-family: Courier, monospace;",
+                                        title: "Add barline",
+                                        onclick: move |_| {
+                                            if let Some(part) = song.write().parts.get_mut(part_index) {
+                                                part.tab_grid.push(TabCol::Barline);
+                                            }
+                                        },
+                                        "|"
+                                    }
+                                    button {
+                                        style: "background: none; border: 1px dashed #c8a8e8; border-radius: 4px; font-size: 12px; color: #9b6fc4; cursor: pointer; padding: 1px 7px; font-family: inherit;",
+                                        title: "Add line break (new row)",
+                                        onclick: move |_| {
+                                            if let Some(part) = song.write().parts.get_mut(part_index) {
+                                                part.tab_grid.push(TabCol::LineBreak);
+                                            }
+                                        },
+                                        "↵"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ── Tab grid editor ───────────────────────────────────────────────────────────
 
 #[component]
-fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool, drums: bool) -> Element {
+fn TabEditor(
+    song: Signal<Song>,
+    part_index: usize,
+    bass: bool,
+    drums: bool,
+    #[props(default = false)] piano: bool,
+) -> Element {
     let mut editing: Signal<Option<(usize, usize)>> = use_signal(|| None);
     let mut edit_buf: Signal<String> = use_signal(String::new);
 
@@ -2289,18 +3155,23 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool, drums: bool) -> 
     const STRING_NAMES_BASS: [&str; 4] = ["G", "D", "A", "E"];
     #[allow(dead_code)]
     const STRING_NAMES_DRUMS: [&str; 8] = ["K", "S", "Hi", "R", "C", "T1", "T2", "T3"];
+    const STRING_NAMES_PIANO: [&str; 2] = ["RH", "LH"];
     let num_strings: usize = if bass {
         4
     } else if drums {
         8
+    } else if piano {
+        2
     } else {
         6
     };
     // For bass: indices 2-5 of the 6-cell array map to G,D,A,E
     let str_offset: usize = if bass { 2 } else { 0 };
-    // Colour theme: green for guitar/bass, amber for drums.
+    // Colour theme: green for guitar/bass, amber for drums, purple for piano.
     let (grid_line_color, grid_border_color, grid_bg_color, lbl_color) = if drums {
         ("#c8a840", "#d4b040", "#fffbf0", "#7a5a10")
+    } else if piano {
+        ("#c4a8e8", "#b890d8", "#f8f3fd", "#6b1a8a")
     } else {
         ("#aac8aa", "#b5d6b5", "#f6fbf6", "#5c7a5c")
     };
@@ -2455,6 +3326,8 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool, drums: bool) -> 
                                                     "{STRING_NAMES_BASS[si]}"
                                                 } else if drums {
                                                     "{STRING_NAMES_DRUMS[si]}"
+                                                } else if piano {
+                                                    "{STRING_NAMES_PIANO[si]}"
                                                 } else {
                                                     "{STRING_NAMES_GUITAR[si]}"
                                                 }
@@ -2530,6 +3403,15 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool, drums: bool) -> 
                                                         }
                                                         TabCell::Fret(n) => (n.to_string(), "#2a2a2a", "background:#e8d8a0;"),
                                                         _                => ("?".to_string(), "#2a2a2a", "background:#e8d8a0;"),
+                                                    }
+                                                } else if piano {
+                                                    match cell {
+                                                    TabCell::Empty => ("\u{2013}".to_string(), "#c4a8e8", "background:transparent;"),
+                                                    TabCell::Muted => ("x".to_string(), "#c0392b", "background:#fde8e8;"),
+                                                    TabCell::Fret(n) => (n.to_string(), "#3a0a5a", "background:#e8d8f8;"),
+                                                    TabCell::Ghost(n) => (format!("({n})"), "#7b5ea7", "background:#f0e8f8;"),
+                                                    TabCell::Custom(ref s) => (s.clone(), "#3a0a5a", "background:#ede0f8;"),
+                                                    _ => ("?".to_string(), "#3a0a5a", "background:#ede0f8;"),
                                                     }
                                                 } else {
                                                     match cell {
@@ -2793,7 +3675,7 @@ fn RenderedSheet(song: Signal<Song>, notation: Signal<Notation>, capo: Signal<i8
                             // Chords / tab column (right)
                             div {
                                 style: "flex: 1; min-width: 0;",
-                                if part.kind == PartKind::Riff || part.kind == PartKind::BassRiff || part.kind == PartKind::DrumBeat {
+                                if part.kind == PartKind::Riff || part.kind == PartKind::BassRiff || part.kind == PartKind::DrumBeat || part.kind == PartKind::PianoRiff {
                                     pre {
                                         style: "font-family: 'Courier New', monospace; font-size: 15px; color: #333; white-space: pre-wrap; margin: 0;",
                                         "{part.tab_as_ascii()}"
@@ -2893,7 +3775,7 @@ fn RenderedSheet(song: Signal<Song>, notation: Signal<Notation>, capo: Signal<i8
                         }
                     } else {
                         // ── No vocals text: normal chords / tab ─────────────────
-                        if part.kind == PartKind::Riff || part.kind == PartKind::BassRiff || part.kind == PartKind::DrumBeat {
+                        if part.kind == PartKind::Riff || part.kind == PartKind::BassRiff || part.kind == PartKind::DrumBeat || part.kind == PartKind::PianoRiff {
                             pre {
                                 style: "font-family: 'Courier New', monospace; font-size: 15px; color: #333; white-space: pre-wrap; margin: 0;",
                                 "{part.tab_as_ascii()}"
@@ -3020,7 +3902,10 @@ fn PartView(
         .parts
         .get(part_index)
         .map(|p| {
-            p.kind == PartKind::Riff || p.kind == PartKind::BassRiff || p.kind == PartKind::DrumBeat
+            p.kind == PartKind::Riff
+                || p.kind == PartKind::BassRiff
+                || p.kind == PartKind::DrumBeat
+                || p.kind == PartKind::PianoRiff
         })
         .unwrap_or(false);
     let is_bass_riff = song
@@ -3035,6 +3920,12 @@ fn PartView(
         .get(part_index)
         .map(|p| p.kind == PartKind::DrumBeat)
         .unwrap_or(false);
+    let is_piano_riff = song
+        .read()
+        .parts
+        .get(part_index)
+        .map(|p| p.kind == PartKind::PianoRiff)
+        .unwrap_or(false);
     let show_chords_with_vocals = song
         .read()
         .parts
@@ -3044,6 +3935,8 @@ fn PartView(
 
     let part_border = if is_drum_beat {
         "#d4b040"
+    } else if is_piano_riff {
+        "#c4a8e8"
     } else if is_riff {
         "#b5d6b5"
     } else {
@@ -3051,6 +3944,8 @@ fn PartView(
     };
     let part_bg = if is_drum_beat {
         "#fffbf0"
+    } else if is_piano_riff {
+        "#f8f3fd"
     } else if is_riff {
         "#f6fbf6"
     } else {
@@ -3058,6 +3953,8 @@ fn PartView(
     };
     let part_name_color = if is_drum_beat {
         "#7a5a10"
+    } else if is_piano_riff {
+        "#6b1a8a"
     } else if is_riff {
         "#5c7a5c"
     } else {
@@ -3136,8 +4033,11 @@ fn PartView(
                 },
             }
 
-            if is_riff && (!vocals_only || show_chords_with_vocals) {
-                TabEditor { song, part_index, bass: is_bass_riff, drums: is_drum_beat }
+            if is_piano_riff && (!vocals_only || show_chords_with_vocals) {
+                PianoSheetEditor { song, part_index }
+            }
+            if is_riff && !is_piano_riff && (!vocals_only || show_chords_with_vocals) {
+                TabEditor { song, part_index, bass: is_bass_riff, drums: is_drum_beat, piano: false }
             }
             if !is_riff && (!vocals_only || show_chords_with_vocals) {
                 // ── Chord items + add buttons ──────────────────────────────
@@ -4122,7 +5022,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                         .read()
                         .parts
                         .get(part_index)
-                        .map(|p| p.kind == PartKind::Riff || p.kind == PartKind::BassRiff || p.kind == PartKind::DrumBeat)
+                        .map(|p| p.kind == PartKind::Riff || p.kind == PartKind::BassRiff || p.kind == PartKind::DrumBeat || p.kind == PartKind::PianoRiff)
                         .unwrap_or(false);
                     let item_count = song
                         .read()
