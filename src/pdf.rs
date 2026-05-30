@@ -355,6 +355,414 @@ pub fn generate_pdf_bytes(
         let qual_char_w: f32 = root_char_w * (qual_size / chord_size);
         let bass_char_w: f32 = root_char_w * (bass_size / chord_size);
 
+        // ── Piano grand-staff renderer ────────────────────────────────────
+        if part.kind == crate::song::PartKind::PianoRiff {
+            use crate::song::{TabCell, TabCol};
+
+            // Layout constants (all in mm)
+            let lg: f32 = 1.6; // gap between staff lines
+            let lp: f32 = 3.5; // ledger-line padding above/below the 5 lines
+            let sh: f32 = lg * 4.0; // staff height
+            let ssh: f32 = lp + sh + lp; // per-staff section height
+            let sg: f32 = 5.0; // gap between treble and bass staves
+            let grand_h: f32 = ssh * 2.0 + sg; // total grand-staff height in mm
+            let beat_w: f32 = 6.0;
+            let barline_w: f32 = 2.5;
+            let clef_w: f32 = 10.0;
+            let note_rx: f32 = 1.1; // note-head half-widths (mm)
+            let note_ry: f32 = 0.8;
+            let block_gap: f32 = 6.0;
+
+            // Helper: diatonic abs-position for a note name ("C4", "F#5", "Bb3")
+            fn piano_abs(name: &str) -> Option<i32> {
+                let b = name.trim().as_bytes();
+                if b.is_empty() {
+                    return None;
+                }
+                let letter = (b[0] as char).to_ascii_uppercase();
+                let diatonic: i32 = match letter {
+                    'C' => 0,
+                    'D' => 1,
+                    'E' => 2,
+                    'F' => 3,
+                    'G' => 4,
+                    'A' => 5,
+                    'B' => 6,
+                    _ => return None,
+                };
+                let acc_skip: usize = if b.len() > 1 && (b[1] == b'#' || b[1] == b'b') {
+                    1
+                } else {
+                    0
+                };
+                let oct: i32 = std::str::from_utf8(&b[1 + acc_skip..])
+                    .ok()?
+                    .trim()
+                    .parse()
+                    .ok()?;
+                Some(oct * 7 + diatonic)
+            }
+
+            // Map note → mm offset from bottom staff line (positive = above, negative = below)
+            // returns (mm_above_bottom_line, steps_from_bottom) where steps is integer
+            fn piano_note_mm(name: &str, is_treble: bool, lg: f32) -> Option<(f32, i32)> {
+                let abs = piano_abs(name)?;
+                // treble bottom line = E4 = 30; bass bottom line = G2 = 18
+                let bottom_abs: i32 = if is_treble { 30 } else { 18 };
+                let steps = abs - bottom_abs;
+                Some((steps as f32 * (lg / 2.0), steps))
+            }
+
+            fn piano_acc_str(name: &str) -> &'static str {
+                let b = name.trim().as_bytes();
+                if b.len() < 2 {
+                    return "";
+                }
+                match b[1] {
+                    b'#' => "#",
+                    b'b' => "b",
+                    _ => "",
+                }
+            }
+
+            // Split grid into segments at LineBreaks
+            let mut segments: Vec<Vec<&TabCol>> = vec![vec![]];
+            for col in &part.tab_grid {
+                if matches!(col, TabCol::LineBreak) {
+                    segments.push(vec![]);
+                } else {
+                    segments.last_mut().unwrap().push(col);
+                }
+            }
+
+            for seg in &segments {
+                if seg.is_empty() {
+                    continue;
+                }
+
+                if y < MARGIN + grand_h + 2.0 {
+                    next_page!();
+                }
+
+                let seg_w: f32 = seg
+                    .iter()
+                    .map(|c| match c {
+                        TabCol::Barline => barline_w,
+                        _ => beat_w,
+                    })
+                    .sum::<f32>();
+                let x0 = MARGIN + clef_w;
+                let x_end = x0 + seg_w;
+                let seg_top = y; // y of the top of the treble staff section (= TREBLE_TOP)
+
+                // treble staff: bottom line at seg_top - lp - sh  (y decreases downward in PDF)
+                let treble_bot_y = seg_top - lp - sh;
+                // bass staff top = seg_top - ssh - sg, bottom line at seg_top - ssh - sg - lp - sh
+                let bass_top_y = seg_top - ssh - sg;
+                let bass_bot_y = bass_top_y - lp - sh;
+
+                // Draw 5 treble staff lines
+                layer.set_outline_thickness(0.3);
+                layer.set_outline_color(Color::Greyscale(Greyscale::new(0.25, None)));
+                for li in 0u8..5 {
+                    let ly = seg_top - lp - li as f32 * lg;
+                    layer.add_line(Line {
+                        points: vec![
+                            (Point::new(Mm(MARGIN), Mm(ly)), false),
+                            (Point::new(Mm(x_end), Mm(ly)), false),
+                        ],
+                        is_closed: false,
+                    });
+                }
+                // Draw 5 bass staff lines
+                for li in 0u8..5 {
+                    let ly = bass_top_y - lp - li as f32 * lg;
+                    layer.add_line(Line {
+                        points: vec![
+                            (Point::new(Mm(MARGIN), Mm(ly)), false),
+                            (Point::new(Mm(x_end), Mm(ly)), false),
+                        ],
+                        is_closed: false,
+                    });
+                }
+
+                // Grand-staff brace / opening barline
+                layer.set_outline_thickness(0.7);
+                layer.add_line(Line {
+                    points: vec![
+                        (Point::new(Mm(MARGIN), Mm(seg_top - lp)), false),
+                        (Point::new(Mm(MARGIN), Mm(bass_top_y - lp - sh)), false),
+                    ],
+                    is_closed: false,
+                });
+                layer.set_outline_thickness(0.3);
+
+                // Clef labels
+                layer.set_fill_color(Color::Greyscale(Greyscale::new(0.0, None)));
+                let clef_font_size = chord_size * 0.5;
+                layer.use_text(
+                    "T:",
+                    clef_font_size,
+                    Mm(MARGIN + 0.5),
+                    Mm(treble_bot_y + lg),
+                    &font_bold,
+                );
+                layer.use_text(
+                    "B:",
+                    clef_font_size,
+                    Mm(MARGIN + 0.5),
+                    Mm(bass_bot_y + lg),
+                    &font_bold,
+                );
+
+                // Per-column notes and barlines
+                let mut cx = x0;
+                for col in seg.iter() {
+                    match col {
+                        TabCol::Barline => {
+                            layer.set_outline_thickness(0.5);
+                            layer.set_outline_color(Color::Greyscale(Greyscale::new(0.2, None)));
+                            layer.add_line(Line {
+                                points: vec![
+                                    (
+                                        Point::new(Mm(cx + barline_w * 0.5), Mm(seg_top - lp)),
+                                        false,
+                                    ),
+                                    (
+                                        Point::new(
+                                            Mm(cx + barline_w * 0.5),
+                                            Mm(bass_top_y - lp - sh),
+                                        ),
+                                        false,
+                                    ),
+                                ],
+                                is_closed: false,
+                            });
+                            layer.set_outline_thickness(0.3);
+                            layer.set_outline_color(Color::Greyscale(Greyscale::new(0.25, None)));
+                            cx += barline_w;
+                        }
+                        TabCol::Notes(arr) => {
+                            let center_x = cx + beat_w * 0.5;
+                            // RH (treble, index 0)
+                            if let TabCell::Custom(note_name) = &arr[0] {
+                                if let Some((off, _steps)) = piano_note_mm(note_name, true, lg) {
+                                    let note_y_pdf = treble_bot_y + off;
+                                    // Ledger lines below treble staff
+                                    let mut ly = treble_bot_y - lg;
+                                    while ly >= note_y_pdf - 0.1 {
+                                        layer.add_line(Line {
+                                            points: vec![
+                                                (
+                                                    Point::new(
+                                                        Mm(center_x - note_rx - 0.8),
+                                                        Mm(ly),
+                                                    ),
+                                                    false,
+                                                ),
+                                                (
+                                                    Point::new(
+                                                        Mm(center_x + note_rx + 0.8),
+                                                        Mm(ly),
+                                                    ),
+                                                    false,
+                                                ),
+                                            ],
+                                            is_closed: false,
+                                        });
+                                        ly -= lg;
+                                    }
+                                    // Ledger lines above treble staff
+                                    let mut ly = seg_top - lp + lg;
+                                    while ly <= note_y_pdf + 0.1 {
+                                        layer.add_line(Line {
+                                            points: vec![
+                                                (
+                                                    Point::new(
+                                                        Mm(center_x - note_rx - 0.8),
+                                                        Mm(ly),
+                                                    ),
+                                                    false,
+                                                ),
+                                                (
+                                                    Point::new(
+                                                        Mm(center_x + note_rx + 0.8),
+                                                        Mm(ly),
+                                                    ),
+                                                    false,
+                                                ),
+                                            ],
+                                            is_closed: false,
+                                        });
+                                        ly += lg;
+                                    }
+                                    // Accidental
+                                    let acc = piano_acc_str(note_name);
+                                    if !acc.is_empty() {
+                                        layer.use_text(
+                                            acc,
+                                            chord_size * 0.4,
+                                            Mm(center_x - note_rx - 2.0),
+                                            Mm(note_y_pdf - 0.4),
+                                            &font_regular,
+                                        );
+                                    }
+                                    // Filled note head (approximated as small rectangle)
+                                    layer.set_fill_color(Color::Greyscale(Greyscale::new(
+                                        0.0, None,
+                                    )));
+                                    layer.add_polygon(Polygon {
+                                        rings: vec![vec![
+                                            (
+                                                Point::new(
+                                                    Mm(center_x - note_rx),
+                                                    Mm(note_y_pdf - note_ry),
+                                                ),
+                                                false,
+                                            ),
+                                            (
+                                                Point::new(
+                                                    Mm(center_x + note_rx),
+                                                    Mm(note_y_pdf - note_ry),
+                                                ),
+                                                false,
+                                            ),
+                                            (
+                                                Point::new(
+                                                    Mm(center_x + note_rx),
+                                                    Mm(note_y_pdf + note_ry),
+                                                ),
+                                                false,
+                                            ),
+                                            (
+                                                Point::new(
+                                                    Mm(center_x - note_rx),
+                                                    Mm(note_y_pdf + note_ry),
+                                                ),
+                                                false,
+                                            ),
+                                        ]],
+                                        mode: PolygonMode::Fill,
+                                        winding_order: WindingOrder::NonZero,
+                                    });
+                                }
+                            }
+                            // LH (bass, index 1)
+                            if let TabCell::Custom(note_name) = &arr[1] {
+                                if let Some((off, _steps)) = piano_note_mm(note_name, false, lg) {
+                                    let note_y_pdf = bass_bot_y + off;
+                                    // Ledger lines below bass staff
+                                    let mut ly = bass_bot_y - lg;
+                                    while ly >= note_y_pdf - 0.1 {
+                                        layer.add_line(Line {
+                                            points: vec![
+                                                (
+                                                    Point::new(
+                                                        Mm(center_x - note_rx - 0.8),
+                                                        Mm(ly),
+                                                    ),
+                                                    false,
+                                                ),
+                                                (
+                                                    Point::new(
+                                                        Mm(center_x + note_rx + 0.8),
+                                                        Mm(ly),
+                                                    ),
+                                                    false,
+                                                ),
+                                            ],
+                                            is_closed: false,
+                                        });
+                                        ly -= lg;
+                                    }
+                                    // Ledger lines above bass staff
+                                    let mut ly = bass_top_y - lp + lg;
+                                    while ly <= note_y_pdf + 0.1 {
+                                        layer.add_line(Line {
+                                            points: vec![
+                                                (
+                                                    Point::new(
+                                                        Mm(center_x - note_rx - 0.8),
+                                                        Mm(ly),
+                                                    ),
+                                                    false,
+                                                ),
+                                                (
+                                                    Point::new(
+                                                        Mm(center_x + note_rx + 0.8),
+                                                        Mm(ly),
+                                                    ),
+                                                    false,
+                                                ),
+                                            ],
+                                            is_closed: false,
+                                        });
+                                        ly += lg;
+                                    }
+                                    // Accidental
+                                    let acc = piano_acc_str(note_name);
+                                    if !acc.is_empty() {
+                                        layer.use_text(
+                                            acc,
+                                            chord_size * 0.4,
+                                            Mm(center_x - note_rx - 2.0),
+                                            Mm(note_y_pdf - 0.4),
+                                            &font_regular,
+                                        );
+                                    }
+                                    // Filled note head
+                                    layer.set_fill_color(Color::Greyscale(Greyscale::new(
+                                        0.0, None,
+                                    )));
+                                    layer.add_polygon(Polygon {
+                                        rings: vec![vec![
+                                            (
+                                                Point::new(
+                                                    Mm(center_x - note_rx),
+                                                    Mm(note_y_pdf - note_ry),
+                                                ),
+                                                false,
+                                            ),
+                                            (
+                                                Point::new(
+                                                    Mm(center_x + note_rx),
+                                                    Mm(note_y_pdf - note_ry),
+                                                ),
+                                                false,
+                                            ),
+                                            (
+                                                Point::new(
+                                                    Mm(center_x + note_rx),
+                                                    Mm(note_y_pdf + note_ry),
+                                                ),
+                                                false,
+                                            ),
+                                            (
+                                                Point::new(
+                                                    Mm(center_x - note_rx),
+                                                    Mm(note_y_pdf + note_ry),
+                                                ),
+                                                false,
+                                            ),
+                                        ]],
+                                        mode: PolygonMode::Fill,
+                                        winding_order: WindingOrder::NonZero,
+                                    });
+                                }
+                            }
+                            cx += beat_w;
+                        }
+                        TabCol::LineBreak => unreachable!(),
+                    }
+                }
+
+                y = seg_top - grand_h - block_gap;
+            }
+
+            y -= gap;
+            continue;
+        }
+
         // ── Riff / Tab part (graphical renderer) ─────────────────────────
         if part.kind == crate::song::PartKind::Riff
             || part.kind == crate::song::PartKind::BassRiff
@@ -1184,6 +1592,7 @@ mod tests {
                 PartItem::Repeat { times: 2 },
             ],
             part_text: None,
+            time_sig: "4/4".to_string(),
         };
         song.parts.push(part);
         let bytes = generate_pdf_bytes(&song, Notation::English, 9.0, 18.0, 0).unwrap();
@@ -1205,6 +1614,7 @@ mod tests {
                 PartItem::Chord(Chord::new("G", ChordQuality::Major)),
             ],
             part_text: None,
+            time_sig: "4/4".to_string(),
         };
         song.parts.push(part);
         let bytes = generate_pdf_bytes(&song, Notation::English, 9.0, 18.0, 0).unwrap();
