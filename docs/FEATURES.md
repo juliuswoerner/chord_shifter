@@ -75,9 +75,10 @@ code in `src/` as of commit `ebdd33e`, plus ideas for what is missing.
 Grouped roughly by how much they would matter to users.
 
 **Data and accounts**
+- One-command local demo environment with a demo user and sample songs (ROADMAP Phase 1).
 - Bands with members and a default instrument, setlists with per-setlist key overrides,
   setlist import, per-member instrument choice per song, and one combined setlist PDF
-  (planned in ROADMAP Phase 2). Setlist import/export as JSON and CSV; all band members
+  (planned in ROADMAP Phase 3). Setlist import/export as JSON and CSV; all band members
   can edit shared songs, with a version check to avoid silent overwrites.
 - Connect the frontend to the server API (cloud sync, multi-device).
 - Import/export a song as JSON (backup, sharing); import from ChordPro or plain text.
@@ -95,7 +96,7 @@ Grouped roughly by how much they would matter to users.
 - Auto-detect key; suggest capo positions with the easiest shapes.
 
 **Output**
-- Written song notes stored on the base song and printed in every PDF (ROADMAP Phase 4).
+- Written song notes stored on the base song and printed in every PDF (ROADMAP Phase 5).
 - Print-friendly layout settings: page size (A4 only now), margins, fonts, columns.
 - Export formats beyond PDF: ChordPro, MusicXML/MIDI, plain text, image.
 - Stage mode: large font, dark theme, auto-scroll, page-turn.
@@ -104,7 +105,7 @@ Grouped roughly by how much they would matter to users.
 **Platform**
 - Installable app for iPad/iOS and Android (PWA first, then store packaging) with a live
   performance mode: rendered sheet with on-the-spot instrument switch and transpose,
-  offline setlists (ROADMAP Phase 5).
+  offline setlists (ROADMAP Phase 6).
 - Desktop build: the README says `cargo run` runs a desktop app, but the manifest
   only defines the web and server binaries (see ROADMAP Phase 0).
 - Accessibility pass (keyboard navigation in the grids, contrast, labels).

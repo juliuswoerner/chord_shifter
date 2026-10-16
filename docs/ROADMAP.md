@@ -15,7 +15,43 @@ Fix things that mislead contributors and users before adding features.
 | Add CI (GitHub Actions): `cargo fmt --check`, `cargo clippy`, `cargo test` (native, for `song`/`pdf`/`auth`), and a server build | The Dockerfile deploys straight from main and there is no CI at all; commit #39 was a deploy-compat fix | S |
 | Remove or document the leftover `Db::save_pdf` stub and the `#[allow(dead_code)]` bits in `TabEditor` | Dead code in the storage layer will confuse the API migration | S |
 
-## Phase 1 — Make the data durable (2–3 weeks)
+## Phase 1 — Local demo environment (2–4 days)
+
+A one-command way to run the app locally with a ready-made demo user and realistic
+sample data, for testing, demos and screenshots. It also becomes the quickest way to try
+every later phase (bands, setlists, live mode) without registering or setting up email.
+
+**What exists today:** the web app runs with `dx serve --platform web` and seeds a single
+"Let It Be" song into `localStorage`, but you must still register a user by hand. The server
+needs `DATABASE_URL`, `JWT_SECRET`, `ENCRYPTION_KEY` and `APP_URL`, and skips email
+verification when SMTP is not configured, so it can already run locally without a mail server.
+
+1. **Demo seed data** (`src/demo.rs` or `assets/demo/*.json`, built on the `Song` model):
+   a demo user (for example `demo@example.com`, password shown on the login screen) and 4–6
+   songs that exercise the features: a chord song with repeats/voltas and a slash chord, a
+   guitar riff and a bass riff with tab articulations, a drum beat, a song with
+   per-instrument sheets and capo/transpose, lyrics, and a song in a minor key to show
+   flat/sharp spelling. Later phases add a demo band, a setlist and notes to the seed. S–M
+2. **Web-only demo mode** (no server): a `?demo` URL or `demo` cargo feature that creates the
+   demo user (hashing the password with `auth::hash_password`) and seeds the songs into
+   `localStorage` if they are missing, plus a "Reset demo data" button. Works with plain
+   `dx serve`. S
+3. **Server demo mode**: `DEMO_MODE=1` creates the demo user (already verified) and songs in
+   a throwaway SQLite database on startup, idempotently, so it works the same once the
+   frontend uses the API (Phase 2). Guard rails: refuse to start in demo mode when SMTP is
+   configured, when `APP_URL` is not `localhost`/`127.0.0.1`, or when the database
+   already holds non-demo users; never ship a fixed demo password in the Fly deployment. S–M
+4. **One-command start**: `scripts/demo.sh` (and a `make demo`/`just demo` alias) that
+   checks for Rust, `dx` and the wasm target, generates random `JWT_SECRET` and
+   `ENCRYPTION_KEY` values for the run, uses a temporary database directory, builds, starts
+   everything and opens the browser. Optional `docker compose up` file reusing the existing
+   Dockerfile for people without a Rust toolchain. `scripts/demo.sh --reset` wipes the data. S–M
+5. **Demo UX**: a visible "Demo" banner, the demo credentials on the login screen and a
+   short README section ("Try it in 2 minutes"), including how to export the sample PDFs. S
+6. **Smoke test in CI** (once Phase 0 CI exists): build, start in demo mode, log in as the
+   demo user, load a song and generate a PDF, so the demo cannot silently break. S
+
+## Phase 2 — Make the data durable (2–3 weeks)
 
 The biggest gap: the server exists, but the app stores songs and password hashes
 in `localStorage`, so clearing the browser loses everything and accounts are not real accounts.
@@ -30,11 +66,11 @@ in `localStorage`, so clearing the browser loses everything and accounts are not
 5. **Server tests** (register → verify → login → CRUD, ownership checks) and a
    documented backup for the SQLite volume on Fly. M
 
-## Phase 2 — Bands and setlists (3–5 weeks)
+## Phase 3 — Bands and setlists (3–5 weeks)
 
 Requested features: multiple bands, importable setlists, one combined PDF per
 setlist, per-setlist key changes, and a per-member instrument choice per song
-with a default instrument. This needs accounts on the server, so it depends on Phase 1.
+with a default instrument. This needs accounts on the server, so it depends on Phase 2.
 
 ### Data model (sketch)
 
@@ -99,7 +135,7 @@ MemberChoice  { setlist_id, entry position/song_id, user_id, instrument: Option<
 - **Key overrides apply to every instrument sheet**; piano's own transpose and guitar capo are
   applied on top.
 
-## Phase 3 — Faster, safer editing (2–3 weeks)
+## Phase 4 — Faster, safer editing (2–3 weeks)
 
 1. Undo/redo for the song signal (snapshot stack). M
 2. Reorder and duplicate parts and chords. M
@@ -109,7 +145,7 @@ MemberChoice  { setlist_id, entry position/song_id, user_id, instrument: Option<
 4. Autosave with a visible "saved" indicator. S
 5. Library search/sort. S
 
-## Phase 4 — Better sheets (3–4 weeks)
+## Phase 5 — Better sheets (3–4 weeks)
 
 0. **Written notes in the PDF**: a free-text notes field (`Song.notes`, `#[serde(default)]`)
    stored on the base song, so it is shared by every instrument sheet and by the band, and
@@ -117,18 +153,18 @@ MemberChoice  { setlist_id, entry position/song_id, user_id, instrument: Option<
    own font size in `PdfSettings`). Setlist PDFs include each song's notes. Edited in the base
    sheet only; instrument sheets show it read-only. This is separate from the existing
    per-part lyrics text and the "Vocals / Notes" field. Could be pulled forward into
-   Phase 0/1 since it is small. S
+   Phase 0/2 since it is small. S
 1. Chords over lyrics (aligned to syllables), the format most players expect. L
 2. Chord diagrams for guitar and piano in the PDF. M
 3. Page options: size (A4/Letter), margins, columns, font choice. M
 4. Tempo, time signature, bar counts in the header. S
 5. Stage/performance view (large text, dark mode, auto-scroll). M
 
-## Phase 5 — iPad/iOS and Android app, with a live performance mode (4–8 weeks)
+## Phase 6 — iPad/iOS and Android app, with a live performance mode (4–8 weeks)
 
 Goal: an installable app for iPad, iPhone and Android, including a mode that shows the
 rendered sheet while still letting the player change instrument or transpose on the spot.
-Depends on Phase 1 (accounts/sync) and Phase 2 (setlists); the live mode itself can be
+Depends on Phase 2 (accounts/sync) and Phase 3 (setlists); the live mode itself can be
 built earlier on the web app.
 
 ### Live performance mode (build this first, on the web)
@@ -169,19 +205,19 @@ Also needed: Apple Developer (annual fee) and Google Play (one-time fee) account
 splash screens (SheetWave logo exists in `assets/`), a privacy policy, and a tested PDF
 share/save flow on iOS (downloads work differently from desktop browsers).
 
-## Phase 6 — Reach and sharing (open-ended)
+## Phase 7 — Reach and sharing (open-ended)
 
-- Read-only share links and setlists (needs Phase 1; setlist sharing is covered in Phase 2).
+- Read-only share links and setlists (needs Phase 2; setlist sharing is covered in Phase 3).
 - ChordPro import/export. M
-- Mobile layout polish for phones (the iPad/Android app is Phase 5). M
+- Mobile layout polish for phones (the iPad/Android app is Phase 6). M
 - Accessibility and i18n (German UI first). M
 - Real-time collaboration, MusicXML/MIDI, audio playback: only if there is demand.
 
 ## Risks and notes
 
 - `main.rs` is ~4,500 lines of inline-styled components with no tests. Before the
-  Phase 2–4 UI work, split it into modules (`library`, `song_view`, `tab_editor`,
-  `pdf_preview`) and move shared styles out; do it incrementally alongside Phase 1.
+  Phase 3–5 UI work, split it into modules (`library`, `song_view`, `tab_editor`,
+  `pdf_preview`) and move shared styles out; do it incrementally alongside Phase 2.
 - Song JSON is the contract between localStorage, SQLite and PDF export. New fields
   must keep `#[serde(default)]` (as `pdf_settings` did) so old songs still load.
 - The Dockerfile and `fly.toml` run a single 256 MB machine with a SQLite volume;
