@@ -31,6 +31,7 @@ fn inst_icon(inst: Instrument) -> Asset {
 use chord_shifter::auth;
 use chord_shifter::demo;
 use chord_shifter::song;
+use chord_shifter::transfer;
 mod api;
 mod pdf;
 
@@ -110,6 +111,112 @@ fn demo_mode() -> bool {
                 .any(|kv| kv == "demo" || kv.starts_with("demo="))
         })
         .unwrap_or(false)
+}
+
+// ── Song files (JSON import / export) ────────────────────────────────────────
+
+/// Offer `bytes` to the user as a file download.
+fn download_file(bytes: &[u8], filename: &str, mime: &str) -> Result<(), String> {
+    use js_sys::Uint8Array;
+    use wasm_bindgen::JsCast;
+    use web_sys::{Blob, BlobPropertyBag, HtmlAnchorElement, Url};
+
+    let js_err = |e: wasm_bindgen::JsValue| format!("{e:?}");
+    let parts = js_sys::Array::new();
+    parts.push(&Uint8Array::from(bytes));
+    let opts = BlobPropertyBag::new();
+    opts.set_type(mime);
+    let blob = Blob::new_with_u8_array_sequence_and_options(&parts, &opts).map_err(js_err)?;
+    let url = Url::create_object_url_with_blob(&blob).map_err(js_err)?;
+    let document = web_sys::window()
+        .and_then(|w| w.document())
+        .ok_or("No document")?;
+    let a: HtmlAnchorElement = document
+        .create_element("a")
+        .map_err(js_err)?
+        .dyn_into()
+        .map_err(|_| "Not an anchor".to_string())?;
+    a.set_href(&url);
+    a.set_download(filename);
+    a.click();
+    let _ = Url::revoke_object_url(&url);
+    Ok(())
+}
+
+/// Read the first file chosen in the `<input type="file">` with this id, then clear the
+/// input so the same file can be chosen again. Returns `(file name, text)`.
+async fn read_chosen_file(input_id: &str) -> Result<Option<(String, String)>, String> {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::JsFuture;
+
+    let input: web_sys::HtmlInputElement = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id(input_id))
+        .ok_or("File input not found")?
+        .dyn_into()
+        .map_err(|_| "Not a file input".to_string())?;
+    let Some(file) = input.files().and_then(|f| f.item(0)) else {
+        return Ok(None);
+    };
+    let name = file.name();
+    if file.size() > transfer::MAX_BYTES as f64 {
+        input.set_value("");
+        return Err(format!(
+            "\"{name}\" is too large (the limit is {} MB).",
+            transfer::MAX_BYTES / (1024 * 1024)
+        ));
+    }
+    let text = JsFuture::from(file.text())
+        .await
+        .map_err(|e| format!("Could not read \"{name}\": {e:?}"))?
+        .as_string()
+        .ok_or("The file is not text")?;
+    input.set_value("");
+    Ok(Some((name, text)))
+}
+
+/// Add the songs of a JSON file to the library. Existing songs are never overwritten:
+/// a song whose title and artist already exist is added as "Title (2)".
+async fn import_song_file(db: &Db, user: Option<&User>, text: &str) -> Result<String, String> {
+    let songs = transfer::import_songs(text)?;
+    let mut existing: Vec<(String, String)> = db
+        .list_songs(user)
+        .await?
+        .into_iter()
+        .map(|r| (r.name, r.artist))
+        .collect();
+    let (mut added, mut renamed, mut failed) = (0, 0, 0);
+    for mut song in songs {
+        let unique = transfer::unique_name(&song.name, &song.artist, &existing);
+        if unique != song.name {
+            renamed += 1;
+            song.name = unique;
+        }
+        match db.save_song(&song, user).await {
+            Ok(_) => {
+                existing.push((song.name.clone(), song.artist.clone()));
+                added += 1;
+            }
+            Err(_) => failed += 1,
+        }
+    }
+    let mut msg = format!("Imported {added} song(s)");
+    if renamed > 0 {
+        msg += &format!(", {renamed} renamed because that title already exists");
+    }
+    if failed > 0 {
+        msg += &format!(", {failed} failed");
+    }
+    Ok(msg + ".")
+}
+
+/// Every song of the library as one backup file.
+async fn export_library(db: &Db, user: Option<&User>) -> Result<String, String> {
+    let mut songs = Vec::new();
+    for row in db.list_songs(user).await? {
+        songs.push(db.load_song(row.id, user).await?);
+    }
+    Ok(transfer::export_songs(&songs))
 }
 
 // ── Importing browser-stored songs into a server account ─────────────────────
@@ -2257,6 +2364,33 @@ fn SongView(
                 "📄  Export as PDF"
             }
 
+            // ── Export this song as a JSON file ───────────────────────────
+            button {
+                style: "
+                    margin-top: 12px;
+                    width: 100%;
+                    padding: 12px;
+                    background: #ffffff;
+                    color: #2563eb;
+                    border: 1.5px solid #2563eb;
+                    border-radius: 10px;
+                    font-size: 14px;
+                    font-weight: 700;
+                    cursor: pointer;
+                    font-family: inherit;
+                ",
+                onclick: move |_| {
+                    let s = song.read().clone();
+                    let filename = format!("{}.json", transfer::safe_filename(&s.name, "song"));
+                    let result = download_file(transfer::export_song(&s).as_bytes(), &filename, "application/json");
+                    *save_status.write() = match result {
+                        Ok(()) => format!("⬇ Exported {filename}"),
+                        Err(e) => format!("❌ Export failed: {e}"),
+                    };
+                },
+                "⬇  Export song (JSON)"
+            }
+
             // ── Save to DB button ─────────────────────────────────────────
             button {
                 style: "
@@ -4089,6 +4223,7 @@ fn LibraryPage() -> Element {
 
     let mut rows: Signal<Vec<SongRow>> = use_signal(Vec::new);
     let mut status: Signal<String> = use_signal(String::new);
+    let mut notice: Signal<String> = use_signal(String::new);
     // Bumped after an import so the list is fetched again.
     let mut reload: Signal<u32> = use_signal(|| 0);
 
@@ -4182,6 +4317,73 @@ fn LibraryPage() -> Element {
                         onclick: move |_| { nav.push(Route::NewSongPage {}); },
                         "+"
                     }
+                }
+
+                // ── Song files: import / export all ──────────────────────
+                div {
+                    style: "display: flex; gap: 8px; margin: 0 0 12px;",
+                    input {
+                        id: "song-import-input",
+                        r#type: "file",
+                        accept: ".json,application/json",
+                        style: "display: none;",
+                        onchange: move |_| {
+                            let db_val = db.read().clone();
+                            let user = current_user.read().clone();
+                            spawn(async move {
+                                match read_chosen_file("song-import-input").await {
+                                    Ok(Some((_, text))) => {
+                                        if let Some(d) = db_val {
+                                            match import_song_file(&d, user.as_ref(), &text).await {
+                                                Ok(msg) => {
+                                                    *status.write() = String::new();
+                                                    *notice.write() = msg;
+                                                    reload += 1;
+                                                }
+                                                Err(e) => {
+                                                    *notice.write() = String::new();
+                                                    *status.write() = format!("Import failed: {e}");
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Ok(None) => {}
+                                    Err(e) => *status.write() = format!("Import failed: {e}"),
+                                }
+                            });
+                        },
+                    }
+                    label {
+                        r#for: "song-import-input",
+                        style: "padding: 6px 12px; border: 1.5px solid #2563eb; border-radius: 8px; color: #2563eb; font-size: 12px; font-weight: 700; cursor: pointer;",
+                        "⬆ Import songs (JSON)"
+                    }
+                    button {
+                        style: "padding: 6px 12px; background: #ffffff; border: 1.5px solid #2563eb; border-radius: 8px; color: #2563eb; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit;",
+                        onclick: move |_| {
+                            let db_val = db.read().clone();
+                            let user = current_user.read().clone();
+                            spawn(async move {
+                                if let Some(d) = db_val {
+                                    let result = match export_library(&d, user.as_ref()).await {
+                                        Ok(text) => download_file(text.as_bytes(), "chord-shifter-songs.json", "application/json"),
+                                        Err(e) => Err(e),
+                                    };
+                                    match result {
+                                        Ok(()) => {
+                                            *status.write() = String::new();
+                                            *notice.write() = "Exported all songs to chord-shifter-songs.json.".to_string();
+                                        }
+                                        Err(e) => *status.write() = format!("Export failed: {e}"),
+                                    }
+                                }
+                            });
+                        },
+                        "⬇ Export all songs"
+                    }
+                }
+                if !notice.read().is_empty() {
+                    p { id: "song-file-notice", style: "color: #1e3a8a; font-size: 12px; font-weight: 600; margin: 0 0 8px;", "{notice}" }
                 }
 
                 // ── Offer to import songs stored in this browser ────────

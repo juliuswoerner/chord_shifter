@@ -9,6 +9,7 @@
 
 import { chromium } from 'playwright';
 import { execFileSync } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 
 const BASE_URL = process.env.BASE_URL ?? 'http://localhost:8080';
 const executablePath = process.env.CHROME || undefined;
@@ -75,6 +76,26 @@ try {
         const pdf = execFileSync('unzip', ['-p', file, entries[0]], { maxBuffer: 64 * 1024 * 1024 });
         expect(pdf.subarray(0, 5).toString() === '%PDF-', `${entries[0]} is not a PDF`);
         expect(pdf.length > 1000, `${entries[0]} is too small (${pdf.length} bytes)`);
+    });
+
+    await check('all songs can be exported as JSON in demo (localStorage) mode', async () => {
+        await page.getByRole('button', { name: '← Library' }).click();
+        await page.getByText('My Songs').waitFor();
+        const [download] = await Promise.all([
+            page.waitForEvent('download', { timeout: 15000 }),
+            page.getByRole('button', { name: 'Export all songs' }).click(),
+        ]);
+        const text = await readFile(await download.path(), 'utf8');
+        const file = JSON.parse(text);
+        const names = file.songs.map((x) => x.name);
+        for (const n of ['Sunrise Ballad', 'Midnight Groove', 'Piano Waltz', 'Twelve Bar Blues']) {
+            expect(names.includes(n), `export is missing ${n}`);
+        }
+        // Importing the same file again must not overwrite: every title gets a "(2)" twin.
+        await page.setInputFiles('#song-import-input', { name: 'again.json', mimeType: 'application/json', buffer: Buffer.from(text) });
+        await page.getByText(/Imported \d+ song\(s\), \d+ renamed because that title already exists\./).waitFor({ timeout: 15000 });
+        await page.getByText('Sunrise Ballad (2)').waitFor({ timeout: 15000 });
+        await page.getByText('Sunrise Ballad', { exact: true }).waitFor();
     });
 
     await check('no uncaught page errors', async () => {

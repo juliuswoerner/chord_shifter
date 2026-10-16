@@ -10,6 +10,7 @@
 // and serving a freshly built frontend.
 
 import { chromium } from 'playwright';
+import { readFile } from 'node:fs/promises';
 
 const BASE_URL = process.env.BASE_URL ?? 'http://localhost:8080';
 const executablePath = process.env.CHROME || undefined;
@@ -159,11 +160,68 @@ try {
         expect(apiCalls.some((c) => c.startsWith('POST /api/songs 200')), `save not called: ${apiCalls}`);
     });
 
-    await check('after logging out and in again the song is listed and opens', async () => {
+    await check('the song can be exported as a JSON file', async () => {
+        const [download] = await Promise.all([
+            page.waitForEvent('download', { timeout: 15000 }),
+            page.getByRole('button', { name: /Export song \(JSON\)/ }).click(),
+        ]);
+        expect(download.suggestedFilename() === `${songName}.json`, `file name: ${download.suggestedFilename()}`);
+        const file = JSON.parse(await readFile(await download.path(), 'utf8'));
+        expect(file.format === 'chord-shifter' && file.version === 1, `envelope: ${JSON.stringify(file).slice(0, 120)}`);
+        expect(file.song.name === songName && file.song.artist === 'E2E Band', 'exported song has the wrong name or artist');
+    });
+
+    await check('songs can be imported from a JSON file; duplicate titles are renamed, not overwritten', async () => {
         await page.getByRole('button', { name: '← Library' }).click();
+        await page.getByText('My Songs').waitFor();
+        const fileSong = `File Song ${Date.now()}`;
+        const bundle = {
+            format: 'chord-shifter', version: 1,
+            songs: [
+                { name: songName, artist: 'E2E Band', key: 'G Major', parts: [] },
+                { name: fileSong, artist: 'File Band', key: 'D Major', parts: [] },
+            ],
+        };
+        await page.setInputFiles('#song-import-input', {
+            name: 'songs.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(bundle)),
+        });
+        await page.getByText('Imported 2 song(s), 1 renamed because that title already exists.').waitFor({ timeout: 15000 });
+        await page.getByText(`${songName} (2)`).waitFor({ timeout: 15000 });
+        await page.getByText(fileSong).waitFor({ timeout: 15000 });
+        // The original is still there, unchanged.
+        await page.getByText(songName, { exact: true }).waitFor();
+    });
+
+    await check('an invalid file is rejected with a clear message and imports nothing', async () => {
+        const before = await page.getByTitle('Delete').count();
+        await page.setInputFiles('#song-import-input', { name: 'bad.json', mimeType: 'application/json', buffer: Buffer.from('not json') });
+        await page.getByText('Import failed: This is not a valid JSON file.').waitFor({ timeout: 15000 });
+        await page.setInputFiles('#song-import-input', {
+            name: 'other.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ hello: 'world' })),
+        });
+        await page.getByText(/does not look like a Chord Shifter song file/).waitFor({ timeout: 15000 });
+        expect((await page.getByTitle('Delete').count()) === before, 'a rejected file must not add songs');
+    });
+
+    await check('all songs can be exported as one backup file', async () => {
+        const [download] = await Promise.all([
+            page.waitForEvent('download', { timeout: 15000 }),
+            page.getByRole('button', { name: 'Export all songs' }).click(),
+        ]);
+        expect(download.suggestedFilename() === 'chord-shifter-songs.json', `file name: ${download.suggestedFilename()}`);
+        const file = JSON.parse(await readFile(await download.path(), 'utf8'));
+        const names = file.songs.map((x) => x.name);
+        for (const n of [importA, importB, songName, `${songName} (2)`]) {
+            expect(names.includes(n), `backup is missing "${n}": ${names}`);
+        }
+    });
+
+    await check('after logging out and in again the song is listed and opens', async () => {
+        const back = page.getByRole('button', { name: '← Library' });
+        if (await back.count()) await back.click(); // already on the library page after the file steps
         await page.getByRole('button', { name: 'Log out' }).first().click();
         await logIn();
-        await page.getByText(songName).waitFor({ timeout: 15000 });
+        await page.getByText(songName).first().waitFor({ timeout: 15000 });
         expect((await page.locator('#import-banner').count()) === 0, 'the import offer came back after importing');
         await page.getByText(songName).first().click();
         await page.waitForFunction(
@@ -178,7 +236,7 @@ try {
         await page.reload();
         await page.getByRole('button', { name: 'Get started', exact: true }).waitFor({ timeout: 30000 });
         await logIn();
-        await page.getByText(songName).waitFor({ timeout: 15000 });
+        await page.getByText(songName).first().waitFor({ timeout: 15000 });
     });
 
     await check('server mode leaves the old localStorage data untouched (nothing deleted)', async () => {
@@ -190,8 +248,9 @@ try {
     });
 
     await check('a song can be deleted', async () => {
+        const before = await page.getByTitle('Delete').count();
         await page.getByTitle('Delete').last().click();
-        await page.getByText(songName).waitFor({ state: 'detached', timeout: 15000 });
+        await page.waitForFunction((n) => document.querySelectorAll('[title="Delete"]').length === n - 1, before, { timeout: 15000 });
         expect(apiCalls.some((c) => /^DELETE \/api\/songs\/\d+ 204/.test(c)), `delete not called: ${apiCalls}`);
     });
 
