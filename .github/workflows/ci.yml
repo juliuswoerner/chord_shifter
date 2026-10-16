@@ -45,3 +45,41 @@ jobs:
       - run: cargo clippy --bin server --no-default-features --features server --all-targets
       - run: cargo test --bin server --no-default-features --features server
       - run: cargo build --bin server --no-default-features --features server
+
+  demo-smoke:
+    # Builds the web app like the Dockerfile does and drives the demo in a real browser:
+    # banner, demo login, song list, open a song, PDF export.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache Dioxus CLI
+        id: dx-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/dx
+          key: dx-0.6.3-${{ runner.os }}
+      - name: Install Dioxus CLI
+        if: steps.dx-cache.outputs.cache-hit != 'true'
+        run: cargo install dioxus-cli --version 0.6.3 --locked
+      - run: dx build --platform web --release
+      - name: Install Playwright
+        working-directory: tests/e2e
+        run: |
+          npm ci || npm install
+          npx playwright install --with-deps chromium
+      - name: Serve the build and run the smoke test
+        working-directory: tests/e2e
+        run: |
+          python3 -m http.server 8080 --directory ../../target/dx/chord_shifter/release/web/public &
+          sleep 2
+          BASE_URL=http://localhost:8080 node demo-smoke.mjs
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: demo-smoke-failure
+          path: tests/e2e/demo-smoke-failure.png
+          if-no-files-found: ignore
