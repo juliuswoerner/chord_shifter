@@ -1029,7 +1029,7 @@ async fn delete_song(
 }
 
 #[cfg(test)]
-mod tests {
+mod validation_tests {
     use super::validate_email;
 
     #[test]
