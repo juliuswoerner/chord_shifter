@@ -8,7 +8,7 @@
 // Requires the `playwright` package (npm i playwright).
 
 import { chromium } from 'playwright';
-import { readFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 
 const BASE_URL = process.env.BASE_URL ?? 'http://localhost:8080';
 const executablePath = process.env.CHROME || undefined;
@@ -57,10 +57,15 @@ try {
             page.getByRole('button', { name: /Export as PDF/ }).click(),
         ]);
         const file = await download.path();
-        const bytes = await readFile(file);
-        expect(bytes.length > 1000, `ZIP too small (${bytes.length} bytes)`);
-        expect(bytes.subarray(0, 2).toString() === 'PK', 'download is not a ZIP');
-        expect(bytes.includes(Buffer.from('.pdf')), 'ZIP does not contain a .pdf entry');
+        // `unzip -t` verifies the central directory and every entry's CRC.
+        execFileSync('unzip', ['-tq', file]);
+        const entries = execFileSync('unzip', ['-Z1', file], { encoding: 'utf8' })
+            .split('\n')
+            .filter((n) => n.endsWith('.pdf'));
+        expect(entries.length > 0, 'ZIP contains no .pdf entry');
+        const pdf = execFileSync('unzip', ['-p', file, entries[0]], { maxBuffer: 64 * 1024 * 1024 });
+        expect(pdf.subarray(0, 5).toString() === '%PDF-', `${entries[0]} is not a PDF`);
+        expect(pdf.length > 1000, `${entries[0]} is too small (${pdf.length} bytes)`);
     });
 
     await check('no uncaught page errors', async () => {
