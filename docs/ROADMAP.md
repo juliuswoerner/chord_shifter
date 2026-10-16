@@ -65,31 +65,39 @@ MemberChoice  { setlist_id, entry position/song_id, user_id, instrument: Option<
 1. **Bands**: create/rename/delete, invite and remove members, roles (owner/member),
    default instrument per member. M
 2. **Setlists**: create, add/remove/reorder songs from the band's songs. S–M
-3. **Setlist import**: this needs a decision on the source (see open questions). Start with
-   a plain-text/CSV list of titles (optionally `title;key`) matched against the library,
-   with a review screen for unmatched lines, and JSON import of a whole setlist.
-   Imported keys become `key_override`s. M
+3. **Setlist import**: JSON first, CSV second. JSON is the full-fidelity format (a versioned
+   export of a setlist: name, entries with song title/artist or id, key, notes), and the same
+   format is used for export so setlists can be backed up and moved between bands. CSV is a
+   simple table (`title,artist,key`, header row required) for lists made in a spreadsheet.
+   Both go through the same matching step: entries are matched to the band's songs by id,
+   then by title+artist; unmatched rows show on a review screen (pick a song, create a
+   placeholder, or skip). Imported keys become `key_override`s. M
 4. **Key overview**: one table for the setlist: song, original key, setlist key (editable
    dropdown or ±semitone buttons), reset button. Saves only the override. S–M
 5. **Instrument selection**: per-song instrument dropdown for the logged-in member in the
    setlist view, prefilled from the default. S
-6. **Combined PDF**: `pdf::generate_pdf_bytes` takes a single song and builds one document.
+6. **Combined PDF (per member)**: every member exports their own PDF, built from their own
+   instrument selections for that setlist (see the decisions below). `pdf::generate_pdf_bytes` takes a single song and builds one document.
    Refactor into a function that appends a song to an existing document (page numbering,
    title page/table of contents optional), then loop over entries: clone the song, apply
    the key override, pick the member's instrument sheet and capo/PDF font settings, render.
-   Page breaks between songs; stay within `printpdf` 0.6. Add tests for page count and
+   The exporting member's choices are used, so two members get different PDFs from the same setlist. Page breaks between songs; stay within `printpdf` 0.6. Add tests for page count and
    for the overrides. M–L
 7. **Tests** for override isolation (editing a setlist key leaves the song unchanged),
    membership permissions and the import parser. M
 
-### Open questions
+### Decisions
 
-- What format should setlist import accept? (plain text, CSV, JSON, another app's export?)
-- Should a setlist be one PDF per instrument/member, or only the PDF for the person
-  exporting? (Plan above: the exporting member's instrument choices.)
-- Can band members edit shared songs, or only the owner?
-- Do key overrides apply to every instrument sheet? (Plan above: yes; piano's own
-  transpose and guitar capo are applied on top.)
+- **Import formats:** JSON (primary) and CSV. Export uses the same JSON.
+- **Combined PDF:** each member exports a PDF with *their own* instrument selections; no
+  per-instrument bundle is needed. A band-wide "export for everyone" can come later.
+- **Editing:** all band members can edit band songs. Consequences to plan for: add
+  `updated_at`/`version` to songs and reject a save made against a stale version (show a
+  "someone else changed this, reload or merge" message) so two members don't silently
+  overwrite each other; optionally keep a short revision history so a bad edit can be
+  undone. Real-time co-editing stays out of scope. M
+- **Key overrides apply to every instrument sheet**; piano's own transpose and guitar capo are
+  applied on top.
 
 ## Phase 3 — Faster, safer editing (2–3 weeks)
 
@@ -109,11 +117,56 @@ MemberChoice  { setlist_id, entry position/song_id, user_id, instrument: Option<
 4. Tempo, time signature, bar counts in the header. S
 5. Stage/performance view (large text, dark mode, auto-scroll). M
 
-## Phase 5 — Reach and sharing (open-ended)
+## Phase 5 — iPad/iOS and Android app, with a live performance mode (4–8 weeks)
+
+Goal: an installable app for iPad, iPhone and Android, including a mode that shows the
+rendered sheet while still letting the player change instrument or transpose on the spot.
+Depends on Phase 1 (accounts/sync) and Phase 2 (setlists); the live mode itself can be
+built earlier on the web app.
+
+### Live performance mode (build this first, on the web)
+
+The app already has a rendered view that matches the PDF layout, a per-instrument sheet
+with its own capo/transpose, and `Song::transpose_to`/`apply_capo`. Live mode combines them:
+
+- Full-screen rendered sheet, large text, optional dark theme, screen kept awake.
+- A compact toolbar: **instrument switcher** (the six instruments), **transpose ±1 semitone** with
+  the resulting key shown, and capo (piano shows transpose instead, as today).
+- Changes are **temporary by default** (live only, reset when leaving the song). Optional
+  buttons: "keep for this setlist" (writes the setlist's `key_override`) and "keep as my
+  instrument for this song" (writes the member's choice).
+- Setlist navigation: next/previous song, jump list, swipe or large tap targets.
+- Touch-friendly tab/drum rendering that fits the screen width, or horizontal scroll.
+- Must work offline: the setlist and its songs are cached on the device. M–L
+
+### Packaging as an app
+
+The current frontend is a Dioxus WASM web app that relies on browser APIs (`localStorage`,
+Blob downloads via `web-sys`). Options, cheapest first:
+
+1. **Installable PWA** (manifest, service worker, offline cache). Works on iPad, iPhone and
+   Android from the browser right away, no store needed. Limits on iOS: storage can be
+   evicted and some APIs are restricted. S–M
+2. **Native shell around the web build** (for example Capacitor, or Tauri 2 mobile) published to
+   the App Store and Google Play. Reuses the existing WASM frontend and `web-sys` code, and
+   adds file sharing for PDFs, background storage, and screen-wake. M–L
+3. **Dioxus native mobile** (`dx` targets for iOS/Android). Single Rust codebase, but the
+   `web-sys` code (storage, downloads, PDF blob) would have to be ported to native APIs and
+   the target is less mature. Not recommended unless there is a reason to leave the web build.
+
+Recommendation: ship the PWA first, then wrap the same build with option 2 if store presence
+or reliable offline storage is needed. I have not built or tested any of these here; check
+the current state of each toolchain before committing.
+
+Also needed: Apple Developer (annual fee) and Google Play (one-time fee) accounts, app icons and
+splash screens (SheetWave logo exists in `assets/`), a privacy policy, and a tested PDF
+share/save flow on iOS (downloads work differently from desktop browsers).
+
+## Phase 6 — Reach and sharing (open-ended)
 
 - Read-only share links and setlists (needs Phase 1; setlist sharing is covered in Phase 2).
 - ChordPro import/export. M
-- Mobile layout and PWA/offline. M–L
+- Mobile layout polish for phones (the iPad/Android app is Phase 5). M
 - Accessibility and i18n (German UI first). M
 - Real-time collaboration, MusicXML/MIDI, audio playback: only if there is demand.
 

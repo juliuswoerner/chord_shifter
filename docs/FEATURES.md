@@ -77,7 +77,8 @@ Grouped roughly by how much they would matter to users.
 **Data and accounts**
 - Bands with members and a default instrument, setlists with per-setlist key overrides,
   setlist import, per-member instrument choice per song, and one combined setlist PDF
-  (planned in ROADMAP Phase 2).
+  (planned in ROADMAP Phase 2). Setlist import/export as JSON and CSV; all band members
+  can edit shared songs, with a version check to avoid silent overwrites.
 - Connect the frontend to the server API (cloud sync, multi-device).
 - Import/export a song as JSON (backup, sharing); import from ChordPro or plain text.
 - Share a read-only link; setlists; folders or tags; search and sort in the library.
@@ -100,7 +101,9 @@ Grouped roughly by how much they would matter to users.
 - Chord diagrams (guitar, piano) printed with the sheet.
 
 **Platform**
-- Mobile layout and PWA/offline support.
+- Installable app for iPad/iOS and Android (PWA first, then store packaging) with a live
+  performance mode: rendered sheet with on-the-spot instrument switch and transpose,
+  offline setlists (ROADMAP Phase 5).
 - Desktop build: the README says `cargo run` runs a desktop app, but the manifest
   only defines the web and server binaries (see ROADMAP Phase 0).
 - Accessibility pass (keyboard navigation in the grids, contrast, labels).
