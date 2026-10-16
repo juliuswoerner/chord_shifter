@@ -47,7 +47,7 @@ printpdf     = { version = "0.6", optional = true }
 manganis     = { version = "0.6.2", optional = true }
 web-sys      = { version = "0.3", optional = true, features = [
     "Blob", "BlobPropertyBag", "Document",
-    "Element", "File", "FileList", "Headers", "HtmlAnchorElement", "HtmlInputElement",
+    "Element", "File", "FileList", "Headers", "HtmlAnchorElement", "HtmlElement", "HtmlInputElement",
     "Location", "Request", "RequestInit", "Response", "Storage", "Url", "Window",
 ] }
 wasm-bindgen = { version = "0.2", optional = true }

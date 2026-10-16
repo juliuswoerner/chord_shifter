@@ -216,7 +216,20 @@ async fn export_library(db: &Db, user: Option<&User>) -> Result<String, String> 
     for row in db.list_songs(user).await? {
         songs.push(db.load_song(row.id, user).await?);
     }
-    Ok(transfer::export_songs(&songs))
+    transfer::export_songs_checked(&songs)
+}
+
+/// Open the browser's file chooser of the (hidden) `<input type="file">` with this id.
+/// A real button calls this, so the action is reachable and operable by keyboard.
+fn open_file_picker(input_id: &str) {
+    use wasm_bindgen::JsCast;
+    if let Some(input) = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id(input_id))
+        .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
+    {
+        input.click();
+    }
 }
 
 // ── Importing browser-stored songs into a server account ─────────────────────
@@ -4224,6 +4237,8 @@ fn LibraryPage() -> Element {
     let mut rows: Signal<Vec<SongRow>> = use_signal(Vec::new);
     let mut status: Signal<String> = use_signal(String::new);
     let mut notice: Signal<String> = use_signal(String::new);
+    // True while a file is being imported: a second import would race the first.
+    let mut importing: Signal<bool> = use_signal(|| false);
     // Bumped after an import so the list is fetched again.
     let mut reload: Signal<u32> = use_signal(|| 0);
 
@@ -4328,9 +4343,13 @@ fn LibraryPage() -> Element {
                         accept: ".json,application/json",
                         style: "display: none;",
                         onchange: move |_| {
+                            if importing() {
+                                return;
+                            }
                             let db_val = db.read().clone();
                             let user = current_user.read().clone();
                             spawn(async move {
+                                *importing.write() = true;
                                 match read_chosen_file("song-import-input").await {
                                     Ok(Some((_, text))) => {
                                         if let Some(d) = db_val {
@@ -4350,13 +4369,15 @@ fn LibraryPage() -> Element {
                                     Ok(None) => {}
                                     Err(e) => *status.write() = format!("Import failed: {e}"),
                                 }
+                                *importing.write() = false;
                             });
                         },
                     }
-                    label {
-                        r#for: "song-import-input",
-                        style: "padding: 6px 12px; border: 1.5px solid #2563eb; border-radius: 8px; color: #2563eb; font-size: 12px; font-weight: 700; cursor: pointer;",
-                        "⬆ Import songs (JSON)"
+                    button {
+                        disabled: importing(),
+                        style: "padding: 6px 12px; background: #ffffff; border: 1.5px solid #2563eb; border-radius: 8px; color: #2563eb; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit;",
+                        onclick: move |_| open_file_picker("song-import-input"),
+                        if importing() { "Importing…" } else { "⬆ Import songs (JSON)" }
                     }
                     button {
                         style: "padding: 6px 12px; background: #ffffff; border: 1.5px solid #2563eb; border-radius: 8px; color: #2563eb; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit;",

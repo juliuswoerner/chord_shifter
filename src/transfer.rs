@@ -41,6 +41,26 @@ pub fn export_songs(songs: &[Song]) -> String {
     .unwrap_or_default()
 }
 
+/// Like [`export_songs`], but refuses a backup that [`import_songs`] would reject
+/// (too many songs or too large), so a "successful" export is always restorable.
+pub fn export_songs_checked(songs: &[Song]) -> Result<String, String> {
+    if songs.len() > MAX_SONGS {
+        return Err(format!(
+            "Your library has {} songs; a backup file can hold at most {MAX_SONGS}. Export the songs individually instead.",
+            songs.len()
+        ));
+    }
+    let text = export_songs(songs);
+    if text.len() > MAX_BYTES {
+        return Err(format!(
+            "Your library is too large for one backup file ({} MB, the limit is {} MB). Export the songs individually instead.",
+            text.len() / (1024 * 1024) + 1,
+            MAX_BYTES / (1024 * 1024)
+        ));
+    }
+    Ok(text)
+}
+
 /// Parse and validate the contents of an import file.
 pub fn import_songs(text: &str) -> Result<Vec<Song>, String> {
     if text.len() > MAX_BYTES {
@@ -163,6 +183,27 @@ mod tests {
         let songs = demo_songs();
         let back = import_songs(&export_songs(&songs)).unwrap();
         assert_eq!(back, songs);
+    }
+
+    #[test]
+    fn a_backup_that_import_would_refuse_is_not_exported() {
+        let song = demo_songs().remove(0);
+        let too_many = vec![song.clone(); MAX_SONGS + 1];
+        assert!(export_songs_checked(&too_many)
+            .unwrap_err()
+            .contains("at most"));
+        // Under the limits the checked export equals the plain one and imports back.
+        let few = demo_songs();
+        let text = export_songs_checked(&few).unwrap();
+        assert_eq!(text, export_songs(&few));
+        assert_eq!(import_songs(&text).unwrap(), few);
+        // Too large by size.
+        let mut fat = song;
+        fat.vocals_notes = "x".repeat(MAX_BYTES / 4);
+        let fat_library = vec![fat; 5];
+        assert!(export_songs_checked(&fat_library)
+            .unwrap_err()
+            .contains("too large"));
     }
 
     #[test]

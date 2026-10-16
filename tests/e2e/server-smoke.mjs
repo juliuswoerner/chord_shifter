@@ -171,9 +171,16 @@ try {
         expect(file.song.name === songName && file.song.artist === 'E2E Band', 'exported song has the wrong name or artist');
     });
 
-    await check('songs can be imported from a JSON file; duplicate titles are renamed, not overwritten', async () => {
+    await check('the import control is a real button that opens the file chooser', async () => {
         await page.getByRole('button', { name: '← Library' }).click();
         await page.getByText('My Songs').waitFor();
+        const button = page.getByRole('button', { name: /Import songs/ });
+        await button.focus(); // keyboard-reachable
+        const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: 15000 }), page.keyboard.press('Enter')]);
+        expect(chooser.isMultiple() === false, 'unexpected multiple file chooser');
+    });
+
+    await check('songs can be imported from a JSON file; duplicate titles are renamed, not overwritten', async () => {
         const fileSong = `File Song ${Date.now()}`;
         const bundle = {
             format: 'chord-shifter', version: 1,
