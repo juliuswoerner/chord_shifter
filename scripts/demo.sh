@@ -38,8 +38,9 @@ if ! command -v dx >/dev/null 2>&1; then
     echo "Missing: Dioxus CLI (cargo install dioxus-cli --version 0.6.3 --locked)" >&2
     fail=1
 fi
-if command -v rustup >/dev/null 2>&1 \
-    && ! rustup target list --installed | grep -qx wasm32-unknown-unknown; then
+# Check the target in the sysroot so this also works without rustup.
+if command -v rustc >/dev/null 2>&1 \
+    && [[ ! -d "$(rustc --print sysroot)/lib/rustlib/wasm32-unknown-unknown" ]]; then
     echo "Missing: WASM target (rustup target add wasm32-unknown-unknown)" >&2
     fail=1
 fi
