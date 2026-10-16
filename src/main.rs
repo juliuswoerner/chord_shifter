@@ -33,37 +33,6 @@ use chord_shifter::demo;
 use chord_shifter::song;
 mod pdf;
 
-// ── Trigger a browser PDF download ───────────────────────────────────────────
-#[allow(dead_code)]
-fn trigger_download(bytes: Vec<u8>, filename: &str) {
-    use js_sys::Uint8Array;
-    use wasm_bindgen::JsCast;
-    use web_sys::{Blob, BlobPropertyBag, HtmlAnchorElement, Url};
-
-    let array = Uint8Array::from(bytes.as_slice());
-    let parts = js_sys::Array::new();
-    parts.push(&array);
-
-    let opts = BlobPropertyBag::new();
-    opts.set_type("application/pdf");
-
-    let blob = Blob::new_with_u8_array_sequence_and_options(&parts, &opts).expect("blob");
-    let url = Url::create_object_url_with_blob(&blob).expect("object url");
-
-    let window = web_sys::window().expect("window");
-    let document = window.document().expect("document");
-    let a: HtmlAnchorElement = document
-        .create_element("a")
-        .expect("a")
-        .dyn_into()
-        .expect("cast");
-
-    a.set_href(&url);
-    a.set_download(&format!("{filename}.pdf"));
-    a.click();
-    let _ = Url::revoke_object_url(&url);
-}
-
 // ── Web storage backend (localStorage) ───────────────────────────────────────
 
 const LS_SONGS_KEY: &str = "chord_shifter_songs";
@@ -316,10 +285,6 @@ impl Db {
         Ok(())
     }
 
-    fn save_pdf(&self, _: i64, _: &[u8]) -> Result<i64, String> {
-        Ok(0) // PDFs not persisted in the browser (localStorage size limits)
-    }
-
     fn create_user(&self, username: &str, password: &str) -> Result<i64, String> {
         let mut users = ls_read_users();
         if users.iter().any(|u| u.username == username) {
@@ -492,7 +457,8 @@ fn App() -> Element {
             .map_err(|e| eprintln!("DB open failed: {e}"))
             .ok()
     });
-    let demo = demo_mode();
+    // Captured once: in-app navigation drops the `?demo` query, but the mode must stay on.
+    let demo = use_hook(demo_mode);
     if demo {
         if let Some(d) = db.read().as_ref() {
             d.seed_demo(false);
@@ -2045,24 +2011,10 @@ fn SongView(
                 ",
                 onclick: move |_| {
                     let s       = song.read().clone();
-                    let note    = notation();
                     let user_id = current_user.read().as_ref().map(|u| u.id).unwrap_or(0);
-                    let base_pdf = s.pdf_settings.get("Base").cloned().unwrap_or_default();
-                    let pns = base_pdf.part_name_size as f32;
-                    let cs  = base_pdf.chord_size as f32;
                     if let Some(db_ref) = db.read().as_ref() {
                         match db_ref.save_song(&s, user_id) {
-                            Ok(song_id) => {
-                                println!("✅  Song saved (id={song_id})");
-                                // Also generate and store the current PDF
-                                match pdf::generate_pdf_bytes(&s, note, pns, cs, 0_i8) {
-                                    Ok(bytes) => match db_ref.save_pdf(song_id, &bytes) {
-                                        Ok(pdf_id) => println!("✅  PDF stored (id={pdf_id})"),
-                                        Err(e) => eprintln!("❌  PDF store failed: {e}"),
-                                    },
-                                    Err(e) => eprintln!("❌  PDF generation failed: {e}"),
-                                }
-                            }
+                            Ok(song_id) => println!("✅  Song saved (id={song_id})"),
                             Err(e) => eprintln!("❌  Save failed: {e}"),
                         }
                     }
@@ -2253,7 +2205,7 @@ fn LoginScreen(
                     div {
                         style: "display: flex; gap: 8px;",
                         button {
-                            style: "padding: 8px 12px; background: #f59e0b; color: #ffffff; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit;",
+                            style: "padding: 8px 12px; background: #f59e0b; color: #111827; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit;",
                             onclick: move |_| {
                                 if let Some(db_ref) = db.read().as_ref() {
                                     match db_ref.verify_user(demo::DEMO_EMAIL, demo::DEMO_PASSWORD) {
@@ -2397,7 +2349,6 @@ fn TabEditor(song: Signal<Song>, part_index: usize, bass: bool, drums: bool) -> 
 
     const STRING_NAMES_GUITAR: [&str; 6] = ["e", "B", "G", "D", "A", "E"];
     const STRING_NAMES_BASS: [&str; 4] = ["G", "D", "A", "E"];
-    #[allow(dead_code)]
     const STRING_NAMES_DRUMS: [&str; 8] = ["K", "S", "Hi", "R", "C", "T1", "T2", "T3"];
     let num_strings: usize = if bass {
         4
