@@ -83,8 +83,8 @@ struct AppState {
 /// Payload embedded inside every JWT token.
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
-    /// User id.
-    sub: i64,
+    /// User id, as a string (JWT `sub` must be a string; jsonwebtoken 9.3 rejects numbers).
+    sub: String,
     email: String,
     /// Expiry as a Unix timestamp (seconds).
     exp: usize,
@@ -121,8 +121,14 @@ impl FromRequestParts<AppState> for AuthUser {
         )
         .map_err(|e| (StatusCode::UNAUTHORIZED, format!("Invalid token: {e}")))?;
 
+        let id = data.claims.sub.parse::<i64>().map_err(|_| {
+            (
+                StatusCode::UNAUTHORIZED,
+                "Invalid token: bad subject".to_string(),
+            )
+        })?;
         Ok(AuthUser {
-            id: data.claims.sub,
+            id,
             email: data.claims.email,
         })
     }
@@ -137,7 +143,7 @@ fn make_token(user_id: i64, email: &str, secret: &str) -> Result<String, String>
         + 30 * 24 * 3600) as usize;
 
     let claims = Claims {
-        sub: user_id,
+        sub: user_id.to_string(),
         email: email.to_string(),
         exp,
     };
@@ -350,6 +356,90 @@ struct SongListItem {
     instruments: Vec<song::Instrument>,
 }
 
+// ── Router ────────────────────────────────────────────────────────────────────
+
+/// Rate-limit key: the client IP. On Fly.io the proxy sets `Fly-Client-IP` (clients
+/// cannot override it there); otherwise the TCP peer address is used. Without the
+/// header every user behind the proxy would share one limit.
+#[derive(Clone)]
+struct ClientIpKeyExtractor;
+
+impl tower_governor::key_extractor::KeyExtractor for ClientIpKeyExtractor {
+    type Key = std::net::IpAddr;
+
+    fn extract<T>(
+        &self,
+        req: &axum::http::Request<T>,
+    ) -> Result<Self::Key, tower_governor::GovernorError> {
+        req.headers()
+            .get("fly-client-ip")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse().ok())
+            .or_else(|| {
+                req.extensions()
+                    .get::<axum::extract::ConnectInfo<SocketAddr>>()
+                    .map(|c| c.0.ip())
+            })
+            .ok_or(tower_governor::GovernorError::UnableToExtractKey)
+    }
+}
+
+/// Build the full application router. `rate_limit` is switched off in tests, which
+/// call the router directly without a peer address.
+fn build_app(state: AppState, rate_limit: bool) -> Router {
+    let mut auth_routes = Router::new()
+        .route("/auth/register", post(register))
+        .route("/auth/login", post(login))
+        .route("/auth/verify/{token}", get(verify_email));
+    if rate_limit {
+        // Burst of 5, then max 1 request every 2 s per client IP.
+        let conf = std::sync::Arc::new(
+            tower_governor::governor::GovernorConfigBuilder::default()
+                .period(std::time::Duration::from_secs(2))
+                .burst_size(5)
+                .key_extractor(ClientIpKeyExtractor)
+                .finish()
+                .unwrap(),
+        );
+        auth_routes = auth_routes.layer(tower_governor::GovernorLayer { config: conf });
+    }
+
+    let song_routes = Router::new()
+        .route("/songs", get(list_songs).post(save_song))
+        .route("/songs/{id}", get(load_song).delete(delete_song));
+
+    let api = auth_routes.merge(song_routes);
+
+    // Lock CORS to the configured APP_URL origin only.
+    let allowed_origin = state
+        .app_url
+        .parse::<axum::http::HeaderValue>()
+        .unwrap_or_else(|err| {
+            panic!(
+                "Invalid APP_URL for CORS allow_origin: {:?} ({err})",
+                state.app_url
+            )
+        });
+    let cors = CorsLayer::new()
+        .allow_origin(allowed_origin)
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::DELETE,
+            axum::http::Method::OPTIONS,
+        ])
+        .allow_headers([
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::CONTENT_TYPE,
+        ]);
+
+    Router::new()
+        .nest("/api", api)
+        .fallback_service(ServeDir::new("dist"))
+        .layer(cors)
+        .with_state(state)
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -442,63 +532,19 @@ async fn main() {
         app_url,
     };
 
-    // Rate-limit auth endpoints: burst of 5, then max 1 request every 2 s per IP.
-    let auth_governor_conf = std::sync::Arc::new(
-        tower_governor::governor::GovernorConfigBuilder::default()
-            .period(std::time::Duration::from_secs(2))
-            .burst_size(5)
-            .finish()
-            .unwrap(),
-    );
-
-    let auth_routes = Router::new()
-        .route("/auth/register", post(register))
-        .route("/auth/login", post(login))
-        .route("/auth/verify/{token}", get(verify_email))
-        .layer(tower_governor::GovernorLayer {
-            config: auth_governor_conf,
-        });
-
-    let song_routes = Router::new()
-        .route("/songs", get(list_songs).post(save_song))
-        .route("/songs/{id}", get(load_song).delete(delete_song));
-
-    let api = auth_routes.merge(song_routes);
-
-    // Lock CORS to the configured APP_URL origin only.
-    let allowed_origin = state
-        .app_url
-        .parse::<axum::http::HeaderValue>()
-        .unwrap_or_else(|err| {
-            panic!(
-                "Invalid APP_URL for CORS allow_origin: {:?} ({err})",
-                state.app_url
-            )
-        });
-    let cors = CorsLayer::new()
-        .allow_origin(allowed_origin)
-        .allow_methods([
-            axum::http::Method::GET,
-            axum::http::Method::POST,
-            axum::http::Method::DELETE,
-            axum::http::Method::OPTIONS,
-        ])
-        .allow_headers([
-            axum::http::header::AUTHORIZATION,
-            axum::http::header::CONTENT_TYPE,
-        ]);
-
-    let app = Router::new()
-        .nest("/api", api)
-        .fallback_service(ServeDir::new("dist"))
-        .layer(cors)
-        .with_state(state);
+    let app = build_app(state, true);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     println!("Chord Shifter server listening on http://{addr}");
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    // `ConnectInfo` gives the rate limiter the peer address when no proxy header is present.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }
 
 // ── Migrations ────────────────────────────────────────────────────────────────
@@ -573,6 +619,21 @@ async fn run_migrations(pool: &SqlitePool) {
     .execute(pool)
     .await
     .expect("Failed to create songs table");
+
+    // Idempotent: per-sheet PDF font sizes were not persisted by earlier versions.
+    match sqlx::query("ALTER TABLE songs ADD COLUMN pdf_settings_json TEXT NOT NULL DEFAULT '{}'")
+        .execute(pool)
+        .await
+    {
+        Ok(_) => {}
+        Err(sqlx::Error::Database(db_err))
+            if db_err
+                .message()
+                .contains("duplicate column name: pdf_settings_json") => {}
+        Err(err) => {
+            panic!("Failed to add songs.pdf_settings_json column: {err}");
+        }
+    }
 }
 
 // ── Auth handlers ─────────────────────────────────────────────────────────────
@@ -896,6 +957,8 @@ async fn save_song(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let ic_json = serde_json::to_string(&s.instrument_capos)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let pdf_json = serde_json::to_string(&s.pdf_settings)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // Upsert: update if name + artist already exist for this user.
     let existing = sqlx::query_scalar::<_, i64>(
@@ -916,7 +979,8 @@ async fn save_song(
                     instruments_json      = ?,
                     vocals_notes          = ?,
                     instrument_parts_json = ?,
-                    instrument_capos_json = ?
+                    instrument_capos_json = ?,
+                    pdf_settings_json     = ?
              WHERE  id = ?",
         )
         .bind(&s.key)
@@ -925,6 +989,7 @@ async fn save_song(
         .bind(&s.vocals_notes)
         .bind(&ip_json)
         .bind(&ic_json)
+        .bind(&pdf_json)
         .bind(id)
         .execute(&state.db)
         .await
@@ -934,8 +999,9 @@ async fn save_song(
         sqlx::query_scalar::<_, i64>(
             "INSERT INTO songs
                 (user_id, name, artist, key_name, parts_json, instruments_json,
-                 vocals_notes, instrument_parts_json, instrument_capos_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 vocals_notes, instrument_parts_json, instrument_capos_json,
+                 pdf_settings_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              RETURNING id",
         )
         .bind(user.id)
@@ -947,6 +1013,7 @@ async fn save_song(
         .bind(&s.vocals_notes)
         .bind(&ip_json)
         .bind(&ic_json)
+        .bind(&pdf_json)
         .fetch_one(&state.db)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -970,11 +1037,13 @@ async fn load_song(
         String,
         String,
         String,
+        String,
     );
 
     let row = sqlx::query_as::<_, Row>(
         "SELECT name, artist, key_name, parts_json, instruments_json,
-                vocals_notes, instrument_parts_json, instrument_capos_json
+                vocals_notes, instrument_parts_json, instrument_capos_json,
+                pdf_settings_json
          FROM   songs
          WHERE  id = ? AND (user_id = ? OR user_id = 0)",
     )
@@ -990,6 +1059,7 @@ async fn load_song(
     let instruments = serde_json::from_str(&row.4).unwrap_or_default();
     let instrument_parts = serde_json::from_str(&row.6).unwrap_or_default();
     let instrument_capos = serde_json::from_str(&row.7).unwrap_or_default();
+    let pdf_settings = serde_json::from_str(&row.8).unwrap_or_default();
 
     Ok(Json(song::Song {
         name: row.0,
@@ -1000,7 +1070,7 @@ async fn load_song(
         vocals_notes: row.5,
         instrument_parts,
         instrument_capos,
-        pdf_settings: std::collections::HashMap::new(),
+        pdf_settings,
     }))
 }
 
@@ -1046,5 +1116,480 @@ mod validation_tests {
     fn validate_email_rejects_short_or_non_alphabetic_tld() {
         assert!(validate_email("a@b.c").is_err());
         assert!(validate_email("a@b.c0m").is_err());
+    }
+}
+
+#[cfg(test)]
+mod api_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{header, Method, Request, StatusCode};
+    use tower::ServiceExt;
+
+    const PASSWORD: &str = "Str0ng-Passw0rd!";
+
+    async fn test_state() -> AppState {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory SQLite");
+        run_migrations(&pool).await;
+        AppState {
+            db: pool,
+            jwt_secret: hex::encode([7u8; 32]),
+            cipher: Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&[0u8; 32])),
+            smtp_host: None,
+            smtp_port: 587,
+            smtp_username: None,
+            smtp_password: None,
+            smtp_from: None,
+            // localhost = local mode: users are verified automatically.
+            app_url: "http://localhost:8080".to_string(),
+        }
+    }
+
+    async fn send(
+        app: &Router,
+        method: Method,
+        uri: &str,
+        token: Option<&str>,
+        body: Option<serde_json::Value>,
+        extra_header: Option<(&str, &str)>,
+    ) -> (StatusCode, String) {
+        let mut req = Request::builder().method(method).uri(uri);
+        if let Some(t) = token {
+            req = req.header(header::AUTHORIZATION, format!("Bearer {t}"));
+        }
+        if let Some((k, v)) = extra_header {
+            req = req.header(k, v);
+        }
+        let req = match body {
+            Some(b) => req
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(b.to_string())),
+            None => req.body(Body::empty()),
+        }
+        .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    fn creds(email: &str) -> serde_json::Value {
+        serde_json::json!({ "email": email, "password": PASSWORD })
+    }
+
+    #[tokio::test]
+    async fn register_then_login_returns_a_token() {
+        let app = build_app(test_state().await, false);
+        let (s, _) = send(
+            &app,
+            Method::POST,
+            "/api/auth/register",
+            None,
+            Some(creds("a@example.com")),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::CREATED);
+        let (s, body) = send(
+            &app,
+            Method::POST,
+            "/api/auth/login",
+            None,
+            Some(creds("a@example.com")),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(v["token"].as_str().is_some_and(|t| !t.is_empty()));
+        assert_eq!(v["email"], "a@example.com");
+    }
+
+    #[tokio::test]
+    async fn duplicate_registration_is_rejected() {
+        let app = build_app(test_state().await, false);
+        send(
+            &app,
+            Method::POST,
+            "/api/auth/register",
+            None,
+            Some(creds("a@example.com")),
+            None,
+        )
+        .await;
+        let (s, _) = send(
+            &app,
+            Method::POST,
+            "/api/auth/register",
+            None,
+            Some(creds("A@Example.com")),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn wrong_password_is_unauthorized() {
+        let app = build_app(test_state().await, false);
+        send(
+            &app,
+            Method::POST,
+            "/api/auth/register",
+            None,
+            Some(creds("a@example.com")),
+            None,
+        )
+        .await;
+        let bad = serde_json::json!({ "email": "a@example.com", "password": "nope" });
+        let (s, _) = send(&app, Method::POST, "/api/auth/login", None, Some(bad), None).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn weak_password_is_rejected() {
+        let app = build_app(test_state().await, false);
+        let weak = serde_json::json!({ "email": "a@example.com", "password": "short" });
+        let (s, _) = send(
+            &app,
+            Method::POST,
+            "/api/auth/register",
+            None,
+            Some(weak),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn song_routes_require_a_token() {
+        let app = build_app(test_state().await, false);
+        let (s, _) = send(&app, Method::GET, "/api/songs", None, None, None).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        let (s, _) = send(
+            &app,
+            Method::GET,
+            "/api/songs",
+            Some("not-a-token"),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+    }
+
+    // Regression: with the rate limiter on, auth routes answered 500 "Unable To Extract Key!"
+    // because no client address was available.
+    #[tokio::test]
+    async fn rate_limited_auth_routes_work_with_a_proxy_header() {
+        let app = build_app(test_state().await, true);
+        let hdr = Some(("fly-client-ip", "203.0.113.9"));
+        let (s, body) = send(
+            &app,
+            Method::POST,
+            "/api/auth/register",
+            None,
+            Some(creds("a@example.com")),
+            hdr,
+        )
+        .await;
+        assert_eq!(s, StatusCode::CREATED, "{body}");
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_works_with_the_peer_address() {
+        let app = build_app(test_state().await, true);
+        let mut req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/auth/login")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(creds("nobody@example.com").to_string()))
+            .unwrap();
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(SocketAddr::from((
+                [127, 0, 0, 1],
+                5555,
+            ))));
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED); // reached the handler
+    }
+
+    #[tokio::test]
+    async fn rate_limit_is_per_client_ip() {
+        let app = build_app(test_state().await, true);
+        let login = |ip: &'static str| {
+            let app = app.clone();
+            async move {
+                send(
+                    &app,
+                    Method::POST,
+                    "/api/auth/login",
+                    None,
+                    Some(creds("nobody@example.com")),
+                    Some(("fly-client-ip", ip)),
+                )
+                .await
+                .0
+            }
+        };
+        // Burst of 5 passes (401 = reached the handler), the 6th from the same IP is limited.
+        for _ in 0..5 {
+            assert_eq!(login("198.51.100.1").await, StatusCode::UNAUTHORIZED);
+        }
+        assert_eq!(login("198.51.100.1").await, StatusCode::TOO_MANY_REQUESTS);
+        // Another client is unaffected.
+        assert_eq!(login("198.51.100.2").await, StatusCode::UNAUTHORIZED);
+    }
+
+    // ── Songs ────────────────────────────────────────────────────────────────
+
+    async fn register_and_login(app: &Router, email: &str) -> String {
+        send(
+            app,
+            Method::POST,
+            "/api/auth/register",
+            None,
+            Some(creds(email)),
+            None,
+        )
+        .await;
+        let (s, body) = send(
+            app,
+            Method::POST,
+            "/api/auth/login",
+            None,
+            Some(creds(email)),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{body}");
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["token"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    fn song_body(name: &str) -> serde_json::Value {
+        let mut song = chord_shifter::demo::demo_songs().remove(0);
+        song.name = name.to_string();
+        serde_json::json!({ "song": song })
+    }
+
+    async fn save(app: &Router, token: &str, body: serde_json::Value) -> i64 {
+        let (s, resp) = send(
+            app,
+            Method::POST,
+            "/api/songs",
+            Some(token),
+            Some(body),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{resp}");
+        serde_json::from_str::<serde_json::Value>(&resp).unwrap()["id"]
+            .as_i64()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_song_round_trips_with_all_its_fields() {
+        let app = build_app(test_state().await, false);
+        let token = register_and_login(&app, "a@example.com").await;
+        let original = chord_shifter::demo::demo_songs().remove(3); // has pdf_settings
+        assert!(!original.pdf_settings.is_empty());
+        let id = save(&app, &token, serde_json::json!({ "song": original })).await;
+
+        let (s, body) = send(
+            &app,
+            Method::GET,
+            &format!("/api/songs/{id}"),
+            Some(&token),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{body}");
+        let loaded: song::Song = serde_json::from_str(&body).unwrap();
+        assert_eq!(loaded, original);
+    }
+
+    #[tokio::test]
+    async fn saving_the_same_name_and_artist_updates_instead_of_duplicating() {
+        let app = build_app(test_state().await, false);
+        let token = register_and_login(&app, "a@example.com").await;
+        let first = save(&app, &token, song_body("Tune")).await;
+        let mut changed = song_body("Tune");
+        changed["song"]["key"] = serde_json::json!("G Major");
+        let second = save(&app, &token, changed).await;
+        assert_eq!(first, second);
+        let (_, list) = send(&app, Method::GET, "/api/songs", Some(&token), None, None).await;
+        let items: Vec<serde_json::Value> = serde_json::from_str(&list).unwrap();
+        assert_eq!(items.len(), 1);
+        let (_, body) = send(
+            &app,
+            Method::GET,
+            &format!("/api/songs/{first}"),
+            Some(&token),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(
+            serde_json::from_str::<song::Song>(&body).unwrap().key,
+            "G Major"
+        );
+    }
+
+    #[tokio::test]
+    async fn users_cannot_see_or_delete_each_others_songs() {
+        let app = build_app(test_state().await, false);
+        let alice = register_and_login(&app, "alice@example.com").await;
+        let bob = register_and_login(&app, "bob@example.com").await;
+        let id = save(&app, &alice, song_body("Private")).await;
+
+        let (_, list) = send(&app, Method::GET, "/api/songs", Some(&bob), None, None).await;
+        assert_eq!(
+            serde_json::from_str::<Vec<serde_json::Value>>(&list)
+                .unwrap()
+                .len(),
+            0
+        );
+        let (s, _) = send(
+            &app,
+            Method::GET,
+            &format!("/api/songs/{id}"),
+            Some(&bob),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        let (s, _) = send(
+            &app,
+            Method::DELETE,
+            &format!("/api/songs/{id}"),
+            Some(&bob),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        // Still there for the owner.
+        let (s, _) = send(
+            &app,
+            Method::GET,
+            &format!("/api/songs/{id}"),
+            Some(&alice),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn deleting_a_song_removes_it() {
+        let app = build_app(test_state().await, false);
+        let token = register_and_login(&app, "a@example.com").await;
+        let id = save(&app, &token, song_body("Gone")).await;
+        let (s, _) = send(
+            &app,
+            Method::DELETE,
+            &format!("/api/songs/{id}"),
+            Some(&token),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::NO_CONTENT);
+        let (s, _) = send(
+            &app,
+            Method::GET,
+            &format!("/api/songs/{id}"),
+            Some(&token),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+    }
+
+    // A database created before pdf_settings was stored must be upgraded in place.
+    #[tokio::test]
+    async fn migration_adds_the_pdf_settings_column_to_an_old_songs_table() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE songs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL DEFAULT 0,
+                name TEXT NOT NULL, artist TEXT NOT NULL, key_name TEXT NOT NULL,
+                parts_json TEXT NOT NULL DEFAULT '[]', instruments_json TEXT NOT NULL DEFAULT '[]',
+                vocals_notes TEXT NOT NULL DEFAULT '', instrument_parts_json TEXT NOT NULL DEFAULT '{}',
+                instrument_capos_json TEXT NOT NULL DEFAULT '{}')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO songs (user_id, name, artist, key_name) VALUES (1, 'Old', 'Me', 'C Major')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        run_migrations(&pool).await;
+        run_migrations(&pool).await; // idempotent
+        let json: String =
+            sqlx::query_scalar("SELECT pdf_settings_json FROM songs WHERE name = 'Old'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(json, "{}");
+    }
+
+    fn token_with(sub: &str, exp: usize, secret: &str) -> String {
+        encode(
+            &Header::default(),
+            &Claims {
+                sub: sub.to_string(),
+                email: "a@example.com".to_string(),
+                exp,
+            },
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn expired_malformed_and_foreign_tokens_are_rejected() {
+        let state = test_state().await;
+        let secret = state.jwt_secret.clone();
+        let app = build_app(state, false);
+        let far_future = 4_000_000_000usize;
+        // Sanity: a well-formed token for this secret is accepted.
+        let ok = token_with("1", far_future, &secret);
+        let (s, _) = send(&app, Method::GET, "/api/songs", Some(&ok), None, None).await;
+        assert_eq!(s, StatusCode::OK);
+        for (label, token) in [
+            ("expired", token_with("1", 1_000_000_000, &secret)),
+            (
+                "non-numeric subject",
+                token_with("abc", far_future, &secret),
+            ),
+            (
+                "wrong secret",
+                token_with("1", far_future, "another-secret"),
+            ),
+        ] {
+            let (s, _) = send(&app, Method::GET, "/api/songs", Some(&token), None, None).await;
+            assert_eq!(s, StatusCode::UNAUTHORIZED, "{label}");
+        }
     }
 }
