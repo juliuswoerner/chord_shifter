@@ -75,6 +75,9 @@ code in `src/` as of commit `ebdd33e`, plus ideas for what is missing.
 Grouped roughly by how much they would matter to users.
 
 **Data and accounts**
+- Bands with members and a default instrument, setlists with per-setlist key overrides,
+  setlist import, per-member instrument choice per song, and one combined setlist PDF
+  (planned in ROADMAP Phase 2).
 - Connect the frontend to the server API (cloud sync, multi-device).
 - Import/export a song as JSON (backup, sharing); import from ChordPro or plain text.
 - Share a read-only link; setlists; folders or tags; search and sort in the library.
