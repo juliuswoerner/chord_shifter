@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+
+  frontend:
+    # The WASM frontend (default `web` feature). Unit tests for song/auth/pdf run natively.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --lib --bin chord_shifter --all-targets
+      - run: cargo test --lib --bin chord_shifter
+      - run: cargo check --bin chord_shifter --target wasm32-unknown-unknown
+
+  server:
+    # The Axum backend, built the same way as in the Dockerfile.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+      - run: cargo clippy --bin server --no-default-features --features server --all-targets
+      - run: cargo test --bin server --no-default-features --features server
+      - run: cargo build --bin server --no-default-features --features server
