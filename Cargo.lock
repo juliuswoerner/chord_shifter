@@ -267,6 +267,7 @@ dependencies = [
  "tower-http",
  "tower_governor",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
  "zip",
 ]

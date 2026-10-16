@@ -25,7 +25,7 @@ required-features = ["server"]
 default = ["web"]
 web = [
     "dioxus/web", "dioxus/minimal", "dioxus/router",
-    "dep:manganis", "dep:web-sys", "dep:wasm-bindgen", "dep:js-sys", "dep:zip", "dep:printpdf",
+    "dep:manganis", "dep:web-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys", "dep:zip", "dep:printpdf",
 ]
 server = ["dep:axum", "dep:tokio", "dep:sqlx", "dep:tower-http", "dep:jsonwebtoken", "dep:lettre", "dep:aes-gcm", "dep:sha2", "dep:tower_governor"]
 
@@ -47,9 +47,11 @@ printpdf     = { version = "0.6", optional = true }
 manganis     = { version = "0.6.2", optional = true }
 web-sys      = { version = "0.3", optional = true, features = [
     "Blob", "BlobPropertyBag", "Document",
-    "HtmlAnchorElement", "Location", "Storage", "Url", "Window",
+    "Headers", "HtmlAnchorElement", "Location", "Request", "RequestInit", "Response",
+    "Storage", "Url", "Window",
 ] }
 wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
 js-sys       = { version = "0.3", optional = true }
 zip          = { version = "2",   optional = true, default-features = false, features = ["deflate"] }
 

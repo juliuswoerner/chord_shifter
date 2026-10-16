@@ -83,3 +83,50 @@ jobs:
           name: demo-smoke-failure
           path: tests/e2e/demo-smoke-failure.png
           if-no-files-found: ignore
+
+  server-e2e:
+    # The real stack: the built frontend served by the Axum server with a fresh SQLite database.
+    # Registers in the UI, saves a song, logs out and in again, deletes it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache Dioxus CLI
+        id: dx-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/dx
+          key: dx-0.6.3-${{ runner.os }}
+      - name: Install Dioxus CLI
+        if: steps.dx-cache.outputs.cache-hit != 'true'
+        run: cargo install dioxus-cli --version 0.6.3 --locked
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+      - run: dx build --platform web --release
+      - run: cargo build --bin server --no-default-features --features server
+      - name: Install Playwright
+        working-directory: tests/e2e
+        run: |
+          npm ci || npm install
+          npx playwright install --with-deps chromium
+      - name: Start the server and run the end-to-end test
+        run: |
+          cp -r target/dx/chord_shifter/release/web/public dist
+          DATABASE_URL="sqlite:$RUNNER_TEMP/e2e.db?mode=rwc" \
+          JWT_SECRET="$(openssl rand -hex 32)" \
+          ENCRYPTION_KEY="$(openssl rand -hex 32)" \
+          APP_URL=http://localhost:8080 PORT=8080 \
+          ./target/debug/server > server.log 2>&1 &
+          for i in $(seq 1 30); do curl -s -o /dev/null localhost:8080/ && break; sleep 1; done
+          cd tests/e2e && BASE_URL=http://localhost:8080 node server-smoke.mjs
+      - name: Show the server log on failure
+        if: failure()
+        run: cat server.log || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: server-e2e-failure
+          path: tests/e2e/server-smoke-failure.png
+          if-no-files-found: ignore

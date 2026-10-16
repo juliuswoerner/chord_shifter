@@ -31,6 +31,7 @@ fn inst_icon(inst: Instrument) -> Asset {
 use chord_shifter::auth;
 use chord_shifter::demo;
 use chord_shifter::song;
+mod api;
 mod pdf;
 
 // ── Web storage backend (localStorage) ───────────────────────────────────────
@@ -111,13 +112,31 @@ fn demo_mode() -> bool {
         .unwrap_or(false)
 }
 
+/// Where songs and accounts live.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Backend {
+    /// Browser `localStorage` (no server: `dx serve`, demo mode).
+    Local,
+    /// The Axum server's `/api`.
+    Server,
+}
+
+/// Result of registering an account.
+enum AuthOutcome {
+    LoggedIn(User),
+    /// Registered, but the user must act first (e.g. verify their email).
+    Notice(String),
+}
+
 #[derive(Clone)]
-struct Db;
+struct Db {
+    backend: Backend,
+}
 
 impl Db {
-    fn open(_: &str) -> Result<Self, String> {
+    fn open(backend: Backend) -> Result<Self, String> {
         // Seed the example song into localStorage on first run.
-        if ls_read().is_empty() {
+        if backend == Backend::Local && ls_read().is_empty() {
             use song::{Chord, ChordQuality};
             let s = song::Song::new("Let It Be", "C Major", "The Beatles")
                 .with_part(
@@ -162,10 +181,10 @@ impl Db {
                 pdf_settings_json: "{}".to_string(),
             }]);
         }
-        Ok(Self)
+        Ok(Self { backend })
     }
 
-    fn save_song(&self, song: &song::Song, user_id: i64) -> Result<i64, String> {
+    fn save_song_local(&self, song: &song::Song, user_id: i64) -> Result<i64, String> {
         let parts_json = serde_json::to_string(&song.parts).map_err(|e| e.to_string())?;
         let instruments_json =
             serde_json::to_string(&song.instruments).map_err(|e| e.to_string())?;
@@ -210,7 +229,7 @@ impl Db {
         }
     }
 
-    fn list_songs(&self, user_id: i64) -> Result<Vec<SongRow>, String> {
+    fn list_songs_local(&self, user_id: i64) -> Result<Vec<SongRow>, String> {
         let users = ls_read_users();
         let username = users
             .iter()
@@ -237,7 +256,7 @@ impl Db {
             .collect())
     }
 
-    fn load_song(&self, id: i64) -> Result<song::Song, String> {
+    fn load_song_local(&self, id: i64) -> Result<song::Song, String> {
         ls_read()
             .into_iter()
             .find(|s| s.id == id)
@@ -278,14 +297,14 @@ impl Db {
             })
     }
 
-    fn delete_song(&self, id: i64) -> Result<(), String> {
+    fn delete_song_local(&self, id: i64) -> Result<(), String> {
         let mut songs = ls_read();
         songs.retain(|s| s.id != id);
         ls_write(&songs);
         Ok(())
     }
 
-    fn create_user(&self, username: &str, password: &str) -> Result<i64, String> {
+    fn create_user_local(&self, username: &str, password: &str) -> Result<i64, String> {
         let mut users = ls_read_users();
         if users.iter().any(|u| u.username == username) {
             return Err(format!("Email '{username}' is already registered"));
@@ -314,7 +333,7 @@ impl Db {
                 }
                 u.id
             }
-            None => match self.create_user(demo::DEMO_EMAIL, demo::DEMO_PASSWORD) {
+            None => match self.create_user_local(demo::DEMO_EMAIL, demo::DEMO_PASSWORD) {
                 Ok(id) => id,
                 Err(e) => {
                     eprintln!("Demo user creation failed: {e}");
@@ -339,13 +358,13 @@ impl Db {
         songs.retain(|s| s.user_id != user_id);
         ls_write(&songs);
         for song in demo::demo_songs() {
-            if let Err(e) = self.save_song(&song, user_id) {
+            if let Err(e) = self.save_song_local(&song, user_id) {
                 eprintln!("Demo song '{}' failed to save: {e}", song.name);
             }
         }
     }
 
-    fn verify_user(&self, username: &str, password: &str) -> Result<Option<User>, String> {
+    fn verify_user_local(&self, username: &str, password: &str) -> Result<Option<User>, String> {
         Ok(ls_read_users()
             .into_iter()
             .find(|u| u.username == username)
@@ -354,6 +373,7 @@ impl Db {
                     Some(User {
                         id: u.id,
                         username: u.username,
+                        token: None,
                     })
                 } else {
                     None
@@ -362,10 +382,99 @@ impl Db {
     }
 }
 
+impl Db {
+    fn token(user: Option<&User>) -> Result<&str, String> {
+        user.and_then(|u| u.token.as_deref())
+            .ok_or_else(|| "Please log in again.".to_string())
+    }
+
+    async fn save_song(&self, song: &song::Song, user: Option<&User>) -> Result<i64, String> {
+        match self.backend {
+            Backend::Local => self.save_song_local(song, user.map(|u| u.id).unwrap_or(0)),
+            Backend::Server => api::save_song(Self::token(user)?, song).await,
+        }
+    }
+
+    async fn list_songs(&self, user: Option<&User>) -> Result<Vec<SongRow>, String> {
+        match self.backend {
+            Backend::Local => self.list_songs_local(user.map(|u| u.id).unwrap_or(0)),
+            Backend::Server => {
+                let owner = user.map(|u| u.username.clone()).unwrap_or_default();
+                Ok(api::list_songs(Self::token(user)?)
+                    .await?
+                    .into_iter()
+                    .map(|i| SongRow {
+                        id: i.id,
+                        name: i.name,
+                        artist: i.artist,
+                        instruments: i.instruments,
+                        username: owner.clone(),
+                    })
+                    .collect())
+            }
+        }
+    }
+
+    async fn load_song(&self, id: i64, user: Option<&User>) -> Result<song::Song, String> {
+        match self.backend {
+            Backend::Local => self.load_song_local(id),
+            Backend::Server => api::load_song(Self::token(user)?, id).await,
+        }
+    }
+
+    async fn delete_song(&self, id: i64, user: Option<&User>) -> Result<(), String> {
+        match self.backend {
+            Backend::Local => self.delete_song_local(id),
+            Backend::Server => api::delete_song(Self::token(user)?, id).await,
+        }
+    }
+
+    async fn login(&self, email: &str, password: &str) -> Result<Option<User>, String> {
+        match self.backend {
+            Backend::Local => self.verify_user_local(email, password),
+            Backend::Server => {
+                let info = api::login(email, password).await?;
+                Ok(Some(User {
+                    id: info.id,
+                    username: info.email,
+                    token: Some(info.token),
+                }))
+            }
+        }
+    }
+
+    async fn register(&self, email: &str, password: &str) -> Result<AuthOutcome, String> {
+        match self.backend {
+            Backend::Local => {
+                let id = self.create_user_local(email, password)?;
+                Ok(AuthOutcome::LoggedIn(User {
+                    id,
+                    username: email.to_string(),
+                    token: None,
+                }))
+            }
+            Backend::Server => {
+                let info = api::register(email, password).await?;
+                // Verified accounts (local server, or verification disabled) can log in at once.
+                match api::login(email, password).await {
+                    Ok(l) => Ok(AuthOutcome::LoggedIn(User {
+                        id: l.id,
+                        username: l.email,
+                        token: Some(l.token),
+                    })),
+                    Err(_) => Ok(AuthOutcome::Notice(info.message)),
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct User {
     id: i64,
     username: String,
+    /// Bearer token for the server API (`None` with the local backend).
+    token: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -403,38 +512,6 @@ fn main() {
     dioxus::launch(App);
 }
 
-// ── Example data ──────────────────────────────────────────────────────────────
-
-fn example_song() -> Song {
-    Song::new("Let It Be", "C Major", "The Beatles")
-        .with_part(
-            "Verse",
-            vec![
-                Chord::new("C", ChordQuality::Major),
-                Chord::new("G", ChordQuality::Major),
-                Chord::new("A", ChordQuality::Minor),
-                Chord::new("F", ChordQuality::Major),
-            ],
-        )
-        .with_part(
-            "Chorus",
-            vec![
-                Chord::new("F", ChordQuality::Major),
-                Chord::new("C", ChordQuality::Major),
-                Chord::new("G", ChordQuality::Major),
-                Chord::new("F", ChordQuality::Major),
-            ],
-        )
-        .with_part(
-            "Bridge",
-            vec![
-                Chord::new("G", ChordQuality::Major),
-                Chord::new("F", ChordQuality::Major),
-                Chord::new("C", ChordQuality::Major),
-            ],
-        )
-}
-
 fn blank_song() -> Song {
     Song::new("", "", "")
 }
@@ -452,18 +529,27 @@ enum AppScreen {
 
 #[component]
 fn App() -> Element {
-    let db: Signal<Option<Db>> = use_signal(|| {
-        Db::open("chord_shifter.db")
-            .map_err(|e| eprintln!("DB open failed: {e}"))
-            .ok()
-    });
     // Captured once: in-app navigation drops the `?demo` query, but the mode must stay on.
     let demo = use_hook(demo_mode);
-    if demo {
-        if let Some(d) = db.read().as_ref() {
-            d.seed_demo(false);
+    // `None` until the backend is known: the server if `/api` answers, otherwise localStorage.
+    // Demo mode always uses localStorage.
+    let mut db: Signal<Option<Db>> = use_signal(|| None);
+    use_future(move || async move {
+        let backend = if !demo && api::server_available().await {
+            Backend::Server
+        } else {
+            Backend::Local
+        };
+        match Db::open(backend) {
+            Ok(opened) => {
+                if demo {
+                    opened.seed_demo(false);
+                }
+                db.set(Some(opened));
+            }
+            Err(e) => eprintln!("DB open failed: {e}"),
         }
-    }
+    });
     let current_user: Signal<Option<User>> = use_signal(|| None);
     let screen: Signal<AppScreen> = use_signal(|| AppScreen::Landing);
 
@@ -484,7 +570,12 @@ fn App() -> Element {
                     "DEMO MODE — sample data, stored only in this browser."
                 }
             }
-            if current_user.read().is_some() {
+            if db.read().is_none() {
+                div {
+                    style: "min-height: 100vh; display: flex; align-items: center; justify-content: center; color: #6b7280; font-size: 14px;",
+                    "Loading…"
+                }
+            } else if current_user.read().is_some() {
                 Router::<Route> {}
             } else if *screen.read() == AppScreen::Landing {
                 LandingPage { screen }
@@ -764,6 +855,7 @@ fn SongView(
 ) -> Element {
     let nav = use_navigator();
     let mut preview_open = use_signal(|| false);
+    let mut save_status: Signal<String> = use_signal(String::new);
     let mut preview_url: Signal<String> = use_signal(String::new);
     let mut notation: Signal<Notation> = use_signal(|| Notation::English);
     let mut render_mode: Signal<bool> = use_signal(|| false);
@@ -1684,19 +1776,22 @@ fn SongView(
                                     let mut updated = song.read().clone();
                                     updated.instrument_parts.insert(label.clone(), inst_parts);
                                     updated.instrument_capos.insert(label, cap);
-                                    let user_id = current_user.read().as_ref().map(|u| u.id).unwrap_or(0);
-                                    if let Some(db_ref) = db.read().as_ref() {
-                                        match db_ref.save_song(&updated, user_id) {
-                                            Ok(_) => {
-                                                *song.write() = updated;
-                                                *inst_save_msg.write() = Some("✅ Saved!");
+                                    let user = current_user.read().clone();
+                                    let db_val = db.read().clone();
+                                    spawn(async move {
+                                        if let Some(d) = db_val {
+                                            match d.save_song(&updated, user.as_ref()).await {
+                                                Ok(_) => {
+                                                    *song.write() = updated;
+                                                    *inst_save_msg.write() = Some("✅ Saved!");
+                                                }
+                                                Err(_) => *inst_save_msg.write() = Some("❌ Save failed"),
                                             }
-                                            Err(_) => *inst_save_msg.write() = Some("❌ Save failed"),
+                                        } else {
+                                            *song.write() = updated;
+                                            *inst_save_msg.write() = Some("✅ Saved!");
                                         }
-                                    } else {
-                                        *song.write() = updated;
-                                        *inst_save_msg.write() = Some("✅ Saved!");
-                                    }
+                                    });
                                 },
                                 "💾  Save {inst_label} Sheet"
                             }
@@ -2011,15 +2106,21 @@ fn SongView(
                 ",
                 onclick: move |_| {
                     let s       = song.read().clone();
-                    let user_id = current_user.read().as_ref().map(|u| u.id).unwrap_or(0);
-                    if let Some(db_ref) = db.read().as_ref() {
-                        match db_ref.save_song(&s, user_id) {
-                            Ok(song_id) => println!("✅  Song saved (id={song_id})"),
-                            Err(e) => eprintln!("❌  Save failed: {e}"),
+                    let user    = current_user.read().clone();
+                    let db_val  = db.read().clone();
+                    spawn(async move {
+                        if let Some(d) = db_val {
+                            match d.save_song(&s, user.as_ref()).await {
+                                Ok(song_id) => *save_status.write() = format!("✅ Saved (id {song_id})"),
+                                Err(e) => *save_status.write() = format!("❌ Save failed: {e}"),
+                            }
                         }
-                    }
+                    });
                 },
                 "💾  Save to Library"
+            }
+            if !save_status.read().is_empty() {
+                p { style: "margin: 6px 0 0; font-size: 12px; font-weight: 600; color: #555; text-align: center;", "{save_status}" }
             }
 
             // ── PDF Preview modal ─────────────────────────────────────────
@@ -2207,15 +2308,18 @@ fn LoginScreen(
                         button {
                             style: "padding: 8px 12px; background: #f59e0b; color: #111827; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit;",
                             onclick: move |_| {
-                                if let Some(db_ref) = db.read().as_ref() {
-                                    match db_ref.verify_user(demo::DEMO_EMAIL, demo::DEMO_PASSWORD) {
-                                        Ok(Some(user)) => *current_user.write() = Some(user),
-                                        _ => {
-                                            *error_msg.write() =
-                                                "Demo user not found. Try \"Reset demo data\".".into();
+                                let db_val = db.read().clone();
+                                spawn(async move {
+                                    if let Some(d) = db_val {
+                                        match d.login(demo::DEMO_EMAIL, demo::DEMO_PASSWORD).await {
+                                            Ok(Some(user)) => *current_user.write() = Some(user),
+                                            _ => {
+                                                *error_msg.write() =
+                                                    "Demo user not found. Try \"Reset demo data\".".into();
+                                            }
                                         }
                                     }
-                                }
+                                });
                             },
                             "Log in as demo user"
                         }
@@ -2299,26 +2403,26 @@ fn LoginScreen(
                         *error_msg.write() = "Please enter a valid email address.".into();
                         return;
                     }
-                    if let Some(db_ref) = db.read().as_ref() {
-                        if is_register() {
-                            match db_ref.create_user(&u, &p) {
-                                Ok(id) => {
-                                    *current_user.write() =
-                                        Some(User { id, username: u });
-                                }
-                                Err(e) => *error_msg.write() = e.to_string(),
+                    let db_val = db.read().clone();
+                    let registering = is_register();
+                    spawn(async move {
+                        let Some(d) = db_val else { return };
+                        if registering {
+                            match d.register(&u, &p).await {
+                                Ok(AuthOutcome::LoggedIn(user)) => *current_user.write() = Some(user),
+                                Ok(AuthOutcome::Notice(msg)) => *error_msg.write() = msg,
+                                Err(e) => *error_msg.write() = e,
                             }
                         } else {
-                            match db_ref.verify_user(&u, &p) {
+                            match d.login(&u, &p).await {
                                 Ok(Some(user)) => *current_user.write() = Some(user),
                                 Ok(None) => {
-                                    *error_msg.write() =
-                                        "Invalid email or password.".into();
+                                    *error_msg.write() = "Invalid email or password.".into();
                                 }
-                                Err(e) => *error_msg.write() = e.to_string(),
+                                Err(e) => *error_msg.write() = e,
                             }
                         }
-                    }
+                    });
                 },
                 "{submit_label}"
             }
@@ -3818,13 +3922,16 @@ fn LibraryPage() -> Element {
     let mut status: Signal<String> = use_signal(String::new);
 
     use_effect(move || {
-        let user_id = current_user.read().as_ref().map(|u| u.id).unwrap_or(0);
-        if let Some(db_ref) = db.read().as_ref() {
-            match db_ref.list_songs(user_id) {
-                Ok(list) => *rows.write() = list,
-                Err(e) => *status.write() = format!("Load error: {e}"),
+        let user = current_user.read().clone();
+        let db_val = db.read().clone();
+        spawn(async move {
+            if let Some(d) = db_val {
+                match d.list_songs(user.as_ref()).await {
+                    Ok(list) => *rows.write() = list,
+                    Err(e) => *status.write() = format!("Load error: {e}"),
+                }
             }
-        }
+        });
     });
 
     rsx! {
@@ -3988,14 +4095,19 @@ fn LibraryPage() -> Element {
                                     title: "Delete",
                                     onclick: move |e| {
                                         e.stop_propagation();
-                                        let uid = current_user.read().as_ref().map(|u| u.id).unwrap_or(0);
-                                        if let Some(db_ref) = db.read().as_ref() {
-                                            let _ = db_ref.delete_song(row_id);
-                                            match db_ref.list_songs(uid) {
-                                                Ok(list) => *rows.write() = list,
-                                                Err(err) => *status.write() = format!("Error: {err}"),
+                                        let user = current_user.read().clone();
+                                        let db_val = db.read().clone();
+                                        spawn(async move {
+                                            if let Some(d) = db_val {
+                                                if let Err(err) = d.delete_song(row_id, user.as_ref()).await {
+                                                    *status.write() = format!("Error: {err}");
+                                                }
+                                                match d.list_songs(user.as_ref()).await {
+                                                    Ok(list) => *rows.write() = list,
+                                                    Err(err) => *status.write() = format!("Error: {err}"),
+                                                }
                                             }
-                                        }
+                                        });
                                     },
                                     "✕"
                                 }
@@ -4015,12 +4127,59 @@ fn SongPage(id: i64) -> Element {
     let db: Signal<Option<Db>> = use_context();
     let current_user: Signal<Option<User>> = use_context();
 
-    let song: Signal<Song> = use_signal(move || {
-        db.read()
-            .as_ref()
-            .and_then(|d| d.load_song(id).ok())
-            .unwrap_or_else(example_song)
+    // The song is loaded first; the editor then starts from the loaded copy.
+    let loaded = use_resource(move || {
+        let db_val = db.read().clone();
+        let user = current_user.read().clone();
+        async move {
+            match db_val {
+                Some(d) => d
+                    .load_song(id, user.as_ref())
+                    .await
+                    .map_err(|e| e.to_string()),
+                None => Err("Storage is not available.".to_string()),
+            }
+        }
     });
+    let result = loaded.read_unchecked().clone();
+    match result {
+        None => rsx! { LoadingNotice { text: "Loading song…" } },
+        Some(Ok(initial)) => rsx! { SongPageBody { id, initial } },
+        Some(Err(message)) => rsx! { LoadErrorNotice { message } },
+    }
+}
+
+#[component]
+fn LoadingNotice(text: String) -> Element {
+    rsx! {
+        div {
+            style: "padding: 80px 20px; text-align: center; color: #6b7280; font-size: 14px;",
+            "{text}"
+        }
+    }
+}
+
+#[component]
+fn LoadErrorNotice(message: String) -> Element {
+    let nav = use_navigator();
+    rsx! {
+        div {
+            style: "padding: 80px 20px; text-align: center; color: #c0392b; font-size: 14px;",
+            p { "Could not load the song: {message}" }
+            button {
+                style: "padding: 8px 16px; border: 1px solid #ccc; border-radius: 8px; background: #fff; cursor: pointer; font-family: inherit;",
+                onclick: move |_| { nav.push(Route::LibraryPage {}); },
+                "← Back to library"
+            }
+        }
+    }
+}
+
+#[component]
+fn SongPageBody(id: i64, initial: Song) -> Element {
+    let db: Signal<Option<Db>> = use_context();
+    let current_user: Signal<Option<User>> = use_context();
+    let song: Signal<Song> = use_signal(move || initial.clone());
 
     rsx! {
         div {
@@ -4052,15 +4211,35 @@ fn NewSongPage() -> Element {
 #[component]
 fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
     let db: Signal<Option<Db>> = use_context();
+    let current_user: Signal<Option<User>> = use_context();
+
+    let loaded = use_resource(move || {
+        let db_val = db.read().clone();
+        let user = current_user.read().clone();
+        async move {
+            match db_val {
+                Some(d) => d
+                    .load_song(id, user.as_ref())
+                    .await
+                    .map_err(|e| e.to_string()),
+                None => Err("Storage is not available.".to_string()),
+            }
+        }
+    });
+    let result = loaded.read_unchecked().clone();
+    match result {
+        None => rsx! { LoadingNotice { text: "Loading song…" } },
+        Some(Ok(initial)) => rsx! { InstrumentSheetBody { id, instrument, initial } },
+        Some(Err(message)) => rsx! { LoadErrorNotice { message } },
+    }
+}
+
+#[component]
+fn InstrumentSheetBody(id: i64, instrument: String, initial: Song) -> Element {
     let mut current_user: Signal<Option<User>> = use_context();
     let nav = use_navigator();
 
-    let song: Signal<Song> = use_signal(move || {
-        db.read()
-            .as_ref()
-            .and_then(|d| d.load_song(id).ok())
-            .unwrap_or_else(example_song)
-    });
+    let song: Signal<Song> = use_signal(move || initial.clone());
 
     let inst = Instrument::from_label(&instrument);
     let accent = inst.map(|i| i.accent_color()).unwrap_or("#2563eb");
