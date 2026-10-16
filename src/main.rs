@@ -137,6 +137,23 @@ fn ls_write_import_done(ids: &[i64]) {
     }
 }
 
+/// "Not now" lasts for the browser session (survives navigating around the app and
+/// reloads, not closing the tab) and is remembered per server account.
+const SS_IMPORT_HIDDEN_KEY: &str = "chord_shifter_import_hidden";
+
+fn import_hidden_for(email: &str) -> bool {
+    web_sys::window()
+        .and_then(|w| w.session_storage().ok().flatten())
+        .and_then(|s| s.get_item(SS_IMPORT_HIDDEN_KEY).ok().flatten())
+        .is_some_and(|v| v.eq_ignore_ascii_case(email))
+}
+
+fn hide_import_for(email: &str) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.session_storage().ok().flatten()) {
+        let _ = storage.set_item(SS_IMPORT_HIDDEN_KEY, email);
+    }
+}
+
 fn mark_import_done(ids: &[i64]) {
     let mut done = ls_read_import_done();
     for id in ids {
@@ -4291,7 +4308,15 @@ fn ImportBanner(
     let mut groups: Signal<Vec<ImportGroup>> = use_signal(Vec::new);
     let mut message: Signal<String> = use_signal(String::new);
     let mut busy = use_signal(|| false);
-    let mut hidden = use_signal(|| false);
+    let account_email = current_user
+        .read()
+        .as_ref()
+        .map(|u| u.username.clone())
+        .unwrap_or_default();
+    let mut hidden = use_signal({
+        let email = account_email.clone();
+        move || import_hidden_for(&email)
+    });
     let mut passwords: Signal<std::collections::HashMap<i64, String>> =
         use_signal(Default::default);
 
@@ -4381,9 +4406,12 @@ fn ImportBanner(
                             "Found {g.songs.len()} song(s) saved in this browser by {g.owner_email}."
                         }
                     }
-                    div {
-                        style: "color: #475569; font-size: 12px;",
-                        {g.songs.iter().map(|s| format!("{} — {}", s.name, s.artist)).collect::<Vec<_>>().join(" · ")}
+                    // Titles of another browser account stay hidden until its password is entered.
+                    if g.matches_account {
+                        div {
+                            style: "color: #475569; font-size: 12px;",
+                            {g.songs.iter().map(|s| format!("{} — {}", s.name, s.artist)).collect::<Vec<_>>().join(" · ")}
+                        }
                     }
                     if !g.matches_account {
                         input {
@@ -4415,7 +4443,13 @@ fn ImportBanner(
                     style: "display: flex; gap: 12px;",
                     button {
                         style: "background: none; border: none; padding: 0; color: #475569; text-decoration: underline; cursor: pointer; font-family: inherit; font-size: 12px;",
-                        onclick: move |_| *hidden.write() = true,
+                        onclick: {
+                            let email = account_email.clone();
+                            move |_| {
+                                hide_import_for(&email);
+                                *hidden.write() = true;
+                            }
+                        },
                         "Not now"
                     }
                     button {

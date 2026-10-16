@@ -29,11 +29,17 @@ const oldSong = (id, userId, name, artist) => ({
 });
 const importA = `Imported A ${Date.now()}`;
 const importB = `Imported B ${Date.now()}`;
-const seededUsers = JSON.stringify([{ id: 1, username: email, password_hash: 'not-used' }]);
+const otherEmail = 'other-browser-user@example.com';
+const secretTitle = `Secret Tune ${Date.now()}`;
+const seededUsers = JSON.stringify([
+    { id: 1, username: email, password_hash: 'not-used' },
+    { id: 2, username: otherEmail, password_hash: 'not-used' },
+]);
 const seededSongs = JSON.stringify([
     oldSong(1, 0, 'Shared Example', 'Nobody'),
     oldSong(10, 1, importA, 'Old Band'),
     oldSong(11, 1, importB, 'Old Band'),
+    oldSong(12, 2, secretTitle, 'Other Band'),
 ]);
 
 const browser = await chromium.launch({ executablePath, args: ['--no-sandbox'] });
@@ -100,6 +106,9 @@ try {
         expect(text.includes('Found 2 song(s)'), `unexpected banner: ${text}`);
         expect(text.includes(importA) && text.includes(importB), `songs not listed: ${text}`);
         expect(!text.includes('Shared Example'), 'the shared example must not be offered');
+        // Another browser account is mentioned, but its song titles stay hidden without its password.
+        expect(text.includes(otherEmail), `other account not mentioned: ${text}`);
+        expect(!text.includes(secretTitle), 'titles of another account must not be shown before authentication');
     });
 
     await check('importing copies the songs to the server account', async () => {
@@ -109,6 +118,21 @@ try {
         await page.getByText(importB).first().waitFor({ timeout: 15000 });
         const saves = apiCalls.filter((c) => c.startsWith('POST /api/songs 200')).length;
         expect(saves === 2, `expected 2 song saves, saw ${saves}: ${apiCalls}`);
+    });
+
+    await check('"Not now" stays dismissed while navigating around', async () => {
+        await page.getByRole('button', { name: 'Not now' }).click();
+        expect((await page.locator('#import-banner').count()) === 0, 'banner still visible after Not now');
+        await page.getByText(importB).first().click();
+        await page.waitForFunction(
+            (name) => document.querySelector('input[placeholder="Song name"]')?.value === name,
+            importB,
+            { timeout: 15000 },
+        );
+        await page.getByRole('button', { name: '← Library' }).click();
+        await page.getByText('My Songs').waitFor();
+        await page.getByText(importA).first().waitFor();
+        expect((await page.locator('#import-banner').count()) === 0, 'banner came back after navigating');
     });
 
     await check('an imported song keeps its data (PDF font sizes) on the server', async () => {
