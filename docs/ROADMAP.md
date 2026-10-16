@@ -111,6 +111,13 @@ MemberChoice  { setlist_id, entry position/song_id, user_id, instrument: Option<
 
 ## Phase 4 — Better sheets (3–4 weeks)
 
+0. **Written notes in the PDF**: a free-text notes field (`Song.notes`, `#[serde(default)]`)
+   stored on the base song, so it is shared by every instrument sheet and by the band, and
+   printed in the PDF (a notes block under the header or at the end of the song, with its
+   own font size in `PdfSettings`). Setlist PDFs include each song's notes. Edited in the base
+   sheet only; instrument sheets show it read-only. This is separate from the existing
+   per-part lyrics text and the "Vocals / Notes" field. Could be pulled forward into
+   Phase 0/1 since it is small. S
 1. Chords over lyrics (aligned to syllables), the format most players expect. L
 2. Chord diagrams for guitar and piano in the PDF. M
 3. Page options: size (A4/Letter), margins, columns, font choice. M

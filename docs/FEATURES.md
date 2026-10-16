@@ -95,6 +95,7 @@ Grouped roughly by how much they would matter to users.
 - Auto-detect key; suggest capo positions with the easiest shapes.
 
 **Output**
+- Written song notes stored on the base song and printed in every PDF (ROADMAP Phase 4).
 - Print-friendly layout settings: page size (A4 only now), margins, fonts, columns.
 - Export formats beyond PDF: ChordPro, MusicXML/MIDI, plain text, image.
 - Stage mode: large font, dark theme, auto-scroll, page-turn.
