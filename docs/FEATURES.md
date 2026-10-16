@@ -33,7 +33,7 @@ code in `src/` as of commit `ebdd33e`, plus ideas for what is missing.
 - Each instrument can have its own copy of the parts, so the sheets can diverge
   from the base sheet.
 - Per-instrument capo (guitars and bass): chord shapes are shown shifted down.
-  Piano gets a transpose of −12 to +… semitones instead. Drums have no capo.
+  Piano gets a transpose of −12 to +12 semitones instead (capo range is 0–12). Drums have no capo.
 - Each instrument has its own page (`/song/:id/instrument/:instrument`) with its
   own accent colour and icon.
 
