@@ -46,6 +46,15 @@ try {
         }
     });
 
+    await check('images load (assets are bundled in the release build)', async () => {
+        const broken = await page.evaluate(async () => {
+            const imgs = [...document.querySelectorAll('img')];
+            await Promise.all(imgs.map((i) => i.decode().catch(() => {})));
+            return imgs.filter((i) => !i.complete || i.naturalWidth === 0).map((i) => i.src);
+        });
+        expect(broken.length === 0, `broken images: ${broken.join(', ')}`);
+    });
+
     await check('a song opens with its chords', async () => {
         await page.getByText('Sunrise Ballad').first().click();
         await page.getByText('Fmaj7').first().waitFor();

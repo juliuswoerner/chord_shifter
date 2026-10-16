@@ -42,7 +42,9 @@ getrandom   = { version = "0.2", features = ["js"] }
 
 # ── Web-only deps (WASM frontend) ─────────────────────────────────────────────
 printpdf     = { version = "0.6", optional = true }
-manganis     = { version = "0.7", optional = true }
+# Keep in step with the dx CLI (0.6.x): dx 0.6 only bundles assets declared with manganis 0.6.
+# With manganis 0.7 the release build ships placeholder asset URLs (broken images).
+manganis     = { version = "0.6.2", optional = true }
 web-sys      = { version = "0.3", optional = true, features = [
     "Blob", "BlobPropertyBag", "Document",
     "HtmlAnchorElement", "Location", "Storage", "Url", "Window",
