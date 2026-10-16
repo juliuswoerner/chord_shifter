@@ -4,3 +4,6 @@
 .DS_Store
 *.pdf
 .idea/
+
+node_modules/
+demo-smoke-failure.png
