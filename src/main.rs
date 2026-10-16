@@ -457,7 +457,8 @@ fn App() -> Element {
             .map_err(|e| eprintln!("DB open failed: {e}"))
             .ok()
     });
-    let demo = demo_mode();
+    // Captured once: in-app navigation drops the `?demo` query, but the mode must stay on.
+    let demo = use_hook(demo_mode);
     if demo {
         if let Some(d) = db.read().as_ref() {
             d.seed_demo(false);
@@ -2204,7 +2205,7 @@ fn LoginScreen(
                     div {
                         style: "display: flex; gap: 8px;",
                         button {
-                            style: "padding: 8px 12px; background: #f59e0b; color: #ffffff; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit;",
+                            style: "padding: 8px 12px; background: #f59e0b; color: #111827; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit;",
                             onclick: move |_| {
                                 if let Some(db_ref) = db.read().as_ref() {
                                     match db_ref.verify_user(demo::DEMO_EMAIL, demo::DEMO_PASSWORD) {

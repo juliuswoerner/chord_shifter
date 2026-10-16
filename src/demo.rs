@@ -117,15 +117,17 @@ fn sunrise_ballad() -> Song {
         ],
     );
 
-    // Acoustic sheet: simpler open shapes, played with a capo on the 2nd fret.
+    // Acoustic sheet: simpler progressions, stored at concert pitch like the base
+    // sheet. The capo of 3 below is applied when the sheet is rendered, so the
+    // player sees (and the PDF prints) the open shapes A E F#m D.
     let acoustic = vec![
         chords_part(
             "Verse",
-            vec![c("Bb", Major), c("F", Major), c("G", Minor), c("Eb", Major)],
+            vec![c("C", Major), c("G", Major), c("A", Minor), c("F", Major)],
         ),
         chords_part(
             "Chorus",
-            vec![c("Eb", Major7), c("Bb", Major), c("F", Sus4), c("F", Major)],
+            vec![c("F", Major7), c("C", Major), c("G", Sus4), c("G", Major)],
         ),
     ];
 
@@ -139,7 +141,7 @@ fn sunrise_ballad() -> Song {
     song.vocals_notes = "Verse softly, open up in the chorus.".to_string();
     song.instrument_parts
         .insert("Acoustic".to_string(), acoustic);
-    song.instrument_capos.insert("Acoustic".to_string(), 2);
+    song.instrument_capos.insert("Acoustic".to_string(), 3);
     song
 }
 
@@ -354,5 +356,19 @@ mod tests {
         song.transpose_to("G");
         assert_eq!(song.key.split_whitespace().next(), Some("G"));
         assert_eq!(song.parts.len(), before);
+    }
+
+    #[test]
+    fn acoustic_sheet_is_at_concert_pitch_and_gets_open_shapes_from_the_capo() {
+        let song = sunrise_ballad();
+        let acoustic = &song.instrument_parts["Acoustic"];
+        let first = |s: &SongPart| s.chords().next().unwrap().root.clone();
+        // Same chords as the base sheet; the capo (applied at render time) does the shifting.
+        assert_eq!(first(&acoustic[0]), first(&song.parts[0]));
+        let capo = song.instrument_capos["Acoustic"];
+        let mut shaped = song.clone();
+        shaped.parts = acoustic.clone();
+        let shaped = shaped.apply_capo(capo);
+        assert_eq!(first(&shaped.parts[0]), "A");
     }
 }
