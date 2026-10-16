@@ -83,8 +83,8 @@ struct AppState {
 /// Payload embedded inside every JWT token.
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
-    /// User id.
-    sub: i64,
+    /// User id, as a string (JWT `sub` must be a string; jsonwebtoken 9.3 rejects numbers).
+    sub: String,
     email: String,
     /// Expiry as a Unix timestamp (seconds).
     exp: usize,
@@ -121,8 +121,14 @@ impl FromRequestParts<AppState> for AuthUser {
         )
         .map_err(|e| (StatusCode::UNAUTHORIZED, format!("Invalid token: {e}")))?;
 
+        let id = data.claims.sub.parse::<i64>().map_err(|_| {
+            (
+                StatusCode::UNAUTHORIZED,
+                "Invalid token: bad subject".to_string(),
+            )
+        })?;
         Ok(AuthUser {
-            id: data.claims.sub,
+            id,
             email: data.claims.email,
         })
     }
@@ -137,7 +143,7 @@ fn make_token(user_id: i64, email: &str, secret: &str) -> Result<String, String>
         + 30 * 24 * 3600) as usize;
 
     let claims = Claims {
-        sub: user_id,
+        sub: user_id.to_string(),
         email: email.to_string(),
         exp,
     };
@@ -613,6 +619,21 @@ async fn run_migrations(pool: &SqlitePool) {
     .execute(pool)
     .await
     .expect("Failed to create songs table");
+
+    // Idempotent: per-sheet PDF font sizes were not persisted by earlier versions.
+    match sqlx::query("ALTER TABLE songs ADD COLUMN pdf_settings_json TEXT NOT NULL DEFAULT '{}'")
+        .execute(pool)
+        .await
+    {
+        Ok(_) => {}
+        Err(sqlx::Error::Database(db_err))
+            if db_err
+                .message()
+                .contains("duplicate column name: pdf_settings_json") => {}
+        Err(err) => {
+            panic!("Failed to add songs.pdf_settings_json column: {err}");
+        }
+    }
 }
 
 // ── Auth handlers ─────────────────────────────────────────────────────────────
@@ -936,6 +957,8 @@ async fn save_song(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let ic_json = serde_json::to_string(&s.instrument_capos)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let pdf_json = serde_json::to_string(&s.pdf_settings)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // Upsert: update if name + artist already exist for this user.
     let existing = sqlx::query_scalar::<_, i64>(
@@ -956,7 +979,8 @@ async fn save_song(
                     instruments_json      = ?,
                     vocals_notes          = ?,
                     instrument_parts_json = ?,
-                    instrument_capos_json = ?
+                    instrument_capos_json = ?,
+                    pdf_settings_json     = ?
              WHERE  id = ?",
         )
         .bind(&s.key)
@@ -965,6 +989,7 @@ async fn save_song(
         .bind(&s.vocals_notes)
         .bind(&ip_json)
         .bind(&ic_json)
+        .bind(&pdf_json)
         .bind(id)
         .execute(&state.db)
         .await
@@ -974,8 +999,9 @@ async fn save_song(
         sqlx::query_scalar::<_, i64>(
             "INSERT INTO songs
                 (user_id, name, artist, key_name, parts_json, instruments_json,
-                 vocals_notes, instrument_parts_json, instrument_capos_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 vocals_notes, instrument_parts_json, instrument_capos_json,
+                 pdf_settings_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              RETURNING id",
         )
         .bind(user.id)
@@ -987,6 +1013,7 @@ async fn save_song(
         .bind(&s.vocals_notes)
         .bind(&ip_json)
         .bind(&ic_json)
+        .bind(&pdf_json)
         .fetch_one(&state.db)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -1010,11 +1037,13 @@ async fn load_song(
         String,
         String,
         String,
+        String,
     );
 
     let row = sqlx::query_as::<_, Row>(
         "SELECT name, artist, key_name, parts_json, instruments_json,
-                vocals_notes, instrument_parts_json, instrument_capos_json
+                vocals_notes, instrument_parts_json, instrument_capos_json,
+                pdf_settings_json
          FROM   songs
          WHERE  id = ? AND (user_id = ? OR user_id = 0)",
     )
@@ -1030,6 +1059,7 @@ async fn load_song(
     let instruments = serde_json::from_str(&row.4).unwrap_or_default();
     let instrument_parts = serde_json::from_str(&row.6).unwrap_or_default();
     let instrument_capos = serde_json::from_str(&row.7).unwrap_or_default();
+    let pdf_settings = serde_json::from_str(&row.8).unwrap_or_default();
 
     Ok(Json(song::Song {
         name: row.0,
@@ -1040,7 +1070,7 @@ async fn load_song(
         vocals_notes: row.5,
         instrument_parts,
         instrument_capos,
-        pdf_settings: std::collections::HashMap::new(),
+        pdf_settings,
     }))
 }
 
@@ -1316,5 +1346,250 @@ mod api_tests {
         assert_eq!(login("198.51.100.1").await, StatusCode::TOO_MANY_REQUESTS);
         // Another client is unaffected.
         assert_eq!(login("198.51.100.2").await, StatusCode::UNAUTHORIZED);
+    }
+
+    // ── Songs ────────────────────────────────────────────────────────────────
+
+    async fn register_and_login(app: &Router, email: &str) -> String {
+        send(
+            app,
+            Method::POST,
+            "/api/auth/register",
+            None,
+            Some(creds(email)),
+            None,
+        )
+        .await;
+        let (s, body) = send(
+            app,
+            Method::POST,
+            "/api/auth/login",
+            None,
+            Some(creds(email)),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{body}");
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["token"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    fn song_body(name: &str) -> serde_json::Value {
+        let mut song = chord_shifter::demo::demo_songs().remove(0);
+        song.name = name.to_string();
+        serde_json::json!({ "song": song })
+    }
+
+    async fn save(app: &Router, token: &str, body: serde_json::Value) -> i64 {
+        let (s, resp) = send(
+            app,
+            Method::POST,
+            "/api/songs",
+            Some(token),
+            Some(body),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{resp}");
+        serde_json::from_str::<serde_json::Value>(&resp).unwrap()["id"]
+            .as_i64()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_song_round_trips_with_all_its_fields() {
+        let app = build_app(test_state().await, false);
+        let token = register_and_login(&app, "a@example.com").await;
+        let original = chord_shifter::demo::demo_songs().remove(3); // has pdf_settings
+        assert!(!original.pdf_settings.is_empty());
+        let id = save(&app, &token, serde_json::json!({ "song": original })).await;
+
+        let (s, body) = send(
+            &app,
+            Method::GET,
+            &format!("/api/songs/{id}"),
+            Some(&token),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{body}");
+        let loaded: song::Song = serde_json::from_str(&body).unwrap();
+        assert_eq!(loaded, original);
+    }
+
+    #[tokio::test]
+    async fn saving_the_same_name_and_artist_updates_instead_of_duplicating() {
+        let app = build_app(test_state().await, false);
+        let token = register_and_login(&app, "a@example.com").await;
+        let first = save(&app, &token, song_body("Tune")).await;
+        let mut changed = song_body("Tune");
+        changed["song"]["key"] = serde_json::json!("G Major");
+        let second = save(&app, &token, changed).await;
+        assert_eq!(first, second);
+        let (_, list) = send(&app, Method::GET, "/api/songs", Some(&token), None, None).await;
+        let items: Vec<serde_json::Value> = serde_json::from_str(&list).unwrap();
+        assert_eq!(items.len(), 1);
+        let (_, body) = send(
+            &app,
+            Method::GET,
+            &format!("/api/songs/{first}"),
+            Some(&token),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(
+            serde_json::from_str::<song::Song>(&body).unwrap().key,
+            "G Major"
+        );
+    }
+
+    #[tokio::test]
+    async fn users_cannot_see_or_delete_each_others_songs() {
+        let app = build_app(test_state().await, false);
+        let alice = register_and_login(&app, "alice@example.com").await;
+        let bob = register_and_login(&app, "bob@example.com").await;
+        let id = save(&app, &alice, song_body("Private")).await;
+
+        let (_, list) = send(&app, Method::GET, "/api/songs", Some(&bob), None, None).await;
+        assert_eq!(
+            serde_json::from_str::<Vec<serde_json::Value>>(&list)
+                .unwrap()
+                .len(),
+            0
+        );
+        let (s, _) = send(
+            &app,
+            Method::GET,
+            &format!("/api/songs/{id}"),
+            Some(&bob),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        let (s, _) = send(
+            &app,
+            Method::DELETE,
+            &format!("/api/songs/{id}"),
+            Some(&bob),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        // Still there for the owner.
+        let (s, _) = send(
+            &app,
+            Method::GET,
+            &format!("/api/songs/{id}"),
+            Some(&alice),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn deleting_a_song_removes_it() {
+        let app = build_app(test_state().await, false);
+        let token = register_and_login(&app, "a@example.com").await;
+        let id = save(&app, &token, song_body("Gone")).await;
+        let (s, _) = send(
+            &app,
+            Method::DELETE,
+            &format!("/api/songs/{id}"),
+            Some(&token),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::NO_CONTENT);
+        let (s, _) = send(
+            &app,
+            Method::GET,
+            &format!("/api/songs/{id}"),
+            Some(&token),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+    }
+
+    // A database created before pdf_settings was stored must be upgraded in place.
+    #[tokio::test]
+    async fn migration_adds_the_pdf_settings_column_to_an_old_songs_table() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE songs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL DEFAULT 0,
+                name TEXT NOT NULL, artist TEXT NOT NULL, key_name TEXT NOT NULL,
+                parts_json TEXT NOT NULL DEFAULT '[]', instruments_json TEXT NOT NULL DEFAULT '[]',
+                vocals_notes TEXT NOT NULL DEFAULT '', instrument_parts_json TEXT NOT NULL DEFAULT '{}',
+                instrument_capos_json TEXT NOT NULL DEFAULT '{}')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO songs (user_id, name, artist, key_name) VALUES (1, 'Old', 'Me', 'C Major')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        run_migrations(&pool).await;
+        run_migrations(&pool).await; // idempotent
+        let json: String =
+            sqlx::query_scalar("SELECT pdf_settings_json FROM songs WHERE name = 'Old'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(json, "{}");
+    }
+
+    fn token_with(sub: &str, exp: usize, secret: &str) -> String {
+        encode(
+            &Header::default(),
+            &Claims {
+                sub: sub.to_string(),
+                email: "a@example.com".to_string(),
+                exp,
+            },
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn expired_malformed_and_foreign_tokens_are_rejected() {
+        let state = test_state().await;
+        let secret = state.jwt_secret.clone();
+        let app = build_app(state, false);
+        let far_future = 4_000_000_000usize;
+        // Sanity: a well-formed token for this secret is accepted.
+        let ok = token_with("1", far_future, &secret);
+        let (s, _) = send(&app, Method::GET, "/api/songs", Some(&ok), None, None).await;
+        assert_eq!(s, StatusCode::OK);
+        for (label, token) in [
+            ("expired", token_with("1", 1_000_000_000, &secret)),
+            (
+                "non-numeric subject",
+                token_with("abc", far_future, &secret),
+            ),
+            (
+                "wrong secret",
+                token_with("1", far_future, "another-secret"),
+            ),
+        ] {
+            let (s, _) = send(&app, Method::GET, "/api/songs", Some(&token), None, None).await;
+            assert_eq!(s, StatusCode::UNAUTHORIZED, "{label}");
+        }
     }
 }
