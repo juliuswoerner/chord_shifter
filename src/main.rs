@@ -29,6 +29,7 @@ fn inst_icon(inst: Instrument) -> Asset {
 
 // song and auth live in the shared library crate (src/lib.rs)
 use chord_shifter::auth;
+use chord_shifter::demo;
 use chord_shifter::song;
 mod pdf;
 
@@ -126,6 +127,19 @@ fn ls_write(songs: &[StoredSong]) {
             let _ = storage.set_item(LS_SONGS_KEY, &json);
         }
     }
+}
+
+/// Demo mode is switched on by opening the app with `?demo` in the URL
+/// (for example `http://localhost:8080/?demo`).
+fn demo_mode() -> bool {
+    web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .map(|q| {
+            q.trim_start_matches('?')
+                .split('&')
+                .any(|kv| kv == "demo" || kv.starts_with("demo="))
+        })
+        .unwrap_or(false)
 }
 
 #[derive(Clone)]
@@ -322,6 +336,50 @@ impl Db {
         Ok(id)
     }
 
+    /// Create the demo user and demo songs. Without `force`, existing demo data
+    /// (including the user's edits) is left alone; with `force` it is reset.
+    fn seed_demo(&self, force: bool) {
+        let user_id = match ls_read_users()
+            .into_iter()
+            .find(|u| u.username == demo::DEMO_EMAIL)
+        {
+            Some(u) => {
+                if !force {
+                    return;
+                }
+                u.id
+            }
+            None => match self.create_user(demo::DEMO_EMAIL, demo::DEMO_PASSWORD) {
+                Ok(id) => id,
+                Err(e) => {
+                    eprintln!("Demo user creation failed: {e}");
+                    return;
+                }
+            },
+        };
+        // The password may have been changed by a previous demo version.
+        if let Some(u) = ls_read_users().iter().find(|u| u.id == user_id) {
+            if !auth::verify_password(demo::DEMO_PASSWORD, &u.password_hash) {
+                let mut users = ls_read_users();
+                if let (Some(u), Ok(hash)) = (
+                    users.iter_mut().find(|u| u.id == user_id),
+                    auth::hash_password(demo::DEMO_PASSWORD),
+                ) {
+                    u.password_hash = hash;
+                    ls_write_users(&users);
+                }
+            }
+        }
+        let mut songs = ls_read();
+        songs.retain(|s| s.user_id != user_id);
+        ls_write(&songs);
+        for song in demo::demo_songs() {
+            if let Err(e) = self.save_song(&song, user_id) {
+                eprintln!("Demo song '{}' failed to save: {e}", song.name);
+            }
+        }
+    }
+
     fn verify_user(&self, username: &str, password: &str) -> Result<Option<User>, String> {
         Ok(ls_read_users()
             .into_iter()
@@ -434,6 +492,12 @@ fn App() -> Element {
             .map_err(|e| eprintln!("DB open failed: {e}"))
             .ok()
     });
+    let demo = demo_mode();
+    if demo {
+        if let Some(d) = db.read().as_ref() {
+            d.seed_demo(false);
+        }
+    }
     let current_user: Signal<Option<User>> = use_signal(|| None);
     let screen: Signal<AppScreen> = use_signal(|| AppScreen::Landing);
 
@@ -448,6 +512,12 @@ fn App() -> Element {
                 background: #f0f4ff;
             ",
 
+            if demo {
+                div {
+                    style: "background: #fef3c7; color: #92400e; font-size: 12px; font-weight: 700; text-align: center; padding: 6px 12px; border-bottom: 1px solid #fcd34d;",
+                    "DEMO MODE — sample data, stored only in this browser."
+                }
+            }
             if current_user.read().is_some() {
                 Router::<Route> {}
             } else if *screen.read() == AppScreen::Landing {
@@ -455,7 +525,7 @@ fn App() -> Element {
             } else {
                 div {
                     style: "min-height: 100vh; background: linear-gradient(180deg, #ffffff 0%, #eef3fc 100%); display: flex; align-items: flex-start; justify-content: center; padding: 60px 20px;",
-                    LoginScreen { db, current_user, screen }
+                    LoginScreen { db, current_user, screen, demo }
                 }
             }
         }
@@ -2086,6 +2156,7 @@ fn LoginScreen(
     db: Signal<Option<Db>>,
     mut current_user: Signal<Option<User>>,
     mut screen: Signal<AppScreen>,
+    demo: bool,
 ) -> Element {
     let mut email = use_signal(String::new);
     let mut password = use_signal(String::new);
@@ -2168,6 +2239,45 @@ fn LoginScreen(
                     "Join SheetWave and start building your song library."
                 } else {
                     "Sign in to access your song library."
+                }
+            }
+
+            // Demo credentials (demo mode only)
+            if demo {
+                div {
+                    style: "background: #fffbeb; border: 1.5px solid #fcd34d; border-radius: 10px; padding: 12px 14px; font-size: 13px; color: #78350f; display: flex; flex-direction: column; gap: 8px;",
+                    div {
+                        b { "Demo account: " }
+                        "{demo::DEMO_EMAIL} / {demo::DEMO_PASSWORD}"
+                    }
+                    div {
+                        style: "display: flex; gap: 8px;",
+                        button {
+                            style: "padding: 8px 12px; background: #f59e0b; color: #ffffff; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit;",
+                            onclick: move |_| {
+                                if let Some(db_ref) = db.read().as_ref() {
+                                    match db_ref.verify_user(demo::DEMO_EMAIL, demo::DEMO_PASSWORD) {
+                                        Ok(Some(user)) => *current_user.write() = Some(user),
+                                        _ => {
+                                            *error_msg.write() =
+                                                "Demo user not found. Try \"Reset demo data\".".into();
+                                        }
+                                    }
+                                }
+                            },
+                            "Log in as demo user"
+                        }
+                        button {
+                            style: "padding: 8px 12px; background: transparent; color: #92400e; border: 1.5px solid #f59e0b; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit;",
+                            onclick: move |_| {
+                                if let Some(db_ref) = db.read().as_ref() {
+                                    db_ref.seed_demo(true);
+                                    *error_msg.write() = "Demo data was reset.".into();
+                                }
+                            },
+                            "Reset demo data"
+                        }
+                    }
                 }
             }
 
