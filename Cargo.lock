@@ -263,6 +263,7 @@ dependencies = [
  "sha2",
  "sqlx",
  "tokio",
+ "tower",
  "tower-http",
  "tower_governor",
  "wasm-bindgen",

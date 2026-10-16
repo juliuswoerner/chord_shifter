@@ -350,6 +350,90 @@ struct SongListItem {
     instruments: Vec<song::Instrument>,
 }
 
+// ── Router ────────────────────────────────────────────────────────────────────
+
+/// Rate-limit key: the client IP. On Fly.io the proxy sets `Fly-Client-IP` (clients
+/// cannot override it there); otherwise the TCP peer address is used. Without the
+/// header every user behind the proxy would share one limit.
+#[derive(Clone)]
+struct ClientIpKeyExtractor;
+
+impl tower_governor::key_extractor::KeyExtractor for ClientIpKeyExtractor {
+    type Key = std::net::IpAddr;
+
+    fn extract<T>(
+        &self,
+        req: &axum::http::Request<T>,
+    ) -> Result<Self::Key, tower_governor::GovernorError> {
+        req.headers()
+            .get("fly-client-ip")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse().ok())
+            .or_else(|| {
+                req.extensions()
+                    .get::<axum::extract::ConnectInfo<SocketAddr>>()
+                    .map(|c| c.0.ip())
+            })
+            .ok_or(tower_governor::GovernorError::UnableToExtractKey)
+    }
+}
+
+/// Build the full application router. `rate_limit` is switched off in tests, which
+/// call the router directly without a peer address.
+fn build_app(state: AppState, rate_limit: bool) -> Router {
+    let mut auth_routes = Router::new()
+        .route("/auth/register", post(register))
+        .route("/auth/login", post(login))
+        .route("/auth/verify/{token}", get(verify_email));
+    if rate_limit {
+        // Burst of 5, then max 1 request every 2 s per client IP.
+        let conf = std::sync::Arc::new(
+            tower_governor::governor::GovernorConfigBuilder::default()
+                .period(std::time::Duration::from_secs(2))
+                .burst_size(5)
+                .key_extractor(ClientIpKeyExtractor)
+                .finish()
+                .unwrap(),
+        );
+        auth_routes = auth_routes.layer(tower_governor::GovernorLayer { config: conf });
+    }
+
+    let song_routes = Router::new()
+        .route("/songs", get(list_songs).post(save_song))
+        .route("/songs/{id}", get(load_song).delete(delete_song));
+
+    let api = auth_routes.merge(song_routes);
+
+    // Lock CORS to the configured APP_URL origin only.
+    let allowed_origin = state
+        .app_url
+        .parse::<axum::http::HeaderValue>()
+        .unwrap_or_else(|err| {
+            panic!(
+                "Invalid APP_URL for CORS allow_origin: {:?} ({err})",
+                state.app_url
+            )
+        });
+    let cors = CorsLayer::new()
+        .allow_origin(allowed_origin)
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::DELETE,
+            axum::http::Method::OPTIONS,
+        ])
+        .allow_headers([
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::CONTENT_TYPE,
+        ]);
+
+    Router::new()
+        .nest("/api", api)
+        .fallback_service(ServeDir::new("dist"))
+        .layer(cors)
+        .with_state(state)
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -442,63 +526,19 @@ async fn main() {
         app_url,
     };
 
-    // Rate-limit auth endpoints: burst of 5, then max 1 request every 2 s per IP.
-    let auth_governor_conf = std::sync::Arc::new(
-        tower_governor::governor::GovernorConfigBuilder::default()
-            .period(std::time::Duration::from_secs(2))
-            .burst_size(5)
-            .finish()
-            .unwrap(),
-    );
-
-    let auth_routes = Router::new()
-        .route("/auth/register", post(register))
-        .route("/auth/login", post(login))
-        .route("/auth/verify/{token}", get(verify_email))
-        .layer(tower_governor::GovernorLayer {
-            config: auth_governor_conf,
-        });
-
-    let song_routes = Router::new()
-        .route("/songs", get(list_songs).post(save_song))
-        .route("/songs/{id}", get(load_song).delete(delete_song));
-
-    let api = auth_routes.merge(song_routes);
-
-    // Lock CORS to the configured APP_URL origin only.
-    let allowed_origin = state
-        .app_url
-        .parse::<axum::http::HeaderValue>()
-        .unwrap_or_else(|err| {
-            panic!(
-                "Invalid APP_URL for CORS allow_origin: {:?} ({err})",
-                state.app_url
-            )
-        });
-    let cors = CorsLayer::new()
-        .allow_origin(allowed_origin)
-        .allow_methods([
-            axum::http::Method::GET,
-            axum::http::Method::POST,
-            axum::http::Method::DELETE,
-            axum::http::Method::OPTIONS,
-        ])
-        .allow_headers([
-            axum::http::header::AUTHORIZATION,
-            axum::http::header::CONTENT_TYPE,
-        ]);
-
-    let app = Router::new()
-        .nest("/api", api)
-        .fallback_service(ServeDir::new("dist"))
-        .layer(cors)
-        .with_state(state);
+    let app = build_app(state, true);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     println!("Chord Shifter server listening on http://{addr}");
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    // `ConnectInfo` gives the rate limiter the peer address when no proxy header is present.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }
 
 // ── Migrations ────────────────────────────────────────────────────────────────
@@ -1046,5 +1086,235 @@ mod validation_tests {
     fn validate_email_rejects_short_or_non_alphabetic_tld() {
         assert!(validate_email("a@b.c").is_err());
         assert!(validate_email("a@b.c0m").is_err());
+    }
+}
+
+#[cfg(test)]
+mod api_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{header, Method, Request, StatusCode};
+    use tower::ServiceExt;
+
+    const PASSWORD: &str = "Str0ng-Passw0rd!";
+
+    async fn test_state() -> AppState {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory SQLite");
+        run_migrations(&pool).await;
+        AppState {
+            db: pool,
+            jwt_secret: hex::encode([7u8; 32]),
+            cipher: Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&[0u8; 32])),
+            smtp_host: None,
+            smtp_port: 587,
+            smtp_username: None,
+            smtp_password: None,
+            smtp_from: None,
+            // localhost = local mode: users are verified automatically.
+            app_url: "http://localhost:8080".to_string(),
+        }
+    }
+
+    async fn send(
+        app: &Router,
+        method: Method,
+        uri: &str,
+        token: Option<&str>,
+        body: Option<serde_json::Value>,
+        extra_header: Option<(&str, &str)>,
+    ) -> (StatusCode, String) {
+        let mut req = Request::builder().method(method).uri(uri);
+        if let Some(t) = token {
+            req = req.header(header::AUTHORIZATION, format!("Bearer {t}"));
+        }
+        if let Some((k, v)) = extra_header {
+            req = req.header(k, v);
+        }
+        let req = match body {
+            Some(b) => req
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(b.to_string())),
+            None => req.body(Body::empty()),
+        }
+        .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    fn creds(email: &str) -> serde_json::Value {
+        serde_json::json!({ "email": email, "password": PASSWORD })
+    }
+
+    #[tokio::test]
+    async fn register_then_login_returns_a_token() {
+        let app = build_app(test_state().await, false);
+        let (s, _) = send(
+            &app,
+            Method::POST,
+            "/api/auth/register",
+            None,
+            Some(creds("a@example.com")),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::CREATED);
+        let (s, body) = send(
+            &app,
+            Method::POST,
+            "/api/auth/login",
+            None,
+            Some(creds("a@example.com")),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(v["token"].as_str().is_some_and(|t| !t.is_empty()));
+        assert_eq!(v["email"], "a@example.com");
+    }
+
+    #[tokio::test]
+    async fn duplicate_registration_is_rejected() {
+        let app = build_app(test_state().await, false);
+        send(
+            &app,
+            Method::POST,
+            "/api/auth/register",
+            None,
+            Some(creds("a@example.com")),
+            None,
+        )
+        .await;
+        let (s, _) = send(
+            &app,
+            Method::POST,
+            "/api/auth/register",
+            None,
+            Some(creds("A@Example.com")),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn wrong_password_is_unauthorized() {
+        let app = build_app(test_state().await, false);
+        send(
+            &app,
+            Method::POST,
+            "/api/auth/register",
+            None,
+            Some(creds("a@example.com")),
+            None,
+        )
+        .await;
+        let bad = serde_json::json!({ "email": "a@example.com", "password": "nope" });
+        let (s, _) = send(&app, Method::POST, "/api/auth/login", None, Some(bad), None).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn weak_password_is_rejected() {
+        let app = build_app(test_state().await, false);
+        let weak = serde_json::json!({ "email": "a@example.com", "password": "short" });
+        let (s, _) = send(
+            &app,
+            Method::POST,
+            "/api/auth/register",
+            None,
+            Some(weak),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn song_routes_require_a_token() {
+        let app = build_app(test_state().await, false);
+        let (s, _) = send(&app, Method::GET, "/api/songs", None, None, None).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        let (s, _) = send(
+            &app,
+            Method::GET,
+            "/api/songs",
+            Some("not-a-token"),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+    }
+
+    // Regression: with the rate limiter on, auth routes answered 500 "Unable To Extract Key!"
+    // because no client address was available.
+    #[tokio::test]
+    async fn rate_limited_auth_routes_work_with_a_proxy_header() {
+        let app = build_app(test_state().await, true);
+        let hdr = Some(("fly-client-ip", "203.0.113.9"));
+        let (s, body) = send(
+            &app,
+            Method::POST,
+            "/api/auth/register",
+            None,
+            Some(creds("a@example.com")),
+            hdr,
+        )
+        .await;
+        assert_eq!(s, StatusCode::CREATED, "{body}");
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_works_with_the_peer_address() {
+        let app = build_app(test_state().await, true);
+        let mut req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/auth/login")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(creds("nobody@example.com").to_string()))
+            .unwrap();
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(SocketAddr::from((
+                [127, 0, 0, 1],
+                5555,
+            ))));
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED); // reached the handler
+    }
+
+    #[tokio::test]
+    async fn rate_limit_is_per_client_ip() {
+        let app = build_app(test_state().await, true);
+        let login = |ip: &'static str| {
+            let app = app.clone();
+            async move {
+                send(
+                    &app,
+                    Method::POST,
+                    "/api/auth/login",
+                    None,
+                    Some(creds("nobody@example.com")),
+                    Some(("fly-client-ip", ip)),
+                )
+                .await
+                .0
+            }
+        };
+        // Burst of 5 passes (401 = reached the handler), the 6th from the same IP is limited.
+        for _ in 0..5 {
+            assert_eq!(login("198.51.100.1").await, StatusCode::UNAUTHORIZED);
+        }
+        assert_eq!(login("198.51.100.1").await, StatusCode::TOO_MANY_REQUESTS);
+        // Another client is unaffected.
+        assert_eq!(login("198.51.100.2").await, StatusCode::UNAUTHORIZED);
     }
 }
