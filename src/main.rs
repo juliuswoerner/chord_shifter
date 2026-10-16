@@ -1224,7 +1224,7 @@ fn SongView(
                                         *active_instrument.write() = None;
                                         *inst_save_msg.write() = None;
                                     },
-                                    img { src: ICON_BASE.to_string(), style: "width: 44px; height: 44px; object-fit: contain;", alt: "Base" }
+                                    img { src: ICON_BASE.to_string(), style: if is_base { "width: 44px; height: 44px; object-fit: contain; filter: brightness(0) invert(1);" } else { "width: 44px; height: 44px; object-fit: contain;" }, alt: "Base" }
                                     span { style: "{lbl_s}", "Base" }
                                 }
                             }
@@ -1262,7 +1262,7 @@ fn SongView(
                                                 *inst_save_msg.write() = None;
                                             }
                                         },
-                                        img { src: inst_icon(inst).to_string(), style: "width: 44px; height: 44px; object-fit: contain;", alt: "{inst.label()}" }
+                                        img { src: inst_icon(inst).to_string(), style: if is_active { "width: 44px; height: 44px; object-fit: contain; filter: brightness(0) invert(1);" } else { "width: 44px; height: 44px; object-fit: contain;" }, alt: "{inst.label()}" }
                                         span { style: "{lbl_s}", "{inst.label()}" }
                                     }
                                 }
@@ -4117,7 +4117,7 @@ fn InstrumentSheetPage(id: i64, instrument: String) -> Element {
                     // Instrument badge
                     div {
                         style: "display: inline-flex; align-items: center; gap: 10px; background: {accent}; color: #fff; border-radius: 12px; padding: 10px 20px; margin-bottom: 22px;",
-                        img { src: inst_icon_asset.to_string(), style: "width: 44px; height: 44px; object-fit: contain;", alt: "{inst_label}" }
+                        img { src: inst_icon_asset.to_string(), style: "width: 44px; height: 44px; object-fit: contain; filter: brightness(0) invert(1);", alt: "{inst_label}" }
                         span { style: "font-size: 16px; font-weight: 800; letter-spacing: 0.5px;", "{inst_label}" }
                     }
 
