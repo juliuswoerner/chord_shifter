@@ -23,6 +23,14 @@ A chord sheet editor that runs in the browser (Rust + [Dioxus](https://dioxuslab
 - [Rust](https://rustup.rs/) (stable) with the WASM target: `rustup target add wasm32-unknown-unknown`
 - [Dioxus CLI](https://dioxuslabs.com/learn/0.6/getting_started) 0.6: `cargo install dioxus-cli --version 0.6.3 --locked`
 
+### Try the demo (2 minutes)
+
+```bash
+scripts/demo.sh            # or: dx serve --platform web, then open http://localhost:8080/?demo
+```
+
+Opening the app with `?demo` creates a demo user and four sample songs (chords with repeats and voltas, guitar/bass tabs, a drum beat, per-instrument sheets with capo, a piano transpose, a flat key) and shows a **DEMO MODE** banner. Log in as `demo@example.com` / `Demo-Sheetwave-2026!` or click **Log in as demo user**; **Reset demo data** on the login screen restores the samples. Everything stays in your browser's `localStorage`. Open a song and use **Export as PDF** to see the printed result. `scripts/demo.sh --port N` changes the port.
+
 ### Run in the browser
 
 ```bash
