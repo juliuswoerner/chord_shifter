@@ -24,7 +24,7 @@ every later phase (bands, setlists, live mode) without registering or setting up
 **What exists today:** the web app runs with `dx serve --platform web` and seeds a single
 "Let It Be" song into `localStorage`, but you must still register a user by hand. The server
 needs `DATABASE_URL`, `JWT_SECRET`, `ENCRYPTION_KEY` and `APP_URL`, and skips email
-verification when SMTP is not configured, so it can already run locally without a mail server.
+verification when `APP_URL` is `localhost`/`127.0.0.1`, so it can already run locally without a mail server.
 
 1. **Demo seed data** (`src/demo.rs` or `assets/demo/*.json`, built on the `Song` model):
    a demo user (for example `demo@example.com`, password shown on the login screen) and 4–6
