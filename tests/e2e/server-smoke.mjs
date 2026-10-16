@@ -37,7 +37,13 @@ function expect(cond, msg) {
 }
 
 async function logIn() {
-    await page.getByRole('button', { name: 'Log in', exact: true }).first().click();
+    // Landing page: "Log in". After logging out the form may still be in register mode.
+    const toggle = page.getByRole('button', { name: /Already have an account/ });
+    if (await toggle.count()) {
+        await toggle.click();
+    } else {
+        await page.getByRole('button', { name: 'Log in', exact: true }).first().click();
+    }
     await page.getByPlaceholder('Email address').fill(email);
     await page.getByPlaceholder('Password').fill(password);
     await page.getByRole('button', { name: 'Log in', exact: true }).last().click();
@@ -76,7 +82,11 @@ try {
         await logIn();
         await page.getByText(songName).waitFor({ timeout: 15000 });
         await page.getByText(songName).first().click();
-        await page.getByDisplayValue(songName).waitFor({ timeout: 15000 });
+        await page.waitForFunction(
+            (name) => document.querySelector('input[placeholder="Song name"]')?.value === name,
+            songName,
+            { timeout: 15000 },
+        );
         expect(apiCalls.some((c) => /^GET \/api\/songs\/\d+ 200/.test(c)), `load not called: ${apiCalls}`);
     });
 

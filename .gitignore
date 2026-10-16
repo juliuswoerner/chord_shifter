@@ -7,3 +7,5 @@
 
 node_modules/
 demo-smoke-failure.png
+server-smoke-failure.png
+server.log
