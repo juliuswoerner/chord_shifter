@@ -112,6 +112,175 @@ fn demo_mode() -> bool {
         .unwrap_or(false)
 }
 
+// ── Importing browser-stored songs into a server account ─────────────────────
+//
+// Before the app used the server, accounts and songs lived in this browser's
+// localStorage. When someone logs in to the server we offer to copy those songs
+// over. Local data is never deleted; imported (or dismissed) song ids are
+// remembered so the offer is not repeated.
+
+const LS_IMPORT_DONE_KEY: &str = "chord_shifter_import_done";
+
+fn ls_read_import_done() -> Vec<i64> {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item(LS_IMPORT_DONE_KEY).ok().flatten())
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default()
+}
+
+fn ls_write_import_done(ids: &[i64]) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        if let Ok(json) = serde_json::to_string(ids) {
+            let _ = storage.set_item(LS_IMPORT_DONE_KEY, &json);
+        }
+    }
+}
+
+/// "Not now" lasts for the browser session (survives navigating around the app and
+/// reloads, not closing the tab) and is remembered per server account.
+const SS_IMPORT_HIDDEN_KEY: &str = "chord_shifter_import_hidden";
+
+fn import_hidden_for(email: &str) -> bool {
+    web_sys::window()
+        .and_then(|w| w.session_storage().ok().flatten())
+        .and_then(|s| s.get_item(SS_IMPORT_HIDDEN_KEY).ok().flatten())
+        .is_some_and(|v| v.eq_ignore_ascii_case(email))
+}
+
+fn hide_import_for(email: &str) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.session_storage().ok().flatten()) {
+        let _ = storage.set_item(SS_IMPORT_HIDDEN_KEY, email);
+    }
+}
+
+fn mark_import_done(ids: &[i64]) {
+    let mut done = ls_read_import_done();
+    for id in ids {
+        if !done.contains(id) {
+            done.push(*id);
+        }
+    }
+    ls_write_import_done(&done);
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct LocalSongRef {
+    id: i64,
+    name: String,
+    artist: String,
+}
+
+/// Browser-stored songs of one local account that are still to be offered.
+#[derive(Clone, Debug, PartialEq)]
+struct ImportGroup {
+    local_user_id: i64,
+    owner_email: String,
+    /// True when the local account has the same email as the logged-in server account.
+    matches_account: bool,
+    songs: Vec<LocalSongRef>,
+}
+
+/// Group not-yet-handled local songs by their local account, the account matching
+/// `account_email` first. Songs with `user_id == 0` (the old shared example) and songs
+/// of unknown accounts are left out.
+fn import_groups(
+    users: &[StoredUser],
+    songs: &[StoredSong],
+    done: &[i64],
+    account_email: &str,
+) -> Vec<ImportGroup> {
+    let mut groups: Vec<ImportGroup> = users
+        .iter()
+        .filter_map(|u| {
+            let refs: Vec<LocalSongRef> = songs
+                .iter()
+                .filter(|s| s.user_id == u.id && s.user_id != 0 && !done.contains(&s.id))
+                .map(|s| LocalSongRef {
+                    id: s.id,
+                    name: s.name.clone(),
+                    artist: s.artist.clone(),
+                })
+                .collect();
+            (!refs.is_empty()).then(|| ImportGroup {
+                local_user_id: u.id,
+                owner_email: u.username.clone(),
+                matches_account: u.username.eq_ignore_ascii_case(account_email.trim()),
+                songs: refs,
+            })
+        })
+        .collect();
+    groups.sort_by_key(|g| !g.matches_account);
+    groups
+}
+
+/// Split a group into songs to copy and songs the account already has (same name and
+/// artist; the server would otherwise overwrite the account's newer copy).
+fn plan_import<'a>(
+    group: &'a ImportGroup,
+    existing: &[(String, String)],
+) -> (Vec<&'a LocalSongRef>, Vec<&'a LocalSongRef>) {
+    group
+        .songs
+        .iter()
+        .partition(|s| !existing.iter().any(|(n, a)| *n == s.name && *a == s.artist))
+}
+
+#[derive(Clone, Debug, PartialEq, Default)]
+struct ImportReport {
+    imported: usize,
+    skipped: usize,
+    failed: usize,
+}
+
+impl ImportReport {
+    fn message(&self) -> String {
+        let mut parts = vec![format!("Imported {} song(s)", self.imported)];
+        if self.skipped > 0 {
+            parts.push(format!("{} already in your account", self.skipped));
+        }
+        if self.failed > 0 {
+            parts.push(format!("{} failed (try again)", self.failed));
+        }
+        parts.join(", ") + "."
+    }
+}
+
+/// Copy a group's songs to the server account. Songs the account already has are
+/// skipped; failures stay offered for another try.
+async fn run_import(db: &Db, user: &User, group: &ImportGroup) -> Result<ImportReport, String> {
+    let existing: Vec<(String, String)> = db
+        .list_songs(Some(user))
+        .await?
+        .into_iter()
+        .map(|r| (r.name, r.artist))
+        .collect();
+    let (to_import, skipped) = plan_import(group, &existing);
+    let local = Db {
+        backend: Backend::Local,
+    };
+    let mut report = ImportReport {
+        skipped: skipped.len(),
+        ..Default::default()
+    };
+    let mut handled: Vec<i64> = skipped.iter().map(|s| s.id).collect();
+    for s in to_import {
+        let result = match local.load_song_local(s.id) {
+            Ok(song) => db.save_song(&song, Some(user)).await.map(|_| ()),
+            Err(e) => Err(e),
+        };
+        match result {
+            Ok(()) => {
+                report.imported += 1;
+                handled.push(s.id);
+            }
+            Err(_) => report.failed += 1,
+        }
+    }
+    mark_import_done(&handled);
+    Ok(report)
+}
+
 /// Where songs and accounts live.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Backend {
@@ -3920,8 +4089,11 @@ fn LibraryPage() -> Element {
 
     let mut rows: Signal<Vec<SongRow>> = use_signal(Vec::new);
     let mut status: Signal<String> = use_signal(String::new);
+    // Bumped after an import so the list is fetched again.
+    let mut reload: Signal<u32> = use_signal(|| 0);
 
     use_effect(move || {
+        let _ = reload();
         let user = current_user.read().clone();
         let db_val = db.read().clone();
         spawn(async move {
@@ -4011,6 +4183,9 @@ fn LibraryPage() -> Element {
                         "+"
                     }
                 }
+
+                // ── Offer to import songs stored in this browser ────────
+                ImportBanner { db, current_user, on_done: move |_| reload += 1 }
 
                 // ── Status message ────────────────────────────────────────
                 if !status.read().is_empty() {
@@ -4113,6 +4288,174 @@ fn LibraryPage() -> Element {
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Import banner ─────────────────────────────────────────────────────────────
+
+/// Offers to copy songs from this browser's localStorage into the logged-in server
+/// account. Shown only with the server backend, and only while something is left.
+#[component]
+fn ImportBanner(
+    db: Signal<Option<Db>>,
+    current_user: Signal<Option<User>>,
+    on_done: EventHandler<()>,
+) -> Element {
+    let mut groups: Signal<Vec<ImportGroup>> = use_signal(Vec::new);
+    let mut message: Signal<String> = use_signal(String::new);
+    let mut busy = use_signal(|| false);
+    let account_email = current_user
+        .read()
+        .as_ref()
+        .map(|u| u.username.clone())
+        .unwrap_or_default();
+    let mut hidden = use_signal({
+        let email = account_email.clone();
+        move || import_hidden_for(&email)
+    });
+    let mut passwords: Signal<std::collections::HashMap<i64, String>> =
+        use_signal(Default::default);
+
+    let mut refresh = move || {
+        let is_server = db
+            .read()
+            .as_ref()
+            .is_some_and(|d| d.backend == Backend::Server);
+        let email = current_user
+            .read()
+            .as_ref()
+            .map(|u| u.username.clone())
+            .unwrap_or_default();
+        let found = if is_server {
+            import_groups(&ls_read_users(), &ls_read(), &ls_read_import_done(), &email)
+        } else {
+            Vec::new()
+        };
+        groups.set(found);
+    };
+    use_effect(refresh);
+
+    let mut start_import = move |group: ImportGroup| {
+        // Another browser account's songs need that account's password.
+        if !group.matches_account {
+            let typed = passwords
+                .read()
+                .get(&group.local_user_id)
+                .cloned()
+                .unwrap_or_default();
+            let ok = ls_read_users()
+                .iter()
+                .find(|u| u.id == group.local_user_id)
+                .is_some_and(|u| auth::verify_password(&typed, &u.password_hash));
+            if !ok {
+                *message.write() = format!("Wrong password for {}.", group.owner_email);
+                return;
+            }
+        }
+        let db_val = db.read().clone();
+        let user = current_user.read().clone();
+        spawn(async move {
+            *busy.write() = true;
+            if let (Some(d), Some(u)) = (db_val, user) {
+                match run_import(&d, &u, &group).await {
+                    Ok(report) => {
+                        *message.write() = report.message();
+                        on_done.call(());
+                    }
+                    Err(e) => *message.write() = format!("Import failed: {e}"),
+                }
+                refresh();
+            }
+            *busy.write() = false;
+        });
+    };
+
+    let dismiss_all = move |_| {
+        let ids: Vec<i64> = groups
+            .read()
+            .iter()
+            .flat_map(|g| g.songs.iter().map(|s| s.id))
+            .collect();
+        mark_import_done(&ids);
+        *hidden.write() = true;
+    };
+
+    if hidden() || (groups.read().is_empty() && message.read().is_empty()) {
+        return rsx! {};
+    }
+
+    rsx! {
+        div {
+            id: "import-banner",
+            style: "margin: 0 0 16px; padding: 12px 14px; background: #eff6ff; border: 1.5px solid #bfdbfe; border-radius: 10px; font-size: 13px; color: #1e3a8a; display: flex; flex-direction: column; gap: 10px;",
+            if !message.read().is_empty() {
+                div { style: "font-weight: 700;", "{message}" }
+            }
+            for g in groups.read().iter().cloned() {
+                div {
+                    key: "{g.local_user_id}",
+                    style: "display: flex; flex-direction: column; gap: 6px;",
+                    div {
+                        if g.matches_account {
+                            "Found {g.songs.len()} song(s) saved in this browser for your account. Import them?"
+                        } else {
+                            "Found {g.songs.len()} song(s) saved in this browser by {g.owner_email}."
+                        }
+                    }
+                    // Titles of another browser account stay hidden until its password is entered.
+                    if g.matches_account {
+                        div {
+                            style: "color: #475569; font-size: 12px;",
+                            {g.songs.iter().map(|s| format!("{} — {}", s.name, s.artist)).collect::<Vec<_>>().join(" · ")}
+                        }
+                    }
+                    if !g.matches_account {
+                        input {
+                            r#type: "password",
+                            placeholder: "Password of {g.owner_email} (browser account)",
+                            style: "padding: 8px 10px; border: 1.5px solid #bfdbfe; border-radius: 8px; font-family: inherit; font-size: 13px;",
+                            oninput: {
+                                let id = g.local_user_id;
+                                move |e: FormEvent| { passwords.write().insert(id, e.value()); }
+                            },
+                        }
+                    }
+                    div {
+                        style: "display: flex; gap: 8px;",
+                        button {
+                            disabled: busy(),
+                            style: "padding: 8px 12px; background: #2563eb; color: #ffffff; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit;",
+                            onclick: {
+                                let g = g.clone();
+                                move |_| start_import(g.clone())
+                            },
+                            "Import {g.songs.len()} song(s)"
+                        }
+                    }
+                }
+            }
+            if !groups.read().is_empty() {
+                div {
+                    style: "display: flex; gap: 12px;",
+                    button {
+                        style: "background: none; border: none; padding: 0; color: #475569; text-decoration: underline; cursor: pointer; font-family: inherit; font-size: 12px;",
+                        onclick: {
+                            let email = account_email.clone();
+                            move |_| {
+                                hide_import_for(&email);
+                                *hidden.write() = true;
+                            }
+                        },
+                        "Not now"
+                    }
+                    button {
+                        style: "background: none; border: none; padding: 0; color: #475569; text-decoration: underline; cursor: pointer; font-family: inherit; font-size: 12px;",
+                        onclick: dismiss_all,
+                        "Don't ask again"
                     }
                 }
             }
@@ -4778,5 +5121,115 @@ fn ChordEditor(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod import_tests {
+    use super::*;
+
+    fn user(id: i64, name: &str) -> StoredUser {
+        StoredUser {
+            id,
+            username: name.to_string(),
+            password_hash: String::new(),
+        }
+    }
+
+    fn song(id: i64, user_id: i64, name: &str, artist: &str) -> StoredSong {
+        StoredSong {
+            id,
+            name: name.to_string(),
+            artist: artist.to_string(),
+            key: "C Major".to_string(),
+            parts_json: "[]".to_string(),
+            instruments_json: String::new(),
+            vocals_notes: String::new(),
+            user_id,
+            instrument_parts_json: String::new(),
+            instrument_capos_json: String::new(),
+            pdf_settings_json: String::new(),
+        }
+    }
+
+    fn sample() -> (Vec<StoredUser>, Vec<StoredSong>) {
+        (
+            vec![user(1, "bob@example.com"), user(2, "Alice@Example.com")],
+            vec![
+                song(1, 0, "Let It Be", "The Beatles"), // shared example: never offered
+                song(2, 1, "Bob Song", "Bob"),
+                song(3, 2, "Alice One", "Alice"),
+                song(4, 2, "Alice Two", "Alice"),
+                song(5, 9, "Orphan", "Nobody"), // account no longer known
+            ],
+        )
+    }
+
+    #[test]
+    fn groups_by_local_account_and_skips_shared_and_unknown_songs() {
+        let (users, songs) = sample();
+        let groups = import_groups(&users, &songs, &[], "someone@else.com");
+        assert_eq!(groups.len(), 2);
+        let all: Vec<i64> = groups
+            .iter()
+            .flat_map(|g| g.songs.iter().map(|s| s.id))
+            .collect();
+        assert!(!all.contains(&1) && !all.contains(&5));
+        assert!(groups.iter().all(|g| !g.matches_account));
+    }
+
+    #[test]
+    fn the_account_with_the_same_email_comes_first_ignoring_case() {
+        let (users, songs) = sample();
+        let groups = import_groups(&users, &songs, &[], " alice@example.com ");
+        assert_eq!(groups[0].owner_email, "Alice@Example.com");
+        assert!(groups[0].matches_account);
+        assert_eq!(groups[0].songs.len(), 2);
+        assert!(!groups[1].matches_account);
+    }
+
+    #[test]
+    fn handled_songs_are_not_offered_again() {
+        let (users, songs) = sample();
+        let groups = import_groups(&users, &songs, &[3, 4, 2], "alice@example.com");
+        assert!(groups.is_empty());
+        let groups = import_groups(&users, &songs, &[3], "alice@example.com");
+        assert_eq!(groups.len(), 2);
+        assert_eq!(
+            groups[0].songs.iter().map(|s| s.id).collect::<Vec<_>>(),
+            vec![4]
+        );
+    }
+
+    #[test]
+    fn songs_the_account_already_has_are_skipped_not_overwritten() {
+        let (users, songs) = sample();
+        let group = import_groups(&users, &songs, &[], "alice@example.com").remove(0);
+        let existing = vec![
+            ("Alice One".to_string(), "Alice".to_string()), // same song
+            ("Alice Two".to_string(), "Somebody Else".to_string()), // same title, other artist
+        ];
+        let (to_import, skipped) = plan_import(&group, &existing);
+        assert_eq!(skipped.iter().map(|s| s.id).collect::<Vec<_>>(), vec![3]);
+        assert_eq!(to_import.iter().map(|s| s.id).collect::<Vec<_>>(), vec![4]);
+    }
+
+    #[test]
+    fn the_report_message_mentions_only_what_happened() {
+        let all_good = ImportReport {
+            imported: 3,
+            skipped: 0,
+            failed: 0,
+        };
+        assert_eq!(all_good.message(), "Imported 3 song(s).");
+        let mixed = ImportReport {
+            imported: 1,
+            skipped: 2,
+            failed: 1,
+        };
+        assert_eq!(
+            mixed.message(),
+            "Imported 1 song(s), 2 already in your account, 1 failed (try again)."
+        );
     }
 }
