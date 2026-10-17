@@ -206,6 +206,8 @@ pub enum PartKind {
     BassRiff,
     /// 8-track drum beat grid (K, S, Hi, R, C, T1, T2, T3 — all 8 cells).
     DrumBeat,
+    /// 2-row piano sheet (RH = right hand, LH = left hand — indices 0-1 of the shared TabCol array).
+    PianoRiff,
 }
 
 // ── Part items ────────────────────────────────────────────────────────────────
@@ -294,6 +296,13 @@ pub struct SongPart {
     /// Optional vocals / lyrics text shown below the chords or tab.
     #[serde(default)]
     pub part_text: Option<PartTextSettings>,
+    /// Time signature for piano parts, e.g. "4/4", "3/4" (default "4/4").
+    #[serde(default = "default_time_sig")]
+    pub time_sig: String,
+}
+
+fn default_time_sig() -> String {
+    "4/4".to_string()
 }
 
 impl SongPart {
@@ -305,6 +314,7 @@ impl SongPart {
             tab_grid: Vec::new(),
             items: Vec::new(),
             part_text: None,
+            time_sig: "4/4".to_string(),
         }
     }
 
@@ -316,6 +326,7 @@ impl SongPart {
             tab_grid: Vec::new(),
             items: Vec::new(),
             part_text: None,
+            time_sig: "4/4".to_string(),
         }
     }
 
@@ -327,6 +338,7 @@ impl SongPart {
             tab_grid: Vec::new(),
             items: Vec::new(),
             part_text: None,
+            time_sig: "4/4".to_string(),
         }
     }
 
@@ -338,6 +350,19 @@ impl SongPart {
             tab_grid: Vec::new(),
             items: Vec::new(),
             part_text: None,
+            time_sig: "4/4".to_string(),
+        }
+    }
+
+    pub fn new_piano_riff(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            kind: PartKind::PianoRiff,
+            tab: String::new(),
+            tab_grid: Vec::new(),
+            items: Vec::new(),
+            part_text: None,
+            time_sig: "4/4".to_string(),
         }
     }
 
@@ -367,10 +392,13 @@ impl SongPart {
                 (&["G", "D", "A", "E"], 2..6)
             } else if self.kind == PartKind::DrumBeat {
                 (&["K", "S", "Hi", "R", "C", "T1", "T2", "T3"], 0..8)
+            } else if self.kind == PartKind::PianoRiff {
+                (&["RH", "LH"], 0..2)
             } else {
                 (&["e", "B", "G", "D", "A", "E"], 0..6)
             };
-        let mut rows: Vec<String> = labels.iter().map(|l| format!("{l}|")).collect();
+        let label_w = labels.iter().map(|l| l.len()).max().unwrap_or(1);
+        let mut rows: Vec<String> = labels.iter().map(|l| format!("{l:>label_w$}|")).collect();
         let mut output = String::new();
         let mut block_has_content = false;
         for col in &self.tab_grid {
@@ -388,7 +416,7 @@ impl SongPart {
                         output.push('\n'); // blank separator line
                     }
                     // start fresh block
-                    rows = labels.iter().map(|l| format!("{l}|")).collect();
+                    rows = labels.iter().map(|l| format!("{l:>label_w$}|")).collect();
                     block_has_content = false;
                 }
                 TabCol::Barline => {
@@ -684,6 +712,7 @@ impl Song {
             tab_grid: Vec::new(),
             items: chords.into_iter().map(PartItem::Chord).collect(),
             part_text: None,
+            time_sig: "4/4".to_string(),
         });
         self
     }
@@ -1362,6 +1391,7 @@ mod tests {
                     PartItem::Chord(Chord::new("F", ChordQuality::Major)),
                 ],
                 part_text: None,
+                time_sig: "4/4".to_string(),
             }],
         );
         song.transpose_to("G");
@@ -1411,6 +1441,7 @@ mod tests {
                 PartItem::VoltaBracketEnd,
             ],
             part_text: None,
+            time_sig: "4/4".to_string(),
         };
         let json = serde_json::to_string(&part).expect("serialize");
         let back: SongPart = serde_json::from_str(&json).expect("deserialize");
