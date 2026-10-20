@@ -1770,7 +1770,7 @@ fn SongView(
                         }
                     }
                 }
-                RenderedSheet { song: piano_song, notation, capo: piano_capo }
+                RenderedSheet { song: piano_song, notation, capo: piano_capo, instrument: Some(Instrument::Piano) }
             }
             if render_mode() && *active_instrument.read() == Some(Instrument::Drums) {
                 RenderedSheet { song: drums_song, notation, capo: use_signal(|| 0_i8) }
@@ -1999,7 +1999,7 @@ fn SongView(
                                     }
                                 }
                             }
-                            PartView { key: "{part_index}", song: act_song, part_index, notation, capo: act_capo, vocals_only: inst == Instrument::Vocals }
+                            PartView { key: "{part_index}", song: act_song, part_index, notation, capo: act_capo, vocals_only: inst == Instrument::Vocals, instrument: Some(inst) }
                         }
                         button {
                             style: "
@@ -2287,31 +2287,31 @@ fn SongView(
                 ",
                 onclick: move |_| {
                     let base = song.read().clone();
-                    let (preview_song, capo_val) = match *active_instrument.read() {
-                        None => (base.clone(), 0_i8),
+                    let (preview_song, shift) = match *active_instrument.read() {
+                        None => (base.clone(), song::Shift::Capo(0)),
                         Some(Instrument::Guitar) => {
                             let parts = guitar_song.read().parts.clone();
-                            (Song { parts, ..base.clone() }, guitar_capo())
+                            (Song { parts, ..base.clone() }, Instrument::Guitar.shift(guitar_capo()))
                         }
                         Some(Instrument::AcousticGuitar) => {
                             let parts = acoustic_song.read().parts.clone();
-                            (Song { parts, ..base.clone() }, acoustic_capo())
+                            (Song { parts, ..base.clone() }, Instrument::AcousticGuitar.shift(acoustic_capo()))
                         }
                         Some(Instrument::Bass) => {
                             let parts = bass_song.read().parts.clone();
-                            (Song { parts, ..base.clone() }, bass_capo())
+                            (Song { parts, ..base.clone() }, Instrument::Bass.shift(bass_capo()))
                         }
                         Some(Instrument::Piano) => {
                             let parts = piano_song.read().parts.clone();
-                            (Song { parts, ..base.clone() }, piano_capo())
+                            (Song { parts, ..base.clone() }, Instrument::Piano.shift(piano_capo()))
                         }
                         Some(Instrument::Drums) => {
                             let parts = drums_song.read().parts.clone();
-                            (Song { parts, ..base.clone() }, 0_i8)
+                            (Song { parts, ..base.clone() }, song::Shift::Capo(0))
                         }
                         Some(Instrument::Vocals) => {
                             let parts = vocals_song.read().parts.clone();
-                            (Song { parts, ..base.clone() }, vocals_capo())
+                            (Song { parts, ..base.clone() }, Instrument::Vocals.shift(vocals_capo()))
                         }
                     };
                     let note = notation();
@@ -2321,7 +2321,7 @@ fn SongView(
                     let cs  = pdf_s.chord_size as f32;
                     use js_sys::Uint8Array;
                     use web_sys::{Blob, BlobPropertyBag, Url};
-                    match pdf::generate_pdf_bytes(&preview_song, note, pns, cs, capo_val) {
+                    match pdf::generate_pdf_for(&preview_song, note, pns, cs, shift) {
                         Ok(bytes) => {
                             let array = Uint8Array::from(bytes.as_slice());
                             let parts = js_sys::Array::new();
@@ -2362,10 +2362,10 @@ fn SongView(
                     let note = notation();
 
                     // Collect: base sheet + one entry per instrument that has saved overrides.
-                    // Each entry is (song_with_correct_parts, filename, capo_for_that_sheet, pns, cs).
-                    let mut exports: Vec<(Song, String, i8, f32, f32)> = Vec::new();
+                    // Each entry is (song_with_correct_parts, filename, shift_for_that_sheet, pns, cs).
+                    let mut exports: Vec<(Song, String, song::Shift, f32, f32)> = Vec::new();
                     let base_pdf = s.pdf_settings.get("Base").cloned().unwrap_or_default();
-                    exports.push((s.clone(), s.name.clone(), 0_i8, base_pdf.part_name_size as f32, base_pdf.chord_size as f32));
+                    exports.push((s.clone(), s.name.clone(), song::Shift::Capo(0), base_pdf.part_name_size as f32, base_pdf.chord_size as f32));
                     for inst in Instrument::all() {
                         if let Some(parts) = s.instrument_parts.get(inst.label()).cloned() {
                             let inst_cap = *s.instrument_capos.get(inst.label()).unwrap_or(&0);
@@ -2373,7 +2373,7 @@ fn SongView(
                             let mut inst_sheet = s.clone();
                             inst_sheet.parts = parts;
                             let filename = format!("{}_{}", s.name, inst.label());
-                            exports.push((inst_sheet, filename, inst_cap, inst_pdf.part_name_size as f32, inst_pdf.chord_size as f32));
+                            exports.push((inst_sheet, filename, inst.shift(inst_cap), inst_pdf.part_name_size as f32, inst_pdf.chord_size as f32));
                         }
                     }
 
@@ -2392,8 +2392,8 @@ fn SongView(
                             let opts = zip::write::SimpleFileOptions::default()
                                 .compression_method(zip::CompressionMethod::Deflated);
 
-                            for (sheet, filename, sheet_cap, pns, cs) in &exports {
-                                match pdf::generate_pdf_bytes(sheet, note, *pns, *cs, *sheet_cap) {
+                            for (sheet, filename, sheet_shift, pns, cs) in &exports {
+                                match pdf::generate_pdf_for(sheet, note, *pns, *cs, *sheet_shift) {
                                     Ok(bytes) => {
                                         let _ = zip.start_file(format!("{filename}.pdf"), opts);
                                         let _ = zip.write_all(&bytes);
@@ -4083,16 +4083,25 @@ fn TabEditor(
 // ── Rendered Sheet ────────────────────────────────────────────────────────────
 
 #[component]
-fn RenderedSheet(song: Signal<Song>, notation: Signal<Notation>, capo: Signal<i8>) -> Element {
+fn RenderedSheet(
+    song: Signal<Song>,
+    notation: Signal<Notation>,
+    capo: Signal<i8>,
+    /// Which instrument's sheet this is: a piano value is a transpose (`+` = higher), the
+    /// others a capo (`+` = lower). `None` reads the value as a capo.
+    #[props(default = None)]
+    instrument: Option<Instrument>,
+) -> Element {
     let s = song.read();
     let n = notation();
     let cap = capo();
+    let shift = instrument.map_or(song::Shift::Capo(cap), |i| i.shift(cap));
     let title = s.name.clone();
     let artist = s.artist.clone();
     let key = s.key.clone();
-    // Apply capo/transpose shift (positive = capo down, negative = transpose up)
+    // Apply the capo / transpose, each in its own direction.
     let effective = if cap != 0 {
-        s.apply_capo(cap)
+        s.apply_capo(shift.as_capo())
     } else {
         s.clone()
     };
@@ -4131,16 +4140,20 @@ fn RenderedSheet(song: Signal<Song>, notation: Signal<Notation>, capo: Signal<i8
                 }
             }
             // Capo / Transpose annotation
-            if cap > 0 {
-                div {
-                    style: "font-size: 14px; color: #333; margin-bottom: 4px;",
-                    "Capo: fret {cap}  (shapes in {shape_key})"
+            if let song::Shift::Capo(n) = shift {
+                if n > 0 {
+                    div {
+                        style: "font-size: 14px; color: #333; margin-bottom: 4px;",
+                        "Capo: fret {n}  (shapes in {shape_key})"
+                    }
                 }
             }
-            if cap < 0 {
-                div {
-                    style: "font-size: 14px; color: #333; margin-bottom: 4px;",
-                    "Transpose: {cap} semitones  (sounds in {shape_key})"
+            if let song::Shift::Transpose(n) = shift {
+                if n != 0 {
+                    div {
+                        style: "font-size: 14px; color: #333; margin-bottom: 4px;",
+                        "Transposed {n:+} semitones  (sheet in {shape_key})"
+                    }
                 }
             }
             // Horizontal rule
@@ -4377,6 +4390,9 @@ fn PartView(
     notation: Signal<Notation>,
     capo: Signal<i8>,
     #[props(default = false)] vocals_only: bool,
+    /// The instrument of this sheet (decides whether `capo` is a capo or a transpose).
+    #[props(default = None)]
+    instrument: Option<Instrument>,
 ) -> Element {
     let item_count = song
         .read()
@@ -4591,6 +4607,7 @@ fn PartView(
                                                 item_index,
                                                 notation,
                                                 capo,
+                                                instrument,
                                             }
                                         },
                                         Some(PartItem::LineBreak) => rsx! {
@@ -5851,7 +5868,9 @@ fn InstrumentSheetBody(id: i64, instrument: String, initial: Song) -> Element {
                     // The same transposed view as the chords and the rendered sheet / PDF, so
                     // piano notes shown here move with the transpose control.
                     let tab_text = {
-                        let shifted = song.read().apply_capo(capo());
+                        let shifted = song
+                            .read()
+                            .apply_capo(inst.map_or(capo(), |i| i.shift(capo()).as_capo()));
                         shifted
                             .parts
                             .get(part_index)
@@ -5898,12 +5917,14 @@ fn InstrumentSheetBody(id: i64, instrument: String, initial: Song) -> Element {
                                         .cloned();
                                     match item {
                                         Some(PartItem::Chord(chord)) => {
-                                            let capo_label = if capo() != 0 {
+                                            // Capo sense (positive = lower) whatever the instrument calls the value.
+                                            let shift_by = inst.map_or(capo(), |i| i.shift(capo()).as_capo());
+                                            let capo_label = if shift_by != 0 {
                                                 let is_minor = song.read().key.to_lowercase().contains("minor");
-                                                let shifted = if capo() > 0 {
-                                                    song::shift_note(&chord.root, capo() as u8, is_minor)
+                                                let shifted = if shift_by > 0 {
+                                                    song::shift_note(&chord.root, shift_by as u8, is_minor)
                                                 } else {
-                                                    song::shift_note_up(&chord.root, (-capo()) as u8, is_minor)
+                                                    song::shift_note_up(&chord.root, (-shift_by) as u8, is_minor)
                                                 };
                                                 let note = notation();
                                                 format!("{}{}", apply_notation(&shifted, note), chord.quality.symbol())
@@ -6066,7 +6087,10 @@ fn ChordEditor(
     item_index: usize,
     notation: Signal<Notation>,
     capo: Signal<i8>,
+    #[props(default = None)] instrument: Option<Instrument>,
 ) -> Element {
+    // In the capo sense (positive = lower) whatever the instrument calls the value.
+    let capo_equivalent = instrument.map_or(capo(), |i| i.shift(capo()).as_capo());
     let chord = song
         .read()
         .parts
@@ -6081,15 +6105,18 @@ fn ChordEditor(
         })
         .unwrap_or_else(|| Chord::new("C", ChordQuality::Major));
 
-    let display_label = if capo() != 0 {
+    let display_label = if capo_equivalent != 0 {
         // Show the chord shape the player needs to play with the capo/transpose.
         let is_minor = song.read().key.to_lowercase().contains("minor");
         let shift_fn = |root: &str| -> String {
-            if capo() > 0 {
-                apply_notation(&song::shift_note(root, capo() as u8, is_minor), notation())
+            if capo_equivalent > 0 {
+                apply_notation(
+                    &song::shift_note(root, capo_equivalent as u8, is_minor),
+                    notation(),
+                )
             } else {
                 apply_notation(
-                    &song::shift_note_up(root, (-capo()) as u8, is_minor),
+                    &song::shift_note_up(root, (-capo_equivalent) as u8, is_minor),
                     notation(),
                 )
             }

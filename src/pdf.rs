@@ -4,7 +4,7 @@ use printpdf::*;
 use std::io::BufWriter;
 
 use chord_shifter::piano;
-use chord_shifter::song::{apply_notation, Notation, Song};
+use chord_shifter::song::{apply_notation, Notation, Shift, Song};
 
 const PAGE_W: f32 = 210.0;
 const PAGE_H: f32 = 297.0;
@@ -403,6 +403,7 @@ fn pdf_tab_sym(
 /// `chord_size`      – font size in pt for chord roots (default 18).
 /// `capo`            – capo fret (0 = no capo); chord roots are shifted accordingly.
 /// Works on every target (desktop and WASM).
+#[cfg(test)]
 pub fn generate_pdf_bytes(
     song: &Song,
     notation: Notation,
@@ -410,6 +411,26 @@ pub fn generate_pdf_bytes(
     chord_size: f32,
     capo: i8,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    generate_pdf_for(
+        song,
+        notation,
+        part_name_size,
+        chord_size,
+        Shift::Capo(capo),
+    )
+}
+
+/// Like [`generate_pdf_bytes`], but the sheet's shift is read the way its instrument means
+/// it: a guitar-like `Capo(n)` writes the shapes `n` semitones lower, a piano `Transpose(n)`
+/// writes chords and notes `n` semitones higher (`+1` is C to C♯). The header says which.
+pub fn generate_pdf_for(
+    song: &Song,
+    notation: Notation,
+    part_name_size: f32,
+    chord_size: f32,
+    shift: Shift,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let capo = shift.as_capo();
     // When a capo/transpose is set, produce a shifted view of the song for rendering.
     let capo_song: Song;
     let effective = if capo != 0 {
@@ -446,16 +467,19 @@ pub fn generate_pdf_bytes(
     );
     y -= 5.0;
 
-    // ── Capo ─────────────────────────────────────────────────────────────────
-    // When a capo is used: print the fret number and the resulting shape key.
-    if capo > 0 {
-        layer.use_text(
-            format!("Capo: fret {}  (shapes in {})", capo, effective.key),
-            11.0,
-            Mm(MARGIN),
-            Mm(y),
-            &font_regular,
-        );
+    // ── Capo / transpose ─────────────────────────────────────────────────────
+    // A capo prints its fret and the resulting shape key; a transpose says how far the
+    // sheet was moved and the key it is written in.
+    let shift_line = match shift {
+        Shift::Capo(n) if n > 0 => Some(format!("Capo: fret {}  (shapes in {})", n, effective.key)),
+        Shift::Transpose(n) if n != 0 => Some(format!(
+            "Transposed {:+} semitones  (sheet in {})",
+            n, effective.key
+        )),
+        _ => None,
+    };
+    if let Some(line) = shift_line {
+        layer.use_text(line, 11.0, Mm(MARGIN), Mm(y), &font_regular);
         y -= 5.0;
     }
 
@@ -1637,5 +1661,43 @@ mod piano_pdf_tests {
             1,
             "the last line must be printed"
         );
+    }
+
+    #[test]
+    fn the_header_says_how_a_sheet_was_shifted() {
+        use chord_shifter::song::Shift;
+        let song = piano_song("C Major", "4/4", vec![col("C5", "C3", "4")]);
+        let render_for =
+            |shift| generate_pdf_for(&song, Notation::English, 9.0, 18.0, shift).unwrap();
+        let up = render_for(Shift::Transpose(2));
+        assert_eq!(
+            count(
+                &up,
+                hex("Transposed +2 semitones  (sheet in D Major)").as_bytes()
+            ),
+            1
+        );
+        let down = render_for(Shift::Transpose(-3));
+        assert_eq!(
+            count(
+                &down,
+                hex("Transposed -3 semitones  (sheet in A Major)").as_bytes()
+            ),
+            1
+        );
+        // A capo keeps its own wording, and the same number means the opposite direction.
+        let capo = render_for(Shift::Capo(2));
+        assert_eq!(
+            count(&capo, hex("Capo: fret 2  (shapes in Bb Major)").as_bytes()),
+            1
+        );
+        assert_eq!(count(&capo, b"Transposed"), 0);
+        // No shift, no extra line.
+        let none = render_for(Shift::Transpose(0));
+        assert_eq!(count(&none, b"Transposed"), 0);
+        assert_eq!(count(&none, b"Capo"), 0);
+        // The notes themselves moved: up and down differ from each other and from the original.
+        assert_ne!(up, down);
+        assert_ne!(up, none);
     }
 }

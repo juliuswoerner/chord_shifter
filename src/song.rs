@@ -665,6 +665,50 @@ impl Instrument {
     }
 }
 
+// ── Capo and transpose ───────────────────────────────────────────────────────
+
+/// A sheet's shift value, read the way its instrument means it.
+///
+/// * `Capo(n)`: a guitar-like capo at fret `n`; the shapes are written `n` semitones
+///   *lower* (positive) so they sound right with the capo on.
+/// * `Transpose(n)`: a piano transpose; `n` semitones *higher* (positive), so `+1` turns
+///   C into C♯ (or D♭ in a flat key) and `-1` turns C into B.
+///
+/// [`Song::apply_capo`] works in the capo sense; [`Shift::as_capo`] converts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shift {
+    Capo(i8),
+    Transpose(i8),
+}
+
+impl Shift {
+    /// The value to pass to [`Song::apply_capo`] (positive lowers, negative raises).
+    pub fn as_capo(self) -> i8 {
+        match self {
+            Shift::Capo(n) => n,
+            Shift::Transpose(n) => -n,
+        }
+    }
+
+    /// The number shown to the user.
+    pub fn amount(self) -> i8 {
+        match self {
+            Shift::Capo(n) | Shift::Transpose(n) => n,
+        }
+    }
+}
+
+impl Instrument {
+    /// How this instrument reads its shift value: piano transposes, the others use a capo.
+    pub fn shift(self, shown: i8) -> Shift {
+        if self == Instrument::Piano {
+            Shift::Transpose(shown)
+        } else {
+            Shift::Capo(shown)
+        }
+    }
+}
+
 // ── PDF settings ─────────────────────────────────────────────────────────────
 
 /// Per-sheet PDF font-size settings.
@@ -852,6 +896,9 @@ impl Song {
     /// negative = shift **up** (transpose up for piano etc.).
     ///
     /// When `capo == 0` returns an unchanged clone.
+    /// A copy of the song shifted the way a capo is: a positive `capo` writes everything that
+    /// many semitones lower, a negative one higher (chord shapes and piano notes alike).
+    /// For a piano transpose where `+` means higher, go through [`Shift::as_capo`].
     pub fn apply_capo(&self, capo: i8) -> Song {
         if capo == 0 {
             return self.clone();
@@ -1539,6 +1586,45 @@ mod tests {
         assert_eq!(rows[0].len(), rows[1].len());
         // Barlines line up.
         assert_eq!(rows[0].find("|-D"), rows[1].find("|-D"));
+    }
+
+    #[test]
+    fn a_piano_transpose_plus_means_higher_and_a_capo_plus_means_lower() {
+        // Piano: +1 turns C into C#, the key follows, and notes and chords agree.
+        let song = piano_song();
+        let up = song.apply_capo(Instrument::Piano.shift(1).as_capo());
+        assert_eq!(up.key, "C# Major");
+        assert_eq!(
+            first_cells(&up.parts[0]),
+            ("C#4, F4".to_string(), "C#3".to_string())
+        );
+        // -1 is lower: C becomes B.
+        let down = song.apply_capo(Instrument::Piano.shift(-1).as_capo());
+        assert_eq!(down.key, "B Major");
+        assert_eq!(first_cells(&down.parts[0]).1, "B2");
+        // A guitar capo is the other way round: fret 2 writes the shapes two semitones lower.
+        let capo = song.apply_capo(Instrument::Guitar.shift(2).as_capo());
+        assert_eq!(capo.key, "Bb Major");
+        // Zero changes nothing for either.
+        assert_eq!(Instrument::Piano.shift(0).as_capo(), 0);
+        assert_eq!(song.apply_capo(0), song);
+    }
+
+    #[test]
+    fn shifts_report_what_the_user_sees() {
+        assert_eq!(Instrument::Piano.shift(3), Shift::Transpose(3));
+        assert_eq!(Instrument::Bass.shift(3), Shift::Capo(3));
+        assert_eq!(Shift::Transpose(-4).amount(), -4);
+        assert_eq!(Shift::Transpose(-4).as_capo(), 4);
+        assert_eq!(Shift::Capo(5).as_capo(), 5);
+        for i in Instrument::all() {
+            let expect_transpose = i == Instrument::Piano;
+            assert_eq!(
+                matches!(i.shift(1), Shift::Transpose(_)),
+                expect_transpose,
+                "{i:?}"
+            );
+        }
     }
 
     #[test]

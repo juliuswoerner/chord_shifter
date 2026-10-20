@@ -288,8 +288,8 @@ fn piano_waltz() -> Song {
     song.instrument_parts
         .insert("Piano".to_string(), piano_sheet);
     song.instruments = vec![Instrument::Piano];
-    // Piano gets its own transpose (negative = up) instead of a capo.
-    song.instrument_capos.insert("Piano".to_string(), -2);
+    // The piano sheet is transposed two semitones up (+ is higher): B♭ major becomes C major.
+    song.instrument_capos.insert("Piano".to_string(), 2);
     song
 }
 
@@ -410,5 +410,28 @@ mod tests {
         shaped.parts = acoustic.clone();
         let shaped = shaped.apply_capo(capo);
         assert_eq!(first(&shaped.parts[0]), "A");
+    }
+
+    #[test]
+    fn the_demo_piano_sheet_is_transposed_up_by_its_stored_shift() {
+        use crate::song::TabCell;
+        let song = piano_waltz();
+        let shift = Instrument::Piano.shift(song.instrument_capos["Piano"]);
+        assert_eq!(shift, crate::song::Shift::Transpose(2)); // + is higher
+        let sheet = Song {
+            parts: song.instrument_parts["Piano"].clone(),
+            ..song.clone()
+        };
+        let shifted = sheet.apply_capo(shift.as_capo());
+        assert_eq!(shifted.key, "C Major"); // B-flat major, two semitones up
+        let first_right_hand = |s: &Song| match &s.parts[0].tab_grid[0] {
+            TabCol::Notes(cells) => match &cells[0] {
+                TabCell::Custom(text) => text.clone(),
+                other => panic!("unexpected cell {other:?}"),
+            },
+            other => panic!("unexpected column {other:?}"),
+        };
+        assert_eq!(first_right_hand(&sheet), "D5");
+        assert_eq!(first_right_hand(&shifted), "E5"); // higher, not lower
     }
 }

@@ -136,6 +136,20 @@ try {
         expect((await headCount()) === headsBefore + 2, 'the edited chord was not saved');
     });
 
+    await check('the piano transpose reads "+" as higher in the label, the sheet and the PDF', async () => {
+        // The demo piano sheet is stored as +2: B-flat major becomes C major (higher).
+        await page.getByText('→ sounds in C Major').waitFor({ timeout: 15000 });
+        // One step further up: C-flat... i.e. a semitone higher still, never lower.
+        await page.locator('span:text-is("Transpose:") ~ button').filter({ hasText: /^\+$/ }).click();
+        await page.getByText(/→ sounds in (C#|Db) Major/).waitFor({ timeout: 15000 });
+        await page.locator('span:text-is("Transpose:") ~ button').filter({ hasText: /^−$/ }).click();
+        await page.getByText('→ sounds in C Major').waitFor({ timeout: 15000 });
+        // The rendered view says the same, with the direction spelled out.
+        await page.getByRole('button', { name: /Rendered View/ }).click();
+        await page.getByText('Transposed +2 semitones  (sheet in C Major)').waitFor({ timeout: 15000 });
+        await page.getByRole('button', { name: /Edit View|Edit/ }).first().click().catch(() => {});
+    });
+
     await check('the piano PDF contains the sheet music with the 3/4 time signature', async () => {
         const [download] = await Promise.all([
             page.waitForEvent('download', { timeout: 30000 }),
@@ -150,6 +164,8 @@ try {
         const pdf = pdfContent(raw);
         // Time signature digits are printed as text, once per staff.
         expect((pdf.match(/<33> Tj/g) ?? []).length === 2, 'the 3 of 3/4 should appear once per staff');
+        const hex = (t) => Buffer.from(t, 'latin1').toString('hex').toUpperCase();
+        expect(pdf.includes(hex('Transposed +2 semitones  (sheet in C Major)')), 'the PDF header should say the sheet is transposed up');
         expect((pdf.match(/\nf\n/g) ?? []).length >= 20, 'too few filled note heads in the PDF');
     });
 
