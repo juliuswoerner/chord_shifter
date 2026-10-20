@@ -55,6 +55,20 @@ fn col(cells: &[(usize, TabCell)]) -> TabCol {
     TabCol::Notes(notes)
 }
 
+/// One column of a piano sheet: right-hand notes, left-hand notes and the note length
+/// ("1" whole, "2" half, "4" quarter, "8" eighth). Notes are comma-separated.
+fn piano_col(right: &str, left: &str, length: &str) -> TabCol {
+    let mut notes: [TabCell; 8] = Default::default();
+    if !right.is_empty() {
+        notes[0] = TabCell::Custom(right.to_string());
+    }
+    if !left.is_empty() {
+        notes[1] = TabCell::Custom(left.to_string());
+    }
+    notes[2] = TabCell::Custom(length.to_string());
+    TabCol::Notes(notes)
+}
+
 fn riff(name: &str, kind: PartKind, grid: Vec<TabCol>) -> SongPart {
     SongPart {
         kind,
@@ -246,8 +260,33 @@ fn piano_waltz() -> Song {
             c("Bb", Major),
         ],
     );
+    // The piano sheet: a melody over an oom-pah-pah left hand, written in B♭ major, 3/4.
+    let mut melody = SongPart::new_piano_riff("Melody");
+    melody.time_sig = "3/4".to_string();
+    melody.tab_grid = vec![
+        piano_col("D5", "Bb2", "4"),
+        piano_col("F5", "D3, F3", "4"),
+        piano_col("F5", "D3, F3", "4"),
+        TabCol::Barline,
+        piano_col("Eb5", "Eb3", "2"),
+        piano_col("D5", "G3, Bb3", "4"),
+        TabCol::Barline,
+        piano_col("C5, F5", "F2", "4"),
+        piano_col("A4", "A3, C4", "4"),
+        piano_col("C5", "A3, C4", "4"),
+        TabCol::Barline,
+        piano_col("Bb4", "Bb2, F3", "2"),
+        piano_col("D5", "D3", "8"),
+        piano_col("C5", "D3", "8"),
+        TabCol::Barline,
+    ];
+    let mut piano_sheet = vec![melody];
+    piano_sheet.extend([a.clone(), b.clone()]);
+
     let mut song = Song::new("Piano Waltz", "Bb Major", "Demo Band");
     song.parts = vec![a, b];
+    song.instrument_parts
+        .insert("Piano".to_string(), piano_sheet);
     song.instruments = vec![Instrument::Piano];
     // Piano gets its own transpose (negative = up) instead of a capo.
     song.instrument_capos.insert("Piano".to_string(), -2);
@@ -335,6 +374,7 @@ mod tests {
         assert!(kinds(PartKind::Riff));
         assert!(kinds(PartKind::BassRiff));
         assert!(kinds(PartKind::DrumBeat));
+        assert!(kinds(PartKind::PianoRiff));
         assert!(parts().any(|p| p
             .items
             .iter()

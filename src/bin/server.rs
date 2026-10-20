@@ -1399,25 +1399,33 @@ mod api_tests {
     }
 
     #[tokio::test]
-    async fn a_song_round_trips_with_all_its_fields() {
+    async fn every_demo_song_round_trips_with_all_its_fields() {
+        // The demo songs cover chords, tabs, drums, per-instrument sheets, capos, PDF font
+        // sizes and a piano sheet (notes, note lengths and time signature).
         let app = build_app(test_state().await, false);
         let token = register_and_login(&app, "a@example.com").await;
-        let original = chord_shifter::demo::demo_songs().remove(3); // has pdf_settings
-        assert!(!original.pdf_settings.is_empty());
-        let id = save(&app, &token, serde_json::json!({ "song": original })).await;
-
-        let (s, body) = send(
-            &app,
-            Method::GET,
-            &format!("/api/songs/{id}"),
-            Some(&token),
-            None,
-            None,
-        )
-        .await;
-        assert_eq!(s, StatusCode::OK, "{body}");
-        let loaded: song::Song = serde_json::from_str(&body).unwrap();
-        assert_eq!(loaded, original);
+        let demo = chord_shifter::demo::demo_songs();
+        assert!(demo.iter().any(|s| !s.pdf_settings.is_empty()));
+        assert!(demo.iter().any(|s| s
+            .instrument_parts
+            .values()
+            .flatten()
+            .any(|p| p.kind == song::PartKind::PianoRiff && p.time_sig == "3/4")));
+        for original in demo {
+            let id = save(&app, &token, serde_json::json!({ "song": original })).await;
+            let (s, body) = send(
+                &app,
+                Method::GET,
+                &format!("/api/songs/{id}"),
+                Some(&token),
+                None,
+                None,
+            )
+            .await;
+            assert_eq!(s, StatusCode::OK, "{body}");
+            let loaded: song::Song = serde_json::from_str(&body).unwrap();
+            assert_eq!(loaded, original, "{}", original.name);
+        }
     }
 
     #[tokio::test]

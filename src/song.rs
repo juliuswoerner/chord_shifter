@@ -206,6 +206,8 @@ pub enum PartKind {
     BassRiff,
     /// 8-track drum beat grid (K, S, Hi, R, C, T1, T2, T3 — all 8 cells).
     DrumBeat,
+    /// 2-row piano sheet (RH = right hand, LH = left hand — indices 0-1 of the shared TabCol array).
+    PianoRiff,
 }
 
 // ── Part items ────────────────────────────────────────────────────────────────
@@ -294,6 +296,13 @@ pub struct SongPart {
     /// Optional vocals / lyrics text shown below the chords or tab.
     #[serde(default)]
     pub part_text: Option<PartTextSettings>,
+    /// Time signature for piano parts, e.g. "4/4", "3/4" (default "4/4").
+    #[serde(default = "default_time_sig")]
+    pub time_sig: String,
+}
+
+fn default_time_sig() -> String {
+    "4/4".to_string()
 }
 
 impl SongPart {
@@ -305,6 +314,7 @@ impl SongPart {
             tab_grid: Vec::new(),
             items: Vec::new(),
             part_text: None,
+            time_sig: "4/4".to_string(),
         }
     }
 
@@ -316,6 +326,7 @@ impl SongPart {
             tab_grid: Vec::new(),
             items: Vec::new(),
             part_text: None,
+            time_sig: "4/4".to_string(),
         }
     }
 
@@ -327,6 +338,7 @@ impl SongPart {
             tab_grid: Vec::new(),
             items: Vec::new(),
             part_text: None,
+            time_sig: "4/4".to_string(),
         }
     }
 
@@ -338,6 +350,19 @@ impl SongPart {
             tab_grid: Vec::new(),
             items: Vec::new(),
             part_text: None,
+            time_sig: "4/4".to_string(),
+        }
+    }
+
+    pub fn new_piano_riff(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            kind: PartKind::PianoRiff,
+            tab: String::new(),
+            tab_grid: Vec::new(),
+            items: Vec::new(),
+            part_text: None,
+            time_sig: "4/4".to_string(),
         }
     }
 
@@ -367,10 +392,13 @@ impl SongPart {
                 (&["G", "D", "A", "E"], 2..6)
             } else if self.kind == PartKind::DrumBeat {
                 (&["K", "S", "Hi", "R", "C", "T1", "T2", "T3"], 0..8)
+            } else if self.kind == PartKind::PianoRiff {
+                (&["RH", "LH"], 0..2)
             } else {
                 (&["e", "B", "G", "D", "A", "E"], 0..6)
             };
-        let mut rows: Vec<String> = labels.iter().map(|l| format!("{l}|")).collect();
+        let label_w = labels.iter().map(|l| l.len()).max().unwrap_or(1);
+        let mut rows: Vec<String> = labels.iter().map(|l| format!("{l:>label_w$}|")).collect();
         let mut output = String::new();
         let mut block_has_content = false;
         for col in &self.tab_grid {
@@ -388,12 +416,35 @@ impl SongPart {
                         output.push('\n'); // blank separator line
                     }
                     // start fresh block
-                    rows = labels.iter().map(|l| format!("{l}|")).collect();
+                    rows = labels.iter().map(|l| format!("{l:>label_w$}|")).collect();
                     block_has_content = false;
                 }
                 TabCol::Barline => {
                     for row in &mut rows {
                         row.push('|');
+                    }
+                    block_has_content = true;
+                }
+                TabCol::Notes(arr) if self.kind == PartKind::PianoRiff => {
+                    // Chords make the two hands' entries differ in width: pad both to the
+                    // same width so later beats and barlines stay aligned.
+                    let texts: Vec<String> = (0..2)
+                        .map(|i| match &arr[i] {
+                            TabCell::Custom(s) => s.replace(' ', ""),
+                            _ => String::new(),
+                        })
+                        .collect();
+                    let inner = texts
+                        .iter()
+                        .map(|t| t.chars().count())
+                        .max()
+                        .unwrap_or(0)
+                        .max(1);
+                    for (row, text) in rows.iter_mut().zip(&texts) {
+                        let pad = inner - text.chars().count();
+                        row.push('-');
+                        row.push_str(text);
+                        row.push_str(&"-".repeat(pad + 1));
                     }
                     block_has_content = true;
                 }
@@ -684,6 +735,7 @@ impl Song {
             tab_grid: Vec::new(),
             items: chords.into_iter().map(PartItem::Chord).collect(),
             part_text: None,
+            time_sig: "4/4".to_string(),
         });
         self
     }
@@ -768,6 +820,20 @@ impl Song {
                 }
             }
         }
+        // Piano sheets: move the written notes by the nearest interval (up to a tritone up
+        // or a fourth down) so they stay in their register and match the new key signature.
+        let semitones = if interval > 6 {
+            interval as i32 - 12
+        } else {
+            interval as i32
+        };
+        for part in self
+            .parts
+            .iter_mut()
+            .chain(self.instrument_parts.values_mut().flatten())
+        {
+            crate::piano::transpose_part(part, semitones, prefer_sharps);
+        }
         let mode = self
             .key
             .split_whitespace()
@@ -836,6 +902,10 @@ impl Song {
                     }
                 }
             }
+        }
+        // Piano sheets follow the same shift (a positive capo lowers, a negative raises).
+        for part in &mut result.parts {
+            crate::piano::transpose_part(part, -(capo as i32), prefer_sharps);
         }
         result
     }
@@ -1362,6 +1432,7 @@ mod tests {
                     PartItem::Chord(Chord::new("F", ChordQuality::Major)),
                 ],
                 part_text: None,
+                time_sig: "4/4".to_string(),
             }],
         );
         song.transpose_to("G");
@@ -1371,6 +1442,104 @@ mod tests {
     }
 
     // ── Song serde round-trip ─────────────────────────────────────────────────
+
+    // ── piano notes follow transposition ─────────────────────────────────────
+
+    fn piano_song() -> Song {
+        let mut song = Song::new("Pieces", "C Major", "Me");
+        let mut part = SongPart::new_piano_riff("Piano");
+        let mut cells: [TabCell; 8] = Default::default();
+        cells[0] = TabCell::Custom("C4, E4".to_string());
+        cells[1] = TabCell::Custom("C3".to_string());
+        cells[2] = TabCell::Custom("4".to_string());
+        part.tab_grid = vec![TabCol::Notes(cells)];
+        song.parts = vec![part];
+        song
+    }
+
+    fn first_cells(part: &SongPart) -> (String, String) {
+        match &part.tab_grid[0] {
+            TabCol::Notes(c) => {
+                let text = |i: usize| match &c[i] {
+                    TabCell::Custom(s) => s.clone(),
+                    _ => String::new(),
+                };
+                (text(0), text(1))
+            }
+            _ => panic!("not a note column"),
+        }
+    }
+
+    #[test]
+    fn transposing_the_song_moves_piano_notes_to_the_nearest_octave() {
+        let mut song = piano_song();
+        song.transpose_to("G"); // 7 semitones up = 5 down
+        assert_eq!(
+            first_cells(&song.parts[0]),
+            ("G3, B3".to_string(), "G2".to_string())
+        );
+        let mut song = piano_song();
+        song.transpose_to("D"); // 2 up
+        assert_eq!(
+            first_cells(&song.parts[0]),
+            ("D4, F#4".to_string(), "D3".to_string())
+        );
+        let mut song = piano_song();
+        song.transpose_to("F"); // 5 up (flat key spelling)
+        assert_eq!(
+            first_cells(&song.parts[0]),
+            ("F4, A4".to_string(), "F3".to_string())
+        );
+    }
+
+    #[test]
+    fn transposing_also_moves_piano_sheets_of_instrument_overrides() {
+        let mut song = piano_song();
+        let piano = song.parts.clone();
+        song.instrument_parts.insert("Piano".to_string(), piano);
+        song.transpose_to("D");
+        assert_eq!(first_cells(&song.instrument_parts["Piano"][0]).0, "D4, F#4");
+    }
+
+    #[test]
+    fn a_piano_transpose_shifts_notes_like_the_chords() {
+        let song = piano_song();
+        // Capo 2 (or piano "transpose -2") lowers everything by two semitones.
+        let lowered = song.apply_capo(2);
+        assert_eq!(
+            first_cells(&lowered.parts[0]),
+            ("Bb3, D4".to_string(), "Bb2".to_string()).clone()
+        );
+        // Negative values raise.
+        let raised = song.apply_capo(-3);
+        assert_eq!(first_cells(&raised.parts[0]).1, "Eb3");
+        // The original is untouched.
+        assert_eq!(first_cells(&song.parts[0]).0, "C4, E4");
+    }
+
+    #[test]
+    fn piano_ascii_keeps_both_hands_aligned_when_chords_differ_in_width() {
+        let mut part = SongPart::new_piano_riff("Piano");
+        let col = |rh: &str, lh: &str| {
+            let mut cells: [TabCell; 8] = Default::default();
+            cells[0] = TabCell::Custom(rh.to_string());
+            cells[1] = TabCell::Custom(lh.to_string());
+            TabCol::Notes(cells)
+        };
+        part.tab_grid = vec![
+            col("C5, E5, G5", "C3"),
+            TabCol::Barline,
+            col("D5", "D3, A3"),
+        ];
+        let text = part.tab_as_ascii();
+        let rows: Vec<&str> = text.lines().collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], "RH|-C5,E5,G5-|-D5----|");
+        assert_eq!(rows[1], "LH|-C3-------|-D3,A3-|");
+        assert_eq!(rows[0].len(), rows[1].len());
+        // Barlines line up.
+        assert_eq!(rows[0].find("|-D"), rows[1].find("|-D"));
+    }
 
     #[test]
     fn song_json_round_trip() {
@@ -1411,6 +1580,7 @@ mod tests {
                 PartItem::VoltaBracketEnd,
             ],
             part_text: None,
+            time_sig: "4/4".to_string(),
         };
         let json = serde_json::to_string(&part).expect("serialize");
         let back: SongPart = serde_json::from_str(&json).expect("deserialize");

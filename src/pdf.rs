@@ -3,6 +3,7 @@
 use printpdf::*;
 use std::io::BufWriter;
 
+use chord_shifter::piano;
 use chord_shifter::song::{apply_notation, Notation, Song};
 
 const PAGE_W: f32 = 210.0;
@@ -32,14 +33,177 @@ fn char_safe_take(s: &str, max_chars: usize) -> usize {
     boundary
 }
 
+/// Millimetres per staff space when drawing piano sheets.
+const PIANO_UNIT_MM: f32 = 1.6;
+/// Space below each piano system.
+const PIANO_SYSTEM_GAP_MM: f32 = 6.0;
+const PT_PER_MM: f32 = 72.0 / 25.4;
+
+/// Draw one piano system with its top-left corner at (`x0`, `y_top`) on the page.
+fn draw_piano_system(
+    layer: &PdfLayerReference,
+    font: &IndirectFontRef,
+    system: &piano::System,
+    x0: f32,
+    y_top: f32,
+) {
+    let px = |x: f32| Mm(x0 + x * PIANO_UNIT_MM);
+    let py = |y: f32| Mm(y_top - y * PIANO_UNIT_MM);
+    let pt = |w: f32| w * PIANO_UNIT_MM * PT_PER_MM;
+    let black = Color::Greyscale(Greyscale::new(0.0, None));
+    layer.set_outline_color(black.clone());
+    layer.set_fill_color(black);
+
+    for prim in &system.prims {
+        match prim {
+            piano::Prim::Line {
+                x1,
+                y1,
+                x2,
+                y2,
+                width,
+            } => {
+                layer.set_outline_thickness(pt(*width));
+                layer.add_line(Line {
+                    points: vec![
+                        (Point::new(px(*x1), py(*y1)), false),
+                        (Point::new(px(*x2), py(*y2)), false),
+                    ],
+                    is_closed: false,
+                });
+            }
+            piano::Prim::Path { points, width } => {
+                layer.set_outline_thickness(pt(*width));
+                layer.add_line(Line {
+                    points: points
+                        .iter()
+                        .map(|&(x, y)| (Point::new(px(x), py(y)), false))
+                        .collect(),
+                    is_closed: false,
+                });
+            }
+            piano::Prim::Ellipse {
+                cx,
+                cy,
+                rx,
+                ry,
+                tilt_deg,
+                filled,
+                width,
+            } => {
+                let (sin_t, cos_t) = tilt_deg.to_radians().sin_cos();
+                let ring: Vec<(Point, bool)> = (0..24)
+                    .map(|i| {
+                        let a = i as f32 / 24.0 * std::f32::consts::TAU;
+                        let (ex, ey) = (rx * a.cos(), ry * a.sin());
+                        // Rotate (y points down in layout space, hence the sign).
+                        let x = cx + ex * cos_t + ey * sin_t;
+                        let y = cy - ex * sin_t + ey * cos_t;
+                        (Point::new(px(x), py(y)), false)
+                    })
+                    .collect();
+                if *filled {
+                    layer.add_polygon(Polygon {
+                        rings: vec![ring],
+                        mode: PolygonMode::Fill,
+                        winding_order: WindingOrder::NonZero,
+                    });
+                } else {
+                    // White interior (so staff and ledger lines do not show through the
+                    // head) with a black outline, in a single fill-and-stroke operation.
+                    layer.set_fill_color(Color::Greyscale(Greyscale::new(1.0, None)));
+                    layer.set_outline_thickness(pt(*width));
+                    layer.add_polygon(Polygon {
+                        rings: vec![ring],
+                        mode: PolygonMode::FillStroke,
+                        winding_order: WindingOrder::NonZero,
+                    });
+                    layer.set_fill_color(Color::Greyscale(Greyscale::new(0.0, None)));
+                }
+            }
+            piano::Prim::Text {
+                x,
+                y,
+                text,
+                size,
+                bold: _,
+            } => {
+                layer.use_text(text.clone(), pt(*size), px(*x), py(*y), font);
+            }
+        }
+    }
+}
+
+/// Colour of a part's lyrics text (`#rrggbb`, grey when it cannot be read).
+fn part_text_color(pt: &chord_shifter::song::PartTextSettings) -> Color {
+    let hex = pt.color.trim_start_matches('#');
+    let channel = |range: std::ops::Range<usize>| -> f32 {
+        hex.get(range)
+            .and_then(|h| u8::from_str_radix(h, 16).ok())
+            .unwrap_or(0x55) as f32
+            / 255.0
+    };
+    if hex.len() == 6 {
+        Color::Rgb(Rgb::new(channel(0..2), channel(2..4), channel(4..6), None))
+    } else {
+        Color::Rgb(Rgb::new(
+            0x55 as f32 / 255.0,
+            0x55 as f32 / 255.0,
+            0x55 as f32 / 255.0,
+            None,
+        ))
+    }
+}
+
+/// Height of a part's lyrics when printed over `width` mm (same rules as the drawing code).
+fn lyrics_height(pt: &chord_shifter::song::PartTextSettings, width: f32) -> f32 {
+    let text_size = pt.size as f32;
+    let char_w = text_size * (3.5 / 18.0);
+    let line_h = text_size * (3.5 / 18.0) * 4.5;
+    let max_chars = (width / char_w).floor().max(1.0);
+    pt.content
+        .split('\n')
+        .map(|line| {
+            if line.is_empty() {
+                line_h
+            } else {
+                (line.chars().count() as f32 / max_chars).ceil().max(1.0) * line_h
+            }
+        })
+        .sum()
+}
+
 fn measure_part_height(
     part: &chord_shifter::song::SongPart,
+    key: &str,
     chord_size: f32,
     part_name_size: f32,
 ) -> f32 {
     use chord_shifter::song::{PartItem, PartKind, TabCol};
 
     let part_name_h = (part_name_size / 9.0) * 14.0;
+
+    if part.kind == PartKind::PianoRiff {
+        // Systems are placed (and paged) one by one, so only the label and the first
+        // system must fit on the current page.
+        let systems = piano::layout_systems(
+            &piano::columns_by_line(part),
+            key,
+            &part.time_sig,
+            (RIGHT - MARGIN) / PIANO_UNIT_MM,
+        );
+        let first = systems
+            .first()
+            .map(|s| s.height * PIANO_UNIT_MM)
+            .unwrap_or(0.0);
+        let lyrics = part
+            .part_text
+            .as_ref()
+            .filter(|t| !t.content.is_empty())
+            .map(|t| lyrics_height(t, RIGHT - MARGIN))
+            .unwrap_or(0.0);
+        return part_name_h + first + PIANO_SYSTEM_GAP_MM + lyrics.min(40.0);
+    }
 
     if part.kind == PartKind::Riff
         || part.kind == PartKind::BassRiff
@@ -317,13 +481,48 @@ pub fn generate_pdf_bytes(
         }};
     }
 
+    // Lyrics printed under a music block (piano sheets and tab parts): full width, below
+    // the staves, wrapped and paged like the other lyrics.
+    macro_rules! lyrics_below {
+        ($part:expr) => {{
+            if let Some(pt) = &$part.part_text {
+                if !pt.content.is_empty() {
+                    let text_size = pt.size as f32;
+                    let char_w = text_size * (3.5 / 18.0);
+                    let line_h = text_size * (3.5 / 18.0) * 4.5;
+                    let max_chars = ((RIGHT - MARGIN) / char_w).floor().max(1.0) as usize;
+                    layer.set_fill_color(part_text_color(pt));
+                    for line in pt.content.split('\n') {
+                        if line.is_empty() {
+                            y -= line_h;
+                            continue;
+                        }
+                        let mut remaining = line;
+                        while !remaining.is_empty() {
+                            if y < MARGIN + 10.0 {
+                                next_page!();
+                                layer.set_fill_color(part_text_color(pt));
+                            }
+                            let take = char_safe_take(remaining, max_chars);
+                            let (chunk, rest) = remaining.split_at(take);
+                            layer.use_text(chunk, text_size, Mm(MARGIN), Mm(y + 1.5), &font_bold);
+                            y -= line_h;
+                            remaining = rest.trim_start_matches(' ');
+                        }
+                    }
+                    layer.set_fill_color(Color::Greyscale(Greyscale::new(0.0, None)));
+                }
+            }
+        }};
+    }
+
     for part in &effective.parts {
         // ── Page-break check ────────────────────────────────────────────────
         // If the remaining vertical space is less than this part's estimated
         // height, start a fresh page so the part isn't split or clipped.
         // For parts taller than a full page the inner loops will add further
         // pages as needed.
-        let part_h = measure_part_height(part, chord_size, part_name_size);
+        let part_h = measure_part_height(part, &effective.key, chord_size, part_name_size);
         let remaining = y - MARGIN;
         if remaining < part_h {
             next_page!();
@@ -354,6 +553,27 @@ pub fn generate_pdf_bytes(
         let root_char_w: f32 = chord_size * (3.5 / 18.0);
         let qual_char_w: f32 = root_char_w * (qual_size / chord_size);
         let bass_char_w: f32 = root_char_w * (bass_size / chord_size);
+
+        // ── Piano sheet (grand staff) ─────────────────────────────────────
+        if part.kind == crate::song::PartKind::PianoRiff {
+            let systems = piano::layout_systems(
+                &piano::columns_by_line(part),
+                &effective.key,
+                &part.time_sig,
+                (RIGHT - MARGIN) / PIANO_UNIT_MM,
+            );
+            for system in &systems {
+                let h = system.height * PIANO_UNIT_MM;
+                if y - h < MARGIN {
+                    next_page!();
+                }
+                draw_piano_system(&layer, &font_bold, system, MARGIN, y);
+                y -= h + PIANO_SYSTEM_GAP_MM;
+            }
+            lyrics_below!(part);
+            y -= gap;
+            continue;
+        }
 
         // ── Riff / Tab part (graphical renderer) ─────────────────────────
         if part.kind == crate::song::PartKind::Riff
@@ -749,6 +969,7 @@ pub fn generate_pdf_bytes(
                 y = seg_top - block_h - block_gap;
             }
 
+            lyrics_below!(part);
             y -= gap;
             continue;
         }
@@ -1184,6 +1405,7 @@ mod tests {
                 PartItem::Repeat { times: 2 },
             ],
             part_text: None,
+            time_sig: "4/4".to_string(),
         };
         song.parts.push(part);
         let bytes = generate_pdf_bytes(&song, Notation::English, 9.0, 18.0, 0).unwrap();
@@ -1205,9 +1427,215 @@ mod tests {
                 PartItem::Chord(Chord::new("G", ChordQuality::Major)),
             ],
             part_text: None,
+            time_sig: "4/4".to_string(),
         };
         song.parts.push(part);
         let bytes = generate_pdf_bytes(&song, Notation::English, 9.0, 18.0, 0).unwrap();
         assert!(bytes.starts_with(b"%PDF-"));
+    }
+}
+
+#[cfg(test)]
+mod piano_pdf_tests {
+    use super::*;
+    use chord_shifter::song::{Notation, SongPart, TabCell, TabCol};
+
+    fn col(right: &str, left: &str, length: &str) -> TabCol {
+        let mut cells: [TabCell; 8] = Default::default();
+        cells[0] = TabCell::Custom(right.to_string());
+        cells[1] = TabCell::Custom(left.to_string());
+        cells[2] = TabCell::Custom(length.to_string());
+        TabCol::Notes(cells)
+    }
+
+    fn piano_song(key: &str, time_sig: &str, grid: Vec<TabCol>) -> Song {
+        let mut part = SongPart::new_piano_riff("Piano");
+        part.time_sig = time_sig.to_string();
+        part.tab_grid = grid;
+        let mut song = Song::new("Piano piece", key, "Me");
+        song.parts = vec![part];
+        song
+    }
+
+    fn render(song: &Song, capo: i8) -> Vec<u8> {
+        let bytes = generate_pdf_bytes(song, Notation::English, 9.0, 18.0, capo).unwrap();
+        assert!(bytes.starts_with(b"%PDF-"));
+        bytes
+    }
+
+    fn count(haystack: &[u8], needle: &[u8]) -> usize {
+        haystack
+            .windows(needle.len())
+            .filter(|w| *w == needle)
+            .count()
+    }
+
+    /// Filled shapes in the content streams (note heads and the bass-clef dots).
+    fn fills(pdf: &[u8]) -> usize {
+        count(pdf, b"\nf\n")
+    }
+
+    #[test]
+    fn every_note_of_a_chord_is_drawn_not_just_single_notes() {
+        let one = render(&piano_song("C Major", "4/4", vec![col("C5", "", "4")]), 0);
+        let chord = render(
+            &piano_song("C Major", "4/4", vec![col("C5, E5, G5", "C3, G3", "4")]),
+            0,
+        );
+        // Four more filled heads: two more right-hand notes and two left-hand notes.
+        assert_eq!(fills(&chord), fills(&one) + 4);
+    }
+
+    #[test]
+    fn hollow_notes_are_outlined_not_filled() {
+        let quarter = render(&piano_song("C Major", "4/4", vec![col("C5", "", "4")]), 0);
+        let whole = render(&piano_song("C Major", "4/4", vec![col("C5", "", "1")]), 0);
+        assert_eq!(fills(&whole) + 1, fills(&quarter));
+    }
+
+    #[test]
+    fn the_time_signature_is_printed_on_both_staves() {
+        let waltz = render(&piano_song("C Major", "3/4", vec![col("C5", "", "4")]), 0);
+        assert_eq!(count(&waltz, b"<33> Tj"), 2); // the 3, once per staff
+        assert_eq!(count(&waltz, b"<34> Tj"), 2);
+        let common = render(&piano_song("C Major", "4/4", vec![col("C5", "", "4")]), 0);
+        assert_eq!(count(&common, b"<33> Tj"), 0);
+        assert_eq!(count(&common, b"<34> Tj"), 4);
+        // A nonsense time signature falls back to 4/4 instead of printing garbage.
+        let bad = render(
+            &piano_song("C Major", "banana", vec![col("C5", "", "4")]),
+            0,
+        );
+        assert_eq!(count(&bad, b"<34> Tj"), 4);
+    }
+
+    #[test]
+    fn the_key_signature_adds_accidentals() {
+        let c = render(&piano_song("C Major", "4/4", vec![col("C5", "", "4")]), 0);
+        let d = render(&piano_song("D Major", "4/4", vec![col("C5", "", "4")]), 0);
+        assert!(
+            d.len() > c.len(),
+            "D major should draw two sharps on each staff"
+        );
+    }
+
+    #[test]
+    fn a_piano_part_without_notes_draws_no_staff() {
+        let empty = render(&piano_song("C Major", "4/4", vec![]), 0);
+        let notes = render(&piano_song("C Major", "4/4", vec![col("C5", "", "4")]), 0);
+        assert!(notes.len() > empty.len() + 1000);
+    }
+
+    #[test]
+    fn transposing_changes_the_printed_notes() {
+        let song = piano_song("C Major", "4/4", vec![col("C5", "C3", "4")]);
+        assert_ne!(render(&song, 0), render(&song, 2));
+    }
+
+    #[test]
+    fn long_pieces_wrap_into_systems_and_continue_on_new_pages() {
+        // 24 bars of 4 beats = 24 * (4 * 3.8 + 1.8) staff spaces: several systems, several pages.
+        let mut grid = Vec::new();
+        for _ in 0..240 {
+            for _ in 0..4 {
+                grid.push(col("C5", "C3", "4"));
+            }
+            grid.push(TabCol::Barline);
+        }
+        let long = render(&piano_song("G Major", "4/4", grid), 0);
+        let short = render(&piano_song("G Major", "4/4", vec![col("C5", "C3", "4")]), 0);
+        assert!(long.len() > short.len() * 10);
+        assert!(
+            count(&long, b"Page") > count(&short, b"Page"),
+            "expected extra pages"
+        );
+    }
+
+    #[test]
+    fn a_piano_part_between_chord_parts_does_not_break_the_layout() {
+        let mut song = piano_song("C Major", "4/4", vec![col("C5", "", "4")]);
+        let chords = vec![
+            chord_shifter::song::Chord::new("C", chord_shifter::song::ChordQuality::Major),
+            chord_shifter::song::Chord::new("G", chord_shifter::song::ChordQuality::Major),
+        ];
+        let mut with_chords = Song::new("Mixed", "C Major", "Me")
+            .with_part("Intro", chords.clone())
+            .with_part("Outro", chords);
+        with_chords.parts.insert(1, song.parts.remove(0));
+        render(&with_chords, 0);
+    }
+
+    fn hex(text: &str) -> String {
+        text.bytes().map(|b| format!("{b:02X}")).collect()
+    }
+
+    #[test]
+    fn hollow_heads_are_filled_white_and_outlined_in_one_operation() {
+        let whole = render(&piano_song("C Major", "4/4", vec![col("C5", "", "1")]), 0);
+        let quarter = render(&piano_song("C Major", "4/4", vec![col("C5", "", "4")]), 0);
+        assert_eq!(count(&whole, b"\nb\n"), 1, "one fill-and-stroke head");
+        assert_eq!(count(&quarter, b"\nb\n"), 0);
+        assert!(count(&whole, b"1 g\n") >= 1, "the interior is filled white");
+    }
+
+    #[test]
+    fn lyrics_of_a_piano_part_are_printed_below_the_music() {
+        use chord_shifter::song::PartTextSettings;
+        let mut song = piano_song("C Major", "4/4", vec![col("C5", "", "4")]);
+        let without = render(&song, 0);
+        song.parts[0].part_text = Some(PartTextSettings {
+            content: "Sing along here\nSecond line".to_string(),
+            ..PartTextSettings::new()
+        });
+        let with = render(&song, 0);
+        assert!(
+            count(&with, hex("Sing along here").as_bytes()) == 1,
+            "first lyric line missing"
+        );
+        assert!(
+            count(&with, hex("Second line").as_bytes()) == 1,
+            "second lyric line missing"
+        );
+        assert_eq!(count(&without, hex("Sing along here").as_bytes()), 0);
+    }
+
+    #[test]
+    fn lyrics_of_tab_parts_are_printed_too() {
+        use chord_shifter::song::PartTextSettings;
+        let mut part = SongPart::new_riff("Riff");
+        let mut cells: [TabCell; 8] = Default::default();
+        cells[0] = TabCell::Fret(3);
+        part.tab_grid = vec![TabCol::Notes(cells)];
+        part.part_text = Some(PartTextSettings {
+            content: "Riff lyrics".to_string(),
+            ..PartTextSettings::new()
+        });
+        let mut song = Song::new("Tabs", "E Minor", "Me");
+        song.parts = vec![part];
+        let pdf = render(&song, 0);
+        assert_eq!(count(&pdf, hex("Riff lyrics").as_bytes()), 1);
+    }
+
+    #[test]
+    fn a_long_lyric_block_continues_on_a_new_page() {
+        use chord_shifter::song::PartTextSettings;
+        let mut song = piano_song("C Major", "4/4", vec![col("C5", "", "4")]);
+        song.parts[0].part_text = Some(PartTextSettings {
+            content: (0..120)
+                .map(|i| format!("lyric line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            ..PartTextSettings::new()
+        });
+        let pdf = render(&song, 0);
+        assert!(
+            count(&pdf, b"Page") > 2,
+            "expected extra pages for 120 lyric lines"
+        );
+        assert_eq!(
+            count(&pdf, hex("lyric line 119").as_bytes()),
+            1,
+            "the last line must be printed"
+        );
     }
 }
