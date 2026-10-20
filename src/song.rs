@@ -425,6 +425,29 @@ impl SongPart {
                     }
                     block_has_content = true;
                 }
+                TabCol::Notes(arr) if self.kind == PartKind::PianoRiff => {
+                    // Chords make the two hands' entries differ in width: pad both to the
+                    // same width so later beats and barlines stay aligned.
+                    let texts: Vec<String> = (0..2)
+                        .map(|i| match &arr[i] {
+                            TabCell::Custom(s) => s.replace(' ', ""),
+                            _ => String::new(),
+                        })
+                        .collect();
+                    let inner = texts
+                        .iter()
+                        .map(|t| t.chars().count())
+                        .max()
+                        .unwrap_or(0)
+                        .max(1);
+                    for (row, text) in rows.iter_mut().zip(&texts) {
+                        let pad = inner - text.chars().count();
+                        row.push('-');
+                        row.push_str(text);
+                        row.push_str(&"-".repeat(pad + 1));
+                    }
+                    block_has_content = true;
+                }
                 TabCol::Notes(arr) => {
                     for (row_i, str_idx) in string_range.clone().enumerate() {
                         let cell = &arr[str_idx];
@@ -1492,6 +1515,30 @@ mod tests {
         assert_eq!(first_cells(&raised.parts[0]).1, "Eb3");
         // The original is untouched.
         assert_eq!(first_cells(&song.parts[0]).0, "C4, E4");
+    }
+
+    #[test]
+    fn piano_ascii_keeps_both_hands_aligned_when_chords_differ_in_width() {
+        let mut part = SongPart::new_piano_riff("Piano");
+        let col = |rh: &str, lh: &str| {
+            let mut cells: [TabCell; 8] = Default::default();
+            cells[0] = TabCell::Custom(rh.to_string());
+            cells[1] = TabCell::Custom(lh.to_string());
+            TabCol::Notes(cells)
+        };
+        part.tab_grid = vec![
+            col("C5, E5, G5", "C3"),
+            TabCol::Barline,
+            col("D5", "D3, A3"),
+        ];
+        let text = part.tab_as_ascii();
+        let rows: Vec<&str> = text.lines().collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], "RH|-C5,E5,G5-|-D5----|");
+        assert_eq!(rows[1], "LH|-C3-------|-D3,A3-|");
+        assert_eq!(rows[0].len(), rows[1].len());
+        // Barlines line up.
+        assert_eq!(rows[0].find("|-D"), rows[1].find("|-D"));
     }
 
     #[test]

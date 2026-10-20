@@ -153,6 +153,31 @@ try {
         expect((pdf.match(/\nf\n/g) ?? []).length >= 20, 'too few filled note heads in the PDF');
     });
 
+    await check('beats are keyboard-operable and Enter commits an edit', async () => {
+        // Piano sheet controls are real buttons for assistive technology and the keyboard.
+        const beats = page.locator('svg g[role="button"][aria-label^="Edit beat"]');
+        expect((await beats.count()) >= 4, 'beat columns should expose button semantics');
+        expect((await page.locator('svg g[role="button"][aria-label^="Change time signature"]').count()) === 1, 'time signature control missing');
+        const before = await headCount();
+        await beats.nth(1).focus();
+        await page.keyboard.press('Enter'); // opens the editor for the second beat
+        const rh = page.getByPlaceholder('e.g. C5,E5,G5');
+        await rh.waitFor({ timeout: 15000 });
+        await rh.fill('C5,D5'); // two notes a second apart: heads sit on opposite sides of the stem
+        await page.keyboard.press('Enter'); // commits instead of discarding
+        await rh.waitFor({ state: 'detached', timeout: 15000 });
+        await page.waitForFunction((n) => document.querySelectorAll('svg ellipse').length === n, before + 1, { timeout: 15000 });
+        // Reopening shows what was committed.
+        await beats.nth(1).focus();
+        await page.keyboard.press(' ');
+        await rh.waitFor({ timeout: 15000 });
+        expect((await rh.inputValue()) === 'C5,D5', 'the committed notes were not kept');
+        // Opening the editor from the keyboard puts focus in its first field.
+        await page.waitForFunction(() => document.activeElement?.id === 'piano-rh-input', null, { timeout: 15000 });
+        await page.keyboard.press('Escape'); // cancels without changing anything
+        await rh.waitFor({ state: 'detached', timeout: 15000 });
+    });
+
     await check('all songs can be exported as JSON in demo (localStorage) mode', async () => {
         await page.getByRole('button', { name: '← Library' }).click();
         await page.getByText('My Songs').waitFor();
@@ -178,6 +203,7 @@ try {
     });
 } catch (e) {
     console.error(`FAILED at step "${step}": ${e.message}`);
+    if (pageErrors.length) console.error('Page errors:', pageErrors.join(' | '));
     await page.screenshot({ path: 'demo-smoke-failure.png', fullPage: true }).catch(() => {});
     await browser.close();
     process.exit(1);

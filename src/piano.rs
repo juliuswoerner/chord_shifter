@@ -330,6 +330,118 @@ pub fn transpose_part(part: &mut SongPart, semitones: i32, prefer_sharps: bool) 
     }
 }
 
+// ── Accidentals and chord head placement ──────────────────────────────────────
+
+/// The accidental the key signature applies to each letter (index 0 = C … 6 = B).
+pub fn key_letter_accidentals(key: &str) -> [Accidental; 7] {
+    const SHARP_LETTERS: [usize; 7] = [3, 0, 4, 1, 5, 2, 6]; // F C G D A E B
+    const FLAT_LETTERS: [usize; 7] = [6, 2, 5, 1, 4, 0, 3]; // B E A D G C F
+    let mut out = [Accidental::Natural; 7];
+    for (i, acc) in key_signature(key).iter().enumerate() {
+        if acc.sharp {
+            out[SHARP_LETTERS[i]] = Accidental::Sharp;
+        } else {
+            out[FLAT_LETTERS[i]] = Accidental::Flat;
+        }
+    }
+    out
+}
+
+/// Which accidentals to print for the notes of one column, in the order the notes were
+/// parsed (`None` = print nothing).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ColumnMarks {
+    pub right: Vec<Option<Accidental>>,
+    pub left: Vec<Option<Accidental>>,
+}
+
+/// Decide which accidentals must be written, as in printed music: a note that differs from
+/// what the key signature (or an earlier accidental on the same line or space in the same
+/// bar) already says gets a sharp, flat or natural sign; a note that agrees gets none. So
+/// `F4` in G major shows a natural sign, while `F#4` in G major shows nothing. Bars end at
+/// barlines.
+pub fn display_accidentals(cols: &[Column], key: &str) -> Vec<ColumnMarks> {
+    let base = key_letter_accidentals(key);
+    let mut state: std::collections::HashMap<(bool, u8, i32), Accidental> =
+        std::collections::HashMap::new();
+    let mut out = Vec::with_capacity(cols.len());
+    for col in cols {
+        match col {
+            Column::Barline => {
+                state.clear();
+                out.push(ColumnMarks::default());
+            }
+            Column::Notes { right, left, .. } => {
+                let mut marks_for = |notes: &[Note], treble: bool| -> Vec<Option<Accidental>> {
+                    notes
+                        .iter()
+                        .map(|n| {
+                            let key = (treble, n.letter, n.octave);
+                            let current =
+                                state.get(&key).copied().unwrap_or(base[n.letter as usize]);
+                            state.insert(key, n.accidental);
+                            (n.accidental != current).then_some(n.accidental)
+                        })
+                        .collect()
+                };
+                let right_marks = marks_for(right, true);
+                let left_marks = marks_for(left, false);
+                out.push(ColumnMarks {
+                    right: right_marks,
+                    left: left_marks,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Which heads of a chord must move to the other side of the stem so that notes a second
+/// apart do not overlap. `steps` are the staff steps in ascending order. With the stem up
+/// the upper note of a second moves to the right; with the stem down the lower note moves
+/// to the left.
+pub fn head_displacement(steps: &[i32], stem_up: bool) -> Vec<bool> {
+    let n = steps.len();
+    let mut displaced = vec![false; n];
+    if stem_up {
+        for i in 1..n {
+            if steps[i] - steps[i - 1] == 1 && !displaced[i - 1] {
+                displaced[i] = true;
+            }
+        }
+    } else {
+        for i in (0..n.saturating_sub(1)).rev() {
+            if steps[i + 1] - steps[i] == 1 && !displaced[i + 1] {
+                displaced[i] = true;
+            }
+        }
+    }
+    displaced
+}
+
+/// Horizontal slot (0 = nearest the head) for each printed accidental of a chord, so that
+/// accidentals closer than a fifth (5 steps) do not overlap. `steps` ascending; entries
+/// without an accidental get slot 0.
+pub fn accidental_slots(steps: &[i32], marks: &[Option<Accidental>]) -> Vec<usize> {
+    let mut slots = vec![0; steps.len()];
+    let mut placed: Vec<(i32, usize)> = Vec::new();
+    for i in (0..steps.len()).rev() {
+        if marks.get(i).copied().flatten().is_none() {
+            continue;
+        }
+        let mut slot = 0;
+        while placed
+            .iter()
+            .any(|&(step, s)| s == slot && (step - steps[i]).abs() < 5)
+        {
+            slot += 1;
+        }
+        slots[i] = slot;
+        placed.push((steps[i], slot));
+    }
+    slots
+}
+
 // ── Layout of the grand staff ─────────────────────────────────────────────────
 //
 // Coordinates are in "staff spaces" (the distance between two staff lines = 1.0),
@@ -381,7 +493,8 @@ const TREBLE_BOTTOM_Y: f32 = LEDGER_PAD + 4.0;
 const BASS_BOTTOM_Y: f32 = 2.0 * LEDGER_PAD + 4.0 + STAFF_GAP + LEDGER_PAD + 4.0;
 /// Height of a system in staff spaces.
 pub const SYSTEM_HEIGHT: f32 = 2.0 * (2.0 * LEDGER_PAD + 4.0) + STAFF_GAP;
-const BEAT_W: f32 = 3.8;
+const BEAT_W: f32 = 4.1;
+const ACCIDENTAL_SLOT_W: f32 = 1.15;
 const BARLINE_W: f32 = 1.8;
 const HEAD_RX: f32 = 0.72;
 const HEAD_RY: f32 = 0.5;
@@ -450,11 +563,37 @@ fn flat_prims(x: f32, y: f32, out: &mut Vec<Prim>) {
     });
 }
 
+fn natural_prims(x: f32, y: f32, out: &mut Vec<Prim>) {
+    out.push(Prim::Line {
+        x1: x - 0.25,
+        y1: y - 1.05,
+        x2: x - 0.25,
+        y2: y + 0.45,
+        width: THIN,
+    });
+    out.push(Prim::Line {
+        x1: x + 0.25,
+        y1: y - 0.45,
+        x2: x + 0.25,
+        y2: y + 1.05,
+        width: THIN,
+    });
+    for (dy, lift) in [(-0.35, 0.2), (0.45, 0.2)] {
+        out.push(Prim::Line {
+            x1: x - 0.25,
+            y1: y + dy + lift,
+            x2: x + 0.25,
+            y2: y + dy - lift * 0.4,
+            width: 0.2,
+        });
+    }
+}
+
 fn accidental_prims(accidental: Accidental, x: f32, y: f32, out: &mut Vec<Prim>) {
     match accidental {
         Accidental::Sharp => sharp_prims(x, y, out),
         Accidental::Flat => flat_prims(x, y, out),
-        Accidental::Natural => {}
+        Accidental::Natural => natural_prims(x, y, out),
     }
 }
 
@@ -595,9 +734,42 @@ fn head_prims(cx: f32, y: f32, filled: bool, out: &mut Vec<Prim>) {
     });
 }
 
+/// The notes of a chord with their printed accidentals, sorted from low to high.
+fn sorted_with_marks(
+    notes: &[Note],
+    marks: &[Option<Accidental>],
+) -> (Vec<Note>, Vec<Option<Accidental>>) {
+    let mut order: Vec<usize> = (0..notes.len()).collect();
+    order.sort_by_key(|&i| notes[i].diatonic());
+    (
+        order.iter().map(|&i| notes[i]).collect(),
+        order
+            .iter()
+            .map(|&i| marks.get(i).copied().flatten())
+            .collect(),
+    )
+}
+
+/// Number of accidental slots a hand needs next to its heads.
+fn slot_count(notes: &[Note], marks: &[Option<Accidental>], clef: Clef) -> usize {
+    let (sorted, sorted_marks) = sorted_with_marks(notes, marks);
+    let steps: Vec<i32> = sorted.iter().map(|n| staff_step(n, clef)).collect();
+    if sorted_marks.iter().all(|m| m.is_none()) {
+        return 0;
+    }
+    accidental_slots(&steps, &sorted_marks)
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| sorted_marks[*i].is_some())
+        .map(|(_, s)| s + 1)
+        .max()
+        .unwrap_or(0)
+}
+
 /// Draw one hand of one column: ledger lines, accidentals, heads, stem and flag.
 fn hand_prims(
     notes: &[Note],
+    marks: &[Option<Accidental>],
     clef: Clef,
     duration: Duration,
     stem_up: bool,
@@ -607,34 +779,44 @@ fn hand_prims(
     if notes.is_empty() {
         return;
     }
-    let mut sorted: Vec<Note> = notes.to_vec();
-    sorted.sort_by_key(|n| n.diatonic());
+    let (sorted, sorted_marks) = sorted_with_marks(notes, marks);
     let steps: Vec<i32> = sorted.iter().map(|n| staff_step(n, clef)).collect();
+    let displaced = head_displacement(&steps, stem_up);
+    let slots = accidental_slots(&steps, &sorted_marks);
+    let head_x = |i: usize| -> f32 {
+        match (displaced[i], stem_up) {
+            (false, _) => cx,
+            (true, true) => cx + 2.0 * HEAD_RX - 0.1,
+            (true, false) => cx - 2.0 * HEAD_RX + 0.1,
+        }
+    };
+    let ys: Vec<f32> = steps.iter().map(|&st| step_y(st, clef)).collect();
 
+    // Ledger lines span every head of the chord.
+    let left_edge = (0..sorted.len()).map(&head_x).fold(f32::MAX, f32::min);
+    let right_edge = (0..sorted.len()).map(&head_x).fold(f32::MIN, f32::max);
     for e in ledger_steps(&steps) {
         let y = step_y(e, clef);
         out.push(Prim::Line {
-            x1: cx - HEAD_RX - 0.55,
+            x1: left_edge - HEAD_RX - 0.55,
             y1: y,
-            x2: cx + HEAD_RX + 0.55 + if sorted.len() > 1 { HEAD_RX } else { 0.0 },
+            x2: right_edge + HEAD_RX + 0.55,
             y2: y,
             width: THIN,
         });
     }
 
-    // Heads of a chord a second apart sit on opposite sides of the stem.
-    let mut displaced = false;
-    let mut prev_step: Option<i32> = None;
-    let mut ys: Vec<f32> = Vec::new();
-    for (note, &step) in sorted.iter().zip(&steps) {
-        let y = step_y(step, clef);
-        ys.push(y);
-        let shift = matches!(prev_step, Some(p) if step - p == 1) && !displaced;
-        displaced = shift;
-        let x = if shift { cx + 2.0 * HEAD_RX - 0.1 } else { cx };
-        accidental_prims(note.accidental, cx - HEAD_RX - 1.1, y, out);
-        head_prims(x, y, !duration.hollow(), out);
-        prev_step = Some(step);
+    for i in 0..sorted.len() {
+        if let Some(accidental) = sorted_marks[i] {
+            let shift = if displaced[i] && !stem_up {
+                2.0 * HEAD_RX
+            } else {
+                0.0
+            };
+            let x = cx - HEAD_RX - 1.1 - shift - slots[i] as f32 * ACCIDENTAL_SLOT_W;
+            accidental_prims(accidental, x, ys[i], out);
+        }
+        head_prims(head_x(i), ys[i], !duration.hollow(), out);
     }
 
     if duration.has_stem() {
@@ -667,10 +849,18 @@ fn hand_prims(
     }
 }
 
-fn column_width(col: &Column) -> f32 {
+/// Width of a column: a beat, widened when its accidentals need more than one slot.
+fn column_width(col: &Column, marks: &ColumnMarks) -> f32 {
     match col {
         Column::Barline => BARLINE_W,
-        Column::Notes { .. } => BEAT_W,
+        Column::Notes { right, left, .. } => {
+            let slots = slot_count(right, &marks.right, Clef::Treble).max(slot_count(
+                left,
+                &marks.left,
+                Clef::Bass,
+            ));
+            BEAT_W + slots.saturating_sub(1) as f32 * ACCIDENTAL_SLOT_W
+        }
     }
 }
 
@@ -683,9 +873,39 @@ fn header_width(key_count: usize, with_time_sig: bool) -> f32 {
     CLEF_W + key + if with_time_sig { TIME_SIG_W + 0.4 } else { 0.0 } + 1.0
 }
 
-fn build_system(cols: &[Column], key: &[KeyAccidental], time_sig: Option<(&str, &str)>) -> System {
+/// The vertical extent of a primitive.
+fn y_range(prim: &Prim) -> (f32, f32) {
+    match prim {
+        Prim::Line { y1, y2, .. } => (y1.min(*y2), y1.max(*y2)),
+        Prim::Path { points, .. } => points.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| {
+            (lo.min(p.1), hi.max(p.1))
+        }),
+        Prim::Ellipse { cy, rx, ry, .. } => (cy - rx.max(*ry), cy + rx.max(*ry)),
+        Prim::Text { y, size, .. } => (y - size * 0.75, y + size * 0.25),
+    }
+}
+
+fn shift_y(prim: &mut Prim, dy: f32) {
+    match prim {
+        Prim::Line { y1, y2, .. } => {
+            *y1 += dy;
+            *y2 += dy;
+        }
+        Prim::Path { points, .. } => points.iter_mut().for_each(|p| p.1 += dy),
+        Prim::Ellipse { cy, .. } => *cy += dy,
+        Prim::Text { y, .. } => *y += dy,
+    }
+}
+
+fn build_system(
+    cols: &[Column],
+    marks: &[ColumnMarks],
+    widths: &[f32],
+    key: &[KeyAccidental],
+    time_sig: Option<(&str, &str)>,
+) -> System {
     let header = header_width(key.len(), time_sig.is_some());
-    let cols_w: f32 = cols.iter().map(column_width).sum();
+    let cols_w: f32 = widths.iter().sum();
     let width = header + cols_w + 0.6;
     let mut prims: Vec<Prim> = Vec::new();
 
@@ -737,7 +957,7 @@ fn build_system(cols: &[Column], key: &[KeyAccidental], time_sig: Option<(&str, 
 
     // Columns.
     let mut x = header;
-    for col in cols {
+    for (i, col) in cols.iter().enumerate() {
         match col {
             Column::Barline => {
                 prims.push(Prim::Line {
@@ -753,17 +973,45 @@ fn build_system(cols: &[Column], key: &[KeyAccidental], time_sig: Option<(&str, 
                 left,
                 duration,
             } => {
-                let cx = x + BEAT_W / 2.0;
-                hand_prims(right, Clef::Treble, *duration, true, cx, &mut prims);
-                hand_prims(left, Clef::Bass, *duration, false, cx, &mut prims);
+                // Extra room for stacked accidentals sits on the left of the beat.
+                let cx = x + widths[i] - BEAT_W / 2.0;
+                hand_prims(
+                    right,
+                    &marks[i].right,
+                    Clef::Treble,
+                    *duration,
+                    true,
+                    cx,
+                    &mut prims,
+                );
+                hand_prims(
+                    left,
+                    &marks[i].left,
+                    Clef::Bass,
+                    *duration,
+                    false,
+                    cx,
+                    &mut prims,
+                );
             }
         }
-        x += column_width(col);
+        x += widths[i];
     }
 
+    // Stems, ledger lines and flags can leave the nominal staff area (very high or low
+    // notes): measure what was drawn and move everything so the system contains it.
+    let (min_y, max_y) = prims
+        .iter()
+        .map(y_range)
+        .fold((0.0_f32, SYSTEM_HEIGHT), |(lo, hi), r| {
+            (lo.min(r.0), hi.max(r.1))
+        });
+    if min_y < 0.0 {
+        prims.iter_mut().for_each(|p| shift_y(p, -min_y));
+    }
     System {
         width,
-        height: SYSTEM_HEIGHT,
+        height: max_y - min_y,
         prims,
     }
 }
@@ -782,38 +1030,50 @@ pub fn layout_systems(
     let mut systems: Vec<System> = Vec::new();
 
     for line in lines {
-        let mut rest: &[Column] = line;
-        while !rest.is_empty() {
+        let marks = display_accidentals(line, key);
+        let widths: Vec<f32> = line
+            .iter()
+            .zip(&marks)
+            .map(|(c, m)| column_width(c, m))
+            .collect();
+        let mut start = 0;
+        while start < line.len() {
             let first = systems.is_empty();
             let header = header_width(key_sig.len(), first);
             // Greedily take columns until the next one would not fit.
             let mut used = header + 0.6;
             let mut take = 0;
             let mut last_barline: Option<usize> = None;
-            for (i, col) in rest.iter().enumerate() {
-                let w = column_width(col);
-                if used + w > max_width && take > 0 {
+            for i in start..line.len() {
+                if used + widths[i] > max_width && take > 0 {
                     break;
                 }
-                used += w;
-                take = i + 1;
-                if matches!(col, Column::Barline) {
-                    last_barline = Some(i + 1);
+                used += widths[i];
+                take = i - start + 1;
+                if matches!(line[i], Column::Barline) {
+                    last_barline = Some(i - start + 1);
                 }
             }
             // Prefer to break after a barline, unless the whole rest fits.
-            if take < rest.len() {
+            if start + take < line.len() {
                 if let Some(b) = last_barline {
                     take = b;
                 }
             }
-            let chunk = &rest[..take];
+            let end = start + take;
+            let chunk = &line[start..end];
             let has_notes = chunk.iter().any(|c| matches!(c, Column::Notes { .. }));
             if has_notes || chunk.len() > 1 {
                 let ts = first.then_some((ts_top.as_str(), ts_bottom.as_str()));
-                systems.push(build_system(chunk, &key_sig, ts));
+                systems.push(build_system(
+                    chunk,
+                    &marks[start..end],
+                    &widths[start..end],
+                    &key_sig,
+                    ts,
+                ));
             }
-            rest = &rest[take..];
+            start = end;
         }
     }
     systems
@@ -1230,5 +1490,192 @@ mod tests {
             "C Major",
         );
         assert_eq!(heads(&sys[0].prims).len(), 1);
+    }
+
+    // ── accidentals, head placement and bounds ──────────────────────────────
+
+    fn marks(cols: &[Column], key: &str) -> Vec<ColumnMarks> {
+        display_accidentals(cols, key)
+    }
+
+    #[test]
+    fn the_key_signature_decides_which_accidentals_are_printed() {
+        let cols = vec![note_col("F#4, F5, C#4", "", Duration::Quarter)];
+        // C major: both sharps are printed, the natural F is not.
+        let c = marks(&cols, "C Major");
+        assert_eq!(
+            c[0].right,
+            vec![Some(Accidental::Sharp), None, Some(Accidental::Sharp)]
+        );
+        // G major (F#): F# is implied, F natural needs a natural sign, C# is still printed.
+        let g = marks(&cols, "G Major");
+        assert_eq!(
+            g[0].right,
+            vec![None, Some(Accidental::Natural), Some(Accidental::Sharp)]
+        );
+        // Flat keys work the same way: B-flat major flats B and E.
+        let flats = marks(
+            &[note_col("Bb4, B4, Eb5, E5", "", Duration::Quarter)],
+            "Bb Major",
+        );
+        assert_eq!(
+            flats[0].right,
+            vec![
+                None,
+                Some(Accidental::Natural),
+                None,
+                Some(Accidental::Natural)
+            ]
+        );
+    }
+
+    #[test]
+    fn an_accidental_lasts_until_the_barline_on_the_same_staff_position() {
+        let cols = vec![
+            note_col("F#4", "", Duration::Quarter),
+            note_col("F#4", "", Duration::Quarter), // repeated: nothing to print
+            note_col("F4", "", Duration::Quarter),  // cancels it
+            note_col("F5", "", Duration::Quarter),  // another octave: unaffected
+            Column::Barline,
+            note_col("F4", "", Duration::Quarter), // new bar: natural again, nothing to print
+        ];
+        let m = marks(&cols, "C Major");
+        assert_eq!(m[0].right, vec![Some(Accidental::Sharp)]);
+        assert_eq!(m[1].right, vec![None]);
+        assert_eq!(m[2].right, vec![Some(Accidental::Natural)]);
+        assert_eq!(m[3].right, vec![None]);
+        assert_eq!(m[5].right, vec![None]);
+    }
+
+    #[test]
+    fn each_hand_keeps_its_own_accidentals() {
+        // The same pitch in the left hand (bass staff) is a different staff position.
+        let m = marks(&[note_col("F#4", "F#4", Duration::Quarter)], "C Major");
+        assert_eq!(m[0].right, vec![Some(Accidental::Sharp)]);
+        assert_eq!(m[0].left, vec![Some(Accidental::Sharp)]);
+    }
+
+    #[test]
+    fn natural_signs_are_drawn() {
+        let drawn = |key: &str| {
+            let sys = layout(vec![note_col("F4", "", Duration::Quarter)], key);
+            // A natural sign is four strokes: two thin verticals and two thick bars.
+            count(
+                &sys[0].prims,
+                |p| matches!(p, Prim::Line { width, x1, x2, .. } if (*width - 0.2).abs() < 1e-4 && (x2 - x1 - 0.5).abs() < 1e-4),
+            )
+        };
+        // In C major an F is just an F; in G major it needs a natural sign.
+        assert_eq!(drawn("G Major") - drawn("C Major"), 2);
+    }
+
+    #[test]
+    fn heads_a_second_apart_move_by_stem_direction() {
+        // Stem up: the upper note moves (right). Stem down: the lower note moves (left).
+        assert_eq!(head_displacement(&[0, 1], true), vec![false, true]);
+        assert_eq!(head_displacement(&[0, 1], false), vec![true, false]);
+        // A run of three: they alternate.
+        assert_eq!(
+            head_displacement(&[0, 1, 2], true),
+            vec![false, true, false]
+        );
+        assert_eq!(
+            head_displacement(&[0, 1, 2], false),
+            vec![false, true, false]
+        );
+        // Gaps of a third or more stay put.
+        assert_eq!(
+            head_displacement(&[0, 2, 4], true),
+            vec![false, false, false]
+        );
+        assert!(head_displacement(&[], true).is_empty());
+        assert_eq!(head_displacement(&[3], false), vec![false]);
+    }
+
+    #[test]
+    fn a_chord_second_in_the_left_hand_sits_left_of_its_down_stem() {
+        let sys = layout(vec![note_col("", "C3, D3", Duration::Quarter)], "C Major");
+        let mut h = heads(&sys[0].prims);
+        h.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap()); // top (D3) first
+        assert_eq!(h.len(), 2);
+        // The lower note (C3) is displaced to the left of the upper one.
+        assert!(
+            h[1].0 < h[0].0 - 1.0,
+            "lower head should sit to the left: {h:?}"
+        );
+        // The stem touches both heads: it runs between their x positions.
+        let stem_x = sys[0]
+            .prims
+            .iter()
+            .find_map(|p| match p {
+                Prim::Line {
+                    x1,
+                    x2,
+                    y1,
+                    y2,
+                    width,
+                } if (x1 - x2).abs() < 1e-4
+                    && (y1 - y2).abs() > 3.0
+                    && (*width - 0.1).abs() < 1e-4 =>
+                {
+                    Some(*x1)
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert!(stem_x > h[1].0 && stem_x < h[0].0 + 0.01);
+    }
+
+    #[test]
+    fn accidentals_of_close_notes_use_separate_slots() {
+        // C#4 and D#4 are one step apart: their sharps must not share a column.
+        assert_eq!(
+            accidental_slots(&[0, 1], &[Some(Accidental::Sharp), Some(Accidental::Sharp)]),
+            vec![1, 0]
+        );
+        // Far apart (a fifth or more): one slot is enough.
+        assert_eq!(
+            accidental_slots(&[0, 5], &[Some(Accidental::Sharp), Some(Accidental::Sharp)]),
+            vec![0, 0]
+        );
+        // Notes without a printed accidental take no slot.
+        assert_eq!(
+            accidental_slots(&[0, 1], &[None, Some(Accidental::Flat)]),
+            vec![0, 0]
+        );
+    }
+
+    #[test]
+    fn stacked_accidentals_make_the_column_wider() {
+        let plain = layout(vec![note_col("C4, E4", "", Duration::Quarter)], "C Major");
+        let stacked = layout(
+            vec![note_col("C#4, D#4, E#4", "", Duration::Quarter)],
+            "C Major",
+        );
+        assert!(stacked[0].width > plain[0].width);
+        // Every note still gets its head and its own sign.
+        assert_eq!(heads(&stacked[0].prims).len(), 3);
+    }
+
+    #[test]
+    fn very_low_and_high_notes_stay_inside_the_system() {
+        for (right, left) in [("", "A0"), ("C8", ""), ("C8", "A0")] {
+            let sys = layout(vec![note_col(right, left, Duration::Eighth)], "C Major");
+            let s = &sys[0];
+            assert!(s.height >= SYSTEM_HEIGHT);
+            for prim in &s.prims {
+                let (lo, hi) = y_range(prim);
+                assert!(
+                    lo >= -1e-3 && hi <= s.height + 1e-3,
+                    "{prim:?} outside 0..{}",
+                    s.height
+                );
+            }
+        }
+        // A0's stem reaches below the nominal height, so the system grows.
+        let low = layout(vec![note_col("", "A0", Duration::Quarter)], "C Major");
+        let normal = layout(vec![note_col("", "C3", Duration::Quarter)], "C Major");
+        assert!(low[0].height > normal[0].height);
+        assert!((normal[0].height - SYSTEM_HEIGHT).abs() < 1e-4);
     }
 }

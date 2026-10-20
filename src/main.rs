@@ -220,6 +220,26 @@ async fn export_library(db: &Db, user: Option<&User>) -> Result<String, String> 
     transfer::export_songs_checked(&songs)
 }
 
+/// Focus the element with this id once the next render has put it into the page, so a
+/// keyboard user who opens an editor lands in its first field.
+fn focus_element_soon(id: &'static str) {
+    use wasm_bindgen::{closure::Closure, JsCast};
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let callback = Closure::once_into_js(move || {
+        if let Some(element) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.get_element_by_id(id))
+            .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
+        {
+            let _ = element.focus();
+        }
+    });
+    let _ =
+        window.set_timeout_with_callback_and_timeout_and_arguments_0(callback.unchecked_ref(), 30);
+}
+
 /// Open the browser's file chooser of the (hidden) `<input type="file">` with this id.
 /// A real button calls this, so the action is reachable and operable by keyboard.
 fn open_file_picker(input_id: &str) {
@@ -2834,20 +2854,45 @@ fn PianoSheetEditor(song: Signal<Song>, part_index: usize) -> Element {
         Some(bottom_y - steps as f32 * (LG / 2.0))
     }
 
-    /// Parse a comma-separated chord string → Vec of (y, accidental_str).
-    fn chord_notes(chord_str: &str, is_treble: bool) -> Vec<(f32, &'static str)> {
+    /// Parse a comma-separated chord string → Vec of (y, accidental to print). `marks` holds,
+    /// per parsed note, the accidental that must be written in this bar (see
+    /// `piano::display_accidentals`); notes that agree with the key signature get none.
+    fn chord_notes(
+        chord_str: &str,
+        is_treble: bool,
+        marks: &[Option<piano::Accidental>],
+    ) -> Vec<(f32, &'static str)> {
         piano::parse_chord(chord_str)
             .into_iter()
-            .filter_map(|note| {
+            .enumerate()
+            .filter_map(|(i, note)| {
                 let y = note_svg_y(&note.name(), is_treble)?;
-                let acc: &'static str = match note.accidental {
-                    piano::Accidental::Sharp => "♯",
-                    piano::Accidental::Flat => "♭",
-                    piano::Accidental::Natural => "",
+                let acc: &'static str = match marks.get(i).copied().flatten() {
+                    Some(piano::Accidental::Sharp) => "♯",
+                    Some(piano::Accidental::Flat) => "♭",
+                    Some(piano::Accidental::Natural) => "♮",
+                    None => "",
                 };
                 Some((y, acc))
             })
             .collect()
+    }
+
+    /// Which heads of a chord sit on the other side of the stem (notes a second apart).
+    fn displaced_heads(notes: &[(f32, &'static str)], stem_up: bool) -> Vec<bool> {
+        // Lowest pitch first = largest y first.
+        let mut order: Vec<usize> = (0..notes.len()).collect();
+        order.sort_by(|&a, &b| notes[b].0.partial_cmp(&notes[a].0).unwrap());
+        let steps: Vec<i32> = order
+            .iter()
+            .map(|&i| (-notes[i].0 / (LG / 2.0)).round() as i32)
+            .collect();
+        let flags = piano::head_displacement(&steps, stem_up);
+        let mut out = vec![false; notes.len()];
+        for (k, &i) in order.iter().enumerate() {
+            out[i] = flags[k];
+        }
+        out
     }
 
     /// Collect all unique ledger-line y positions needed for a set of notes.
@@ -2979,6 +3024,18 @@ fn PianoSheetEditor(song: Signal<Song>, part_index: usize) -> Element {
                     };
                     let content_w: f32 = col_layouts.iter().map(|cl| cl.width).sum::<f32>();
                     let svg_w = eff_cw + content_w + 10.0;
+                    // Accidentals to print, decided per bar: this segment is one line of the part.
+                    let seg_marks: Vec<piano::ColumnMarks> = song
+                        .read()
+                        .parts
+                        .get(part_index)
+                        .map(|part| {
+                            piano::columns_by_line(part)
+                                .get(seg_idx)
+                                .map(|cols| piano::display_accidentals(cols, &song_key))
+                                .unwrap_or_default()
+                        })
+                        .unwrap_or_default();
 
                     rsx! {
                         // ── Linebreak separator ──────────────────────────────────
@@ -2994,6 +3051,9 @@ fn PianoSheetEditor(song: Signal<Song>, part_index: usize) -> Element {
                                         if let Some(part) = song.write().parts.get_mut(part_index) {
                                             if lb_col < part.tab_grid.len() { part.tab_grid.remove(lb_col); }
                                         }
+                                        // Later columns just moved by one: an open edit would now point
+                                        // at the wrong beat.
+                                        editing_col.set(None);
                                     },
                                     "↵ ×"
                                 }
@@ -3084,8 +3144,8 @@ fn PianoSheetEditor(song: Signal<Song>, part_index: usize) -> Element {
                                     "𝄢"
                                 }
 
-                                // Key-signature accidentals (first segment only)
-                                if seg_idx == 0 && !ks_svg_html.is_empty() {
+                                // Key-signature accidentals (every system, like the PDF)
+                                if !ks_svg_html.is_empty() {
                                     g {
                                         key: "ks",
                                         dangerous_inner_html: "{ks_svg_html}"
@@ -3099,9 +3159,23 @@ fn PianoSheetEditor(song: Signal<Song>, part_index: usize) -> Element {
                                         rsx! {
                                             g {
                                                 style: "cursor: pointer;",
-                                                onclick: move |_| {
-                                                    edit_time_sig_buf.set(ts_click.clone());
-                                                    editing_time_sig.set(true);
+                                                tabindex: "0",
+                                                role: "button",
+                                                "aria-label": "Change time signature, now {time_sig}",
+                                                onclick: {
+                                                    let ts = ts_click.clone();
+                                                    move |_| {
+                                                        edit_time_sig_buf.set(ts.clone());
+                                                        editing_time_sig.set(true);
+                                                    }
+                                                },
+                                                onkeydown: move |e: Event<KeyboardData>| {
+                                                    let space = matches!(e.key(), Key::Character(ref c) if c == " ");
+                                                    if e.key() == Key::Enter || space {
+                                                        e.prevent_default();
+                                                        edit_time_sig_buf.set(ts_click.clone());
+                                                        editing_time_sig.set(true);
+                                                    }
                                                 },
                                                 // numerator (treble staff centre)
                                                 text {
@@ -3160,8 +3234,12 @@ fn PianoSheetEditor(song: Signal<Song>, part_index: usize) -> Element {
                                         } else {
                                             let is_editing = *editing_col.read() == Some(ci);
                                             // Parse comma-separated chords
-                                            let rh_notes: Vec<(f32, &'static str)> = chord_notes(&cl.rh, true);
-                                            let lh_notes: Vec<(f32, &'static str)> = chord_notes(&cl.lh, false);
+                                            let col_marks = seg_marks.get(col_i).cloned().unwrap_or_default();
+                                            let beat_no = col_layouts[..=col_i].iter().filter(|c| !c.is_barline).count();
+                                            let rh_notes: Vec<(f32, &'static str)> = chord_notes(&cl.rh, true, &col_marks.right);
+                                            let lh_notes: Vec<(f32, &'static str)> = chord_notes(&cl.lh, false, &col_marks.left);
+                                            let rh_displaced = displaced_heads(&rh_notes, true);
+                                            let lh_displaced = displaced_heads(&lh_notes, false);
                                             let rh_ledgers = chord_ledger_ys(&rh_notes, true);
                                             let lh_ledgers = chord_ledger_ys(&lh_notes, false);
                                             let rect_fill = if is_editing { "#e8d0f8" } else { "transparent" };
@@ -3170,21 +3248,42 @@ fn PianoSheetEditor(song: Signal<Song>, part_index: usize) -> Element {
                                             let cur_dur = cl.dur;
                                             let note_fill = if cl.dur == 1 || cl.dur == 2 { "white" } else { "#1a0a3a" };
                                             let dur_sym = match cl.dur { 1 => "𝅝", 2 => "𝅗𝅥", 8 => "♪", _ => "♩" };
-                                            // For staggering overlapping note heads
-                                            let rh_ys: Vec<f32> = rh_notes.iter().map(|&(y,_)| y).collect();
-                                            let lh_ys: Vec<f32> = lh_notes.iter().map(|&(y,_)| y).collect();
+                                            // Stems run from the far head to the far end so they touch every head.
                                             let rh_top_y = rh_notes.iter().map(|&(y,_)| y).fold(f32::INFINITY, f32::min);
+                                            let rh_bot_y = rh_notes.iter().map(|&(y,_)| y).fold(f32::NEG_INFINITY, f32::max);
+                                            let lh_top_y = lh_notes.iter().map(|&(y,_)| y).fold(f32::INFINITY, f32::min);
                                             let lh_bot_y = lh_notes.iter().map(|&(y,_)| y).fold(f32::NEG_INFINITY, f32::max);
 
                                             rsx! {
                                                 g {
                                                     key: "col-{ci}",
                                                     style: "cursor: pointer;",
-                                                    onclick: move |_| {
-                                                        edit_rh.set(cur_rh.clone());
-                                                        edit_lh.set(cur_lh.clone());
-                                                        edit_dur.set(cur_dur);
-                                                        editing_col.set(Some(ci));
+                                                    tabindex: "0",
+                                                    role: "button",
+                                                    "aria-label": "Edit beat {beat_no}",
+                                                    onclick: {
+                                                        let (rh, lh) = (cur_rh.clone(), cur_lh.clone());
+                                                        move |_| {
+                                                            edit_rh.set(rh.clone());
+                                                            edit_lh.set(lh.clone());
+                                                            edit_dur.set(cur_dur);
+                                                            editing_col.set(Some(ci));
+                                                            focus_element_soon("piano-rh-input");
+                                                        }
+                                                    },
+                                                    onkeydown: {
+                                                        let (rh, lh) = (cur_rh.clone(), cur_lh.clone());
+                                                        move |e: Event<KeyboardData>| {
+                                                            let space = matches!(e.key(), Key::Character(ref c) if c == " ");
+                                                            if e.key() == Key::Enter || space {
+                                                                e.prevent_default();
+                                                                edit_rh.set(rh.clone());
+                                                                edit_lh.set(lh.clone());
+                                                                edit_dur.set(cur_dur);
+                                                                editing_col.set(Some(ci));
+                                                                focus_element_soon("piano-rh-input");
+                                                            }
+                                                        }
                                                     },
 
                                                     // Highlight rect
@@ -3221,10 +3320,8 @@ fn PianoSheetEditor(song: Signal<Song>, part_index: usize) -> Element {
                                                     // Note heads
                                                     for (ni, &(ty, acc)) in rh_notes.iter().enumerate() {
                                                         {
-                                                            // Stagger adjacent note heads (interval of a 2nd = LG/2 apart)
-                                                            let stagger = rh_ys.iter().enumerate()
-                                                                .any(|(j, &oy)| j < ni && (ty - oy).abs() < LG / 2.0 + 1.0);
-                                                            let nx = if stagger { x + NRX + 1.0 } else { x };
+                                                            // Seconds: the upper head moves right of the up-stem.
+                                                            let nx = if rh_displaced[ni] { x + 2.0 * NRX - 1.0 } else { x };
                                                             rsx! {
                                                                 g { key: "rhn-{ni}",
                                                                     if !acc.is_empty() {
@@ -3253,7 +3350,7 @@ fn PianoSheetEditor(song: Signal<Song>, part_index: usize) -> Element {
                                                             rsx! {
                                                                 line {
                                                                     key: "rh-stem",
-                                                                    x1: "{sx}", y1: "{rh_top_y}",
+                                                                    x1: "{sx}", y1: "{rh_bot_y}",
                                                                     x2: "{sx}", y2: "{sy_top}",
                                                                     stroke: "#1a0a3a", stroke_width: "1.5"
                                                                 }
@@ -3281,9 +3378,8 @@ fn PianoSheetEditor(song: Signal<Song>, part_index: usize) -> Element {
                                                     // Note heads
                                                     for (ni, &(by, acc)) in lh_notes.iter().enumerate() {
                                                         {
-                                                            let stagger = lh_ys.iter().enumerate()
-                                                                .any(|(j, &oy)| j < ni && (by - oy).abs() < LG / 2.0 + 1.0);
-                                                            let nx = if stagger { x + NRX + 1.0 } else { x };
+                                                            // Seconds: the lower head moves left of the down-stem.
+                                                            let nx = if lh_displaced[ni] { x - 2.0 * NRX + 1.0 } else { x };
                                                             rsx! {
                                                                 g { key: "lhn-{ni}",
                                                                     if !acc.is_empty() {
@@ -3312,7 +3408,7 @@ fn PianoSheetEditor(song: Signal<Song>, part_index: usize) -> Element {
                                                             rsx! {
                                                                 line {
                                                                     key: "lh-stem",
-                                                                    x1: "{sx}", y1: "{lh_bot_y}",
+                                                                    x1: "{sx}", y1: "{lh_top_y}",
                                                                     x2: "{sx}", y2: "{sy_bot}",
                                                                     stroke: "#1a0a3a", stroke_width: "1.5"
                                                                 }
@@ -3346,6 +3442,19 @@ fn PianoSheetEditor(song: Signal<Song>, part_index: usize) -> Element {
                                 let ec = *editing_col.read();
                                 if ec.is_some() && ec.is_some_and(|ci| seg_cols.contains(&ci)) {
                                     let ci = ec.unwrap();
+                                    // Apply, and Enter in either note field, commit the same edit.
+                                    let mut apply_edit = move || {
+                                        let rh_val = edit_rh.read().trim().to_string();
+                                        let lh_val = edit_lh.read().trim().to_string();
+                                        if let Some(part) = song.write().parts.get_mut(part_index) {
+                                            if let Some(TabCol::Notes(arr)) = part.tab_grid.get_mut(ci) {
+                                                arr[0] = if rh_val.is_empty() { TabCell::Empty } else { TabCell::Custom(rh_val) };
+                                                arr[1] = if lh_val.is_empty() { TabCell::Empty } else { TabCell::Custom(lh_val) };
+                                                arr[2] = TabCell::Custom(edit_dur.read().to_string());
+                                            }
+                                        }
+                                        editing_col.set(None);
+                                    };
                                     rsx! {
                                         div {
                                             style: "margin-top: 10px; padding: 8px 14px; background: #ede0f8; border: 1.5px solid #b890d8; border-radius: 8px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;",
@@ -3360,10 +3469,15 @@ fn PianoSheetEditor(song: Signal<Song>, part_index: usize) -> Element {
                                                         style: "width: 160px; font-family: 'Courier New', monospace; font-size: 13px; border: 1.5px solid #b890d8; border-radius: 5px; padding: 3px 7px; background: white; outline: none;",
                                                         r#type: "text",
                                                         placeholder: "e.g. C5,E5,G5",
+                                                        id: "piano-rh-input",
                                                         value: "{edit_rh}",
                                                         oninput: move |e| edit_rh.set(e.value()),
                                                         onkeydown: move |e: Event<KeyboardData>| {
-                                                            if e.key() == Key::Enter { editing_col.set(None); }
+                                                            match e.key() {
+                                                                Key::Enter => apply_edit(),
+                                                                Key::Escape => editing_col.set(None),
+                                                                _ => {}
+                                                            }
                                                         },
                                                     }
                                                 }
@@ -3379,7 +3493,11 @@ fn PianoSheetEditor(song: Signal<Song>, part_index: usize) -> Element {
                                                         value: "{edit_lh}",
                                                         oninput: move |e| edit_lh.set(e.value()),
                                                         onkeydown: move |e: Event<KeyboardData>| {
-                                                            if e.key() == Key::Enter { editing_col.set(None); }
+                                                            match e.key() {
+                                                                Key::Enter => apply_edit(),
+                                                                Key::Escape => editing_col.set(None),
+                                                                _ => {}
+                                                            }
                                                         },
                                                     }
                                                 }
@@ -3412,18 +3530,7 @@ fn PianoSheetEditor(song: Signal<Song>, part_index: usize) -> Element {
                                             }
                                             button {
                                                 style: "padding: 6px 14px; background: #6b1a8a; color: white; border: none; border-radius: 6px; font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit;",
-                                                onclick: move |_| {
-                                                    let rh_val = edit_rh.read().trim().to_string();
-                                                    let lh_val = edit_lh.read().trim().to_string();
-                                                    if let Some(part) = song.write().parts.get_mut(part_index) {
-                                                        if let Some(TabCol::Notes(arr)) = part.tab_grid.get_mut(ci) {
-                                                            arr[0] = if rh_val.is_empty() { TabCell::Empty } else { TabCell::Custom(rh_val) };
-                                                            arr[1] = if lh_val.is_empty() { TabCell::Empty } else { TabCell::Custom(lh_val) };
-                                                            arr[2] = TabCell::Custom(edit_dur.read().to_string());
-                                                        }
-                                                    }
-                                                    editing_col.set(None);
-                                                },
+                                                onclick: move |_| apply_edit(),
                                                 "✓ Apply"
                                             }
                                             button {
@@ -5741,12 +5848,16 @@ fn InstrumentSheetBody(id: i64, instrument: String, initial: Song) -> Element {
                         .get(part_index)
                         .map(|p| p.items.len())
                         .unwrap_or(0);
-                    let tab_text = song
-                        .read()
-                        .parts
-                        .get(part_index)
-                        .map(|p| p.tab_as_ascii())
-                        .unwrap_or_default();
+                    // The same transposed view as the chords and the rendered sheet / PDF, so
+                    // piano notes shown here move with the transpose control.
+                    let tab_text = {
+                        let shifted = song.read().apply_capo(capo());
+                        shifted
+                            .parts
+                            .get(part_index)
+                            .map(|p| p.tab_as_ascii())
+                            .unwrap_or_default()
+                    };
                     let part_border = if is_riff { "#b5d6b5" } else { "#dbeafe" };
                     let part_bg = if is_riff { "#f6fbf6" } else { "transparent" };
                     let label_color = if is_riff { "#5c7a5c" } else { "#aaa" };

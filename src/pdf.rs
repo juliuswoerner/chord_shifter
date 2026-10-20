@@ -109,12 +109,16 @@ fn draw_piano_system(
                         winding_order: WindingOrder::NonZero,
                     });
                 } else {
+                    // White interior (so staff and ledger lines do not show through the
+                    // head) with a black outline, in a single fill-and-stroke operation.
+                    layer.set_fill_color(Color::Greyscale(Greyscale::new(1.0, None)));
                     layer.set_outline_thickness(pt(*width));
                     layer.add_polygon(Polygon {
                         rings: vec![ring],
-                        mode: PolygonMode::Stroke,
+                        mode: PolygonMode::FillStroke,
                         winding_order: WindingOrder::NonZero,
                     });
+                    layer.set_fill_color(Color::Greyscale(Greyscale::new(0.0, None)));
                 }
             }
             piano::Prim::Text {
@@ -128,6 +132,45 @@ fn draw_piano_system(
             }
         }
     }
+}
+
+/// Colour of a part's lyrics text (`#rrggbb`, grey when it cannot be read).
+fn part_text_color(pt: &chord_shifter::song::PartTextSettings) -> Color {
+    let hex = pt.color.trim_start_matches('#');
+    let channel = |range: std::ops::Range<usize>| -> f32 {
+        hex.get(range)
+            .and_then(|h| u8::from_str_radix(h, 16).ok())
+            .unwrap_or(0x55) as f32
+            / 255.0
+    };
+    if hex.len() == 6 {
+        Color::Rgb(Rgb::new(channel(0..2), channel(2..4), channel(4..6), None))
+    } else {
+        Color::Rgb(Rgb::new(
+            0x55 as f32 / 255.0,
+            0x55 as f32 / 255.0,
+            0x55 as f32 / 255.0,
+            None,
+        ))
+    }
+}
+
+/// Height of a part's lyrics when printed over `width` mm (same rules as the drawing code).
+fn lyrics_height(pt: &chord_shifter::song::PartTextSettings, width: f32) -> f32 {
+    let text_size = pt.size as f32;
+    let char_w = text_size * (3.5 / 18.0);
+    let line_h = text_size * (3.5 / 18.0) * 4.5;
+    let max_chars = (width / char_w).floor().max(1.0);
+    pt.content
+        .split('\n')
+        .map(|line| {
+            if line.is_empty() {
+                line_h
+            } else {
+                (line.chars().count() as f32 / max_chars).ceil().max(1.0) * line_h
+            }
+        })
+        .sum()
 }
 
 fn measure_part_height(
@@ -153,7 +196,13 @@ fn measure_part_height(
             .first()
             .map(|s| s.height * PIANO_UNIT_MM)
             .unwrap_or(0.0);
-        return part_name_h + first + PIANO_SYSTEM_GAP_MM;
+        let lyrics = part
+            .part_text
+            .as_ref()
+            .filter(|t| !t.content.is_empty())
+            .map(|t| lyrics_height(t, RIGHT - MARGIN))
+            .unwrap_or(0.0);
+        return part_name_h + first + PIANO_SYSTEM_GAP_MM + lyrics.min(40.0);
     }
 
     if part.kind == PartKind::Riff
@@ -432,6 +481,41 @@ pub fn generate_pdf_bytes(
         }};
     }
 
+    // Lyrics printed under a music block (piano sheets and tab parts): full width, below
+    // the staves, wrapped and paged like the other lyrics.
+    macro_rules! lyrics_below {
+        ($part:expr) => {{
+            if let Some(pt) = &$part.part_text {
+                if !pt.content.is_empty() {
+                    let text_size = pt.size as f32;
+                    let char_w = text_size * (3.5 / 18.0);
+                    let line_h = text_size * (3.5 / 18.0) * 4.5;
+                    let max_chars = ((RIGHT - MARGIN) / char_w).floor().max(1.0) as usize;
+                    layer.set_fill_color(part_text_color(pt));
+                    for line in pt.content.split('\n') {
+                        if line.is_empty() {
+                            y -= line_h;
+                            continue;
+                        }
+                        let mut remaining = line;
+                        while !remaining.is_empty() {
+                            if y < MARGIN + 10.0 {
+                                next_page!();
+                                layer.set_fill_color(part_text_color(pt));
+                            }
+                            let take = char_safe_take(remaining, max_chars);
+                            let (chunk, rest) = remaining.split_at(take);
+                            layer.use_text(chunk, text_size, Mm(MARGIN), Mm(y + 1.5), &font_bold);
+                            y -= line_h;
+                            remaining = rest.trim_start_matches(' ');
+                        }
+                    }
+                    layer.set_fill_color(Color::Greyscale(Greyscale::new(0.0, None)));
+                }
+            }
+        }};
+    }
+
     for part in &effective.parts {
         // ── Page-break check ────────────────────────────────────────────────
         // If the remaining vertical space is less than this part's estimated
@@ -486,6 +570,7 @@ pub fn generate_pdf_bytes(
                 draw_piano_system(&layer, &font_bold, system, MARGIN, y);
                 y -= h + PIANO_SYSTEM_GAP_MM;
             }
+            lyrics_below!(part);
             y -= gap;
             continue;
         }
@@ -884,6 +969,7 @@ pub fn generate_pdf_bytes(
                 y = seg_top - block_h - block_gap;
             }
 
+            lyrics_below!(part);
             y -= gap;
             continue;
         }
@@ -1477,5 +1563,79 @@ mod piano_pdf_tests {
             .with_part("Outro", chords);
         with_chords.parts.insert(1, song.parts.remove(0));
         render(&with_chords, 0);
+    }
+
+    fn hex(text: &str) -> String {
+        text.bytes().map(|b| format!("{b:02X}")).collect()
+    }
+
+    #[test]
+    fn hollow_heads_are_filled_white_and_outlined_in_one_operation() {
+        let whole = render(&piano_song("C Major", "4/4", vec![col("C5", "", "1")]), 0);
+        let quarter = render(&piano_song("C Major", "4/4", vec![col("C5", "", "4")]), 0);
+        assert_eq!(count(&whole, b"\nb\n"), 1, "one fill-and-stroke head");
+        assert_eq!(count(&quarter, b"\nb\n"), 0);
+        assert!(count(&whole, b"1 g\n") >= 1, "the interior is filled white");
+    }
+
+    #[test]
+    fn lyrics_of_a_piano_part_are_printed_below_the_music() {
+        use chord_shifter::song::PartTextSettings;
+        let mut song = piano_song("C Major", "4/4", vec![col("C5", "", "4")]);
+        let without = render(&song, 0);
+        song.parts[0].part_text = Some(PartTextSettings {
+            content: "Sing along here\nSecond line".to_string(),
+            ..PartTextSettings::new()
+        });
+        let with = render(&song, 0);
+        assert!(
+            count(&with, hex("Sing along here").as_bytes()) == 1,
+            "first lyric line missing"
+        );
+        assert!(
+            count(&with, hex("Second line").as_bytes()) == 1,
+            "second lyric line missing"
+        );
+        assert_eq!(count(&without, hex("Sing along here").as_bytes()), 0);
+    }
+
+    #[test]
+    fn lyrics_of_tab_parts_are_printed_too() {
+        use chord_shifter::song::PartTextSettings;
+        let mut part = SongPart::new_riff("Riff");
+        let mut cells: [TabCell; 8] = Default::default();
+        cells[0] = TabCell::Fret(3);
+        part.tab_grid = vec![TabCol::Notes(cells)];
+        part.part_text = Some(PartTextSettings {
+            content: "Riff lyrics".to_string(),
+            ..PartTextSettings::new()
+        });
+        let mut song = Song::new("Tabs", "E Minor", "Me");
+        song.parts = vec![part];
+        let pdf = render(&song, 0);
+        assert_eq!(count(&pdf, hex("Riff lyrics").as_bytes()), 1);
+    }
+
+    #[test]
+    fn a_long_lyric_block_continues_on_a_new_page() {
+        use chord_shifter::song::PartTextSettings;
+        let mut song = piano_song("C Major", "4/4", vec![col("C5", "", "4")]);
+        song.parts[0].part_text = Some(PartTextSettings {
+            content: (0..120)
+                .map(|i| format!("lyric line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            ..PartTextSettings::new()
+        });
+        let pdf = render(&song, 0);
+        assert!(
+            count(&pdf, b"Page") > 2,
+            "expected extra pages for 120 lyric lines"
+        );
+        assert_eq!(
+            count(&pdf, hex("lyric line 119").as_bytes()),
+            1,
+            "the last line must be printed"
+        );
     }
 }
