@@ -30,6 +30,7 @@ fn inst_icon(inst: Instrument) -> Asset {
 // song and auth live in the shared library crate (src/lib.rs)
 use chord_shifter::auth;
 use chord_shifter::demo;
+use chord_shifter::piano;
 use chord_shifter::song;
 use chord_shifter::transfer;
 mod api;
@@ -2821,34 +2822,13 @@ fn PianoSheetEditor(song: Signal<Song>, part_index: usize) -> Element {
 
     /// Parse a single note name like "C4", "F#5", "Bb3" → SVG y-coordinate.
     fn note_svg_y(name: &str, is_treble: bool) -> Option<f32> {
-        let b = name.trim().as_bytes();
-        if b.is_empty() {
-            return None;
-        }
-        let letter = (b[0] as char).to_ascii_uppercase();
-        let diatonic: i32 = match letter {
-            'C' => 0,
-            'D' => 1,
-            'E' => 2,
-            'F' => 3,
-            'G' => 4,
-            'A' => 5,
-            'B' => 6,
-            _ => return None,
-        };
-        let acc_skip: usize = if b.len() > 1 && (b[1] == b'#' || b[1] == b'b') {
-            1
+        let note = piano::Note::parse(name)?;
+        let clef = if is_treble {
+            piano::Clef::Treble
         } else {
-            0
+            piano::Clef::Bass
         };
-        let oct: i32 = std::str::from_utf8(&b[1 + acc_skip..])
-            .ok()?
-            .trim()
-            .parse()
-            .ok()?;
-        let abs_pos = oct * 7 + diatonic;
-        let bottom_abs: i32 = if is_treble { 30 } else { 18 };
-        let steps = abs_pos - bottom_abs;
+        let steps = piano::staff_step(&note, clef);
         let section_top = if is_treble { TREBLE_TOP } else { BASS_TOP };
         let bottom_y = section_top + LP + SH;
         Some(bottom_y - steps as f32 * (LG / 2.0))
@@ -2856,20 +2836,14 @@ fn PianoSheetEditor(song: Signal<Song>, part_index: usize) -> Element {
 
     /// Parse a comma-separated chord string → Vec of (y, accidental_str).
     fn chord_notes(chord_str: &str, is_treble: bool) -> Vec<(f32, &'static str)> {
-        chord_str
-            .split(',')
-            .filter_map(|n| {
-                let n = n.trim();
-                let y = note_svg_y(n, is_treble)?;
-                let b = n.as_bytes();
-                let acc: &'static str = if b.len() >= 2 {
-                    match b[1] {
-                        b'#' => "♯",
-                        b'b' => "♭",
-                        _ => "",
-                    }
-                } else {
-                    ""
+        piano::parse_chord(chord_str)
+            .into_iter()
+            .filter_map(|note| {
+                let y = note_svg_y(&note.name(), is_treble)?;
+                let acc: &'static str = match note.accidental {
+                    piano::Accidental::Sharp => "♯",
+                    piano::Accidental::Flat => "♭",
+                    piano::Accidental::Natural => "",
                 };
                 Some((y, acc))
             })
@@ -2946,79 +2920,10 @@ fn PianoSheetEditor(song: Signal<Song>, part_index: usize) -> Element {
     //   treble: B4=4  E5=7  A4=3  D5=6  G4=2  C5=5  F4=1
     //   bass  : B2=2  E3=5  A2=1  D3=4  G2=0  C3=3  F2=-1
     fn key_sig_accidentals(key: &str) -> Vec<(&'static str, i32, i32)> {
-        // Key is stored as "G Major", "Bb Minor", "F#m", "C", etc.
-        let key = key.trim();
-        let mut parts = key.splitn(2, ' ');
-        let root = parts.next().unwrap_or("").trim_end_matches('m');
-        let mode_word = parts.next().unwrap_or("").to_ascii_lowercase();
-        let is_minor = mode_word.starts_with("min") || key.ends_with('m');
-
-        const SHARPS: [(&str, i32, i32); 7] = [
-            ("♯", 8, 6),  // F#
-            ("♯", 5, 3),  // C#
-            ("♯", 9, 7),  // G#
-            ("♯", 6, 4),  // D#
-            ("♯", 10, 8), // A#
-            ("♯", 7, 5),  // E#
-            ("♯", 4, 2),  // B#
-        ];
-        const FLATS: [(&str, i32, i32); 7] = [
-            ("♭", 4, 2),  // Bb
-            ("♭", 7, 5),  // Eb
-            ("♭", 3, 1),  // Ab
-            ("♭", 6, 4),  // Db
-            ("♭", 2, 0),  // Gb
-            ("♭", 5, 3),  // Cb
-            ("♭", 1, -1), // Fb
-        ];
-
-        let (count, use_sharps) = if is_minor {
-            match root {
-                "A" => (0, true),
-                "E" => (1, true),
-                "B" => (2, true),
-                "F#" => (3, true),
-                "C#" => (4, true),
-                "G#" => (5, true),
-                "D#" => (6, true),
-                "A#" => (7, true),
-                "D" => (1, false),
-                "G" => (2, false),
-                "C" => (3, false),
-                "F" => (4, false),
-                "Bb" => (5, false),
-                "Eb" => (6, false),
-                "Ab" => (7, false),
-                _ => (0, true),
-            }
-        } else {
-            match root {
-                "C" => (0, true),
-                "G" => (1, true),
-                "D" => (2, true),
-                "A" => (3, true),
-                "E" => (4, true),
-                "B" => (5, true),
-                "F#" => (6, true),
-                "C#" => (7, true),
-                "F" => (1, false),
-                "Bb" => (2, false),
-                "Eb" => (3, false),
-                "Ab" => (4, false),
-                "Db" => (5, false),
-                "Gb" => (6, false),
-                "Cb" => (7, false),
-                _ => (0, true),
-            }
-        };
-
-        if count == 0 {
-            vec![]
-        } else if use_sharps {
-            SHARPS[..count.min(7)].to_vec()
-        } else {
-            FLATS[..count.min(7)].to_vec()
-        }
+        piano::key_signature(key)
+            .into_iter()
+            .map(|k| (if k.sharp { "♯" } else { "♭" }, k.treble_step, k.bass_step))
+            .collect()
     }
     let key_acc = key_sig_accidentals(&song_key);
     let key_acc_count = key_acc.len();

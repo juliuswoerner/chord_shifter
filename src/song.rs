@@ -797,6 +797,20 @@ impl Song {
                 }
             }
         }
+        // Piano sheets: move the written notes by the nearest interval (up to a tritone up
+        // or a fourth down) so they stay in their register and match the new key signature.
+        let semitones = if interval > 6 {
+            interval as i32 - 12
+        } else {
+            interval as i32
+        };
+        for part in self
+            .parts
+            .iter_mut()
+            .chain(self.instrument_parts.values_mut().flatten())
+        {
+            crate::piano::transpose_part(part, semitones, prefer_sharps);
+        }
         let mode = self
             .key
             .split_whitespace()
@@ -865,6 +879,10 @@ impl Song {
                     }
                 }
             }
+        }
+        // Piano sheets follow the same shift (a positive capo lowers, a negative raises).
+        for part in &mut result.parts {
+            crate::piano::transpose_part(part, -(capo as i32), prefer_sharps);
         }
         result
     }
@@ -1401,6 +1419,80 @@ mod tests {
     }
 
     // ── Song serde round-trip ─────────────────────────────────────────────────
+
+    // ── piano notes follow transposition ─────────────────────────────────────
+
+    fn piano_song() -> Song {
+        let mut song = Song::new("Pieces", "C Major", "Me");
+        let mut part = SongPart::new_piano_riff("Piano");
+        let mut cells: [TabCell; 8] = Default::default();
+        cells[0] = TabCell::Custom("C4, E4".to_string());
+        cells[1] = TabCell::Custom("C3".to_string());
+        cells[2] = TabCell::Custom("4".to_string());
+        part.tab_grid = vec![TabCol::Notes(cells)];
+        song.parts = vec![part];
+        song
+    }
+
+    fn first_cells(part: &SongPart) -> (String, String) {
+        match &part.tab_grid[0] {
+            TabCol::Notes(c) => {
+                let text = |i: usize| match &c[i] {
+                    TabCell::Custom(s) => s.clone(),
+                    _ => String::new(),
+                };
+                (text(0), text(1))
+            }
+            _ => panic!("not a note column"),
+        }
+    }
+
+    #[test]
+    fn transposing_the_song_moves_piano_notes_to_the_nearest_octave() {
+        let mut song = piano_song();
+        song.transpose_to("G"); // 7 semitones up = 5 down
+        assert_eq!(
+            first_cells(&song.parts[0]),
+            ("G3, B3".to_string(), "G2".to_string())
+        );
+        let mut song = piano_song();
+        song.transpose_to("D"); // 2 up
+        assert_eq!(
+            first_cells(&song.parts[0]),
+            ("D4, F#4".to_string(), "D3".to_string())
+        );
+        let mut song = piano_song();
+        song.transpose_to("F"); // 5 up (flat key spelling)
+        assert_eq!(
+            first_cells(&song.parts[0]),
+            ("F4, A4".to_string(), "F3".to_string())
+        );
+    }
+
+    #[test]
+    fn transposing_also_moves_piano_sheets_of_instrument_overrides() {
+        let mut song = piano_song();
+        let piano = song.parts.clone();
+        song.instrument_parts.insert("Piano".to_string(), piano);
+        song.transpose_to("D");
+        assert_eq!(first_cells(&song.instrument_parts["Piano"][0]).0, "D4, F#4");
+    }
+
+    #[test]
+    fn a_piano_transpose_shifts_notes_like_the_chords() {
+        let song = piano_song();
+        // Capo 2 (or piano "transpose -2") lowers everything by two semitones.
+        let lowered = song.apply_capo(2);
+        assert_eq!(
+            first_cells(&lowered.parts[0]),
+            ("Bb3, D4".to_string(), "Bb2".to_string()).clone()
+        );
+        // Negative values raise.
+        let raised = song.apply_capo(-3);
+        assert_eq!(first_cells(&raised.parts[0]).1, "Eb3");
+        // The original is untouched.
+        assert_eq!(first_cells(&song.parts[0]).0, "C4, E4");
+    }
 
     #[test]
     fn song_json_round_trip() {

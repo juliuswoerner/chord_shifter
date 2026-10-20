@@ -7,5 +7,6 @@
 /// (`src/bin/server.rs`) without duplicating source files.
 pub mod auth;
 pub mod demo;
+pub mod piano;
 pub mod song;
 pub mod transfer;

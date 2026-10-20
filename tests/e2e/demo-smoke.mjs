@@ -10,6 +10,7 @@
 import { chromium } from 'playwright';
 import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { inflateSync } from 'node:zlib';
 
 const BASE_URL = process.env.BASE_URL ?? 'http://localhost:8080';
 const executablePath = process.env.CHROME || undefined;
@@ -18,6 +19,21 @@ const browser = await chromium.launch({ executablePath, args: ['--no-sandbox'] }
 const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
 const pageErrors = [];
 page.on('pageerror', (e) => pageErrors.push(String(e)));
+
+/** The drawing commands of a PDF: all content streams, inflated when compressed. */
+function pdfContent(buffer) {
+    const text = buffer.toString('latin1');
+    let out = '';
+    for (const m of text.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
+        const raw = Buffer.from(m[1], 'latin1');
+        try {
+            out += inflateSync(raw).toString('latin1');
+        } catch {
+            out += m[1];
+        }
+    }
+    return out;
+}
 
 let step = 'start';
 async function check(name, fn) {
@@ -76,6 +92,65 @@ try {
         const pdf = execFileSync('unzip', ['-p', file, entries[0]], { maxBuffer: 64 * 1024 * 1024 });
         expect(pdf.subarray(0, 5).toString() === '%PDF-', `${entries[0]} is not a PDF`);
         expect(pdf.length > 1000, `${entries[0]} is too small (${pdf.length} bytes)`);
+    });
+
+    // ── Piano sheet ──────────────────────────────────────────────────────────
+    const openPianoSheet = async () => {
+        await page.getByText('Piano Waltz').first().click();
+        await page.getByTitle('Piano sheet').click();
+        await page.locator('svg ellipse').first().waitFor({ timeout: 15000 });
+    };
+    const headCount = () => page.locator('svg ellipse').count();
+    let headsBefore = 0;
+
+    await check('the demo piano sheet is drawn as a grand staff with its notes', async () => {
+        await page.getByRole('button', { name: '← Library' }).click();
+        await page.getByText('My Songs').waitFor();
+        await openPianoSheet();
+        headsBefore = await headCount();
+        // Melody + left hand of the demo piece: well over a dozen note heads.
+        expect(headsBefore >= 20, `expected the demo melody on the staff, saw ${headsBefore} heads`);
+        expect((await page.locator('svg text', { hasText: '3' }).count()) >= 2, 'time signature 3/4 missing');
+    });
+
+    await check('a column can be edited into a chord with another note length and saved', async () => {
+        // The first clickable group is the time signature; the next is the first beat column.
+        await page.locator('svg g[style*="cursor: pointer"]').nth(1).click();
+        await page.getByPlaceholder('e.g. C5,E5,G5').fill('C5,E5,G5');
+        await page.getByRole('button', { name: '1/2', exact: true }).click();
+        await page.getByRole('button', { name: /Apply/ }).click();
+        await page.waitForFunction((n) => document.querySelectorAll('svg ellipse').length === n, headsBefore + 2, { timeout: 15000 });
+        await page.getByRole('button', { name: /Save Piano Sheet/ }).click();
+        await page.getByText(/Saved/).first().waitFor({ timeout: 15000 });
+        await page.getByRole('button', { name: /Save to Library/ }).click();
+        await page.getByText(/Saved \(id \d+\)/).waitFor({ timeout: 15000 });
+    });
+
+    await check('the edited piano sheet survives a reload', async () => {
+        await page.reload();
+        await page.getByText('DEMO MODE').waitFor({ timeout: 30000 });
+        await page.getByRole('button', { name: 'Log in', exact: true }).first().click();
+        await page.getByRole('button', { name: 'Log in as demo user' }).click();
+        await page.getByText('My Songs').waitFor();
+        await openPianoSheet();
+        expect((await headCount()) === headsBefore + 2, 'the edited chord was not saved');
+    });
+
+    await check('the piano PDF contains the sheet music with the 3/4 time signature', async () => {
+        const [download] = await Promise.all([
+            page.waitForEvent('download', { timeout: 30000 }),
+            page.getByRole('button', { name: /Export as PDF/ }).click(),
+        ]);
+        const file = await download.path();
+        const entries = execFileSync('unzip', ['-Z1', file], { encoding: 'utf8' }).split('\n').filter(Boolean);
+        const pianoEntry = entries.find((n) => /Piano\.pdf$/.test(n));
+        expect(pianoEntry, `no piano PDF in the ZIP: ${entries}`);
+        const raw = execFileSync('unzip', ['-p', file, pianoEntry], { maxBuffer: 64 * 1024 * 1024 });
+        expect(raw.subarray(0, 5).toString() === '%PDF-', 'not a PDF');
+        const pdf = pdfContent(raw);
+        // Time signature digits are printed as text, once per staff.
+        expect((pdf.match(/<33> Tj/g) ?? []).length === 2, 'the 3 of 3/4 should appear once per staff');
+        expect((pdf.match(/\nf\n/g) ?? []).length >= 20, 'too few filled note heads in the PDF');
     });
 
     await check('all songs can be exported as JSON in demo (localStorage) mode', async () => {
