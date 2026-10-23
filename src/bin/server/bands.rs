@@ -176,26 +176,23 @@ async fn create_band(
 ) -> Result<(StatusCode, Json<Created>), ApiError> {
     let name = clean_name(&req.name)?;
 
-    let owned: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bands WHERE owner_id = ?")
-        .bind(user.id)
-        .fetch_one(&state.db)
-        .await
-        .map_err(internal)?;
-    if owned >= MAX_OWNED_BANDS {
-        return Err((
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!("You can own at most {MAX_OWNED_BANDS} bands."),
-        ));
-    }
-
+    // The limit is part of the insert, so concurrent requests cannot both slip under it.
     let mut tx = state.db.begin().await.map_err(internal)?;
-    let id: i64 =
-        sqlx::query_scalar("INSERT INTO bands (name, owner_id) VALUES (?, ?) RETURNING id")
-            .bind(&name)
-            .bind(user.id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(internal)?;
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO bands (name, owner_id)
+         SELECT ?1, ?2 WHERE (SELECT COUNT(*) FROM bands WHERE owner_id = ?2) < ?3
+         RETURNING id",
+    )
+    .bind(&name)
+    .bind(user.id)
+    .bind(MAX_OWNED_BANDS)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(internal)?
+    .ok_or((
+        StatusCode::UNPROCESSABLE_ENTITY,
+        format!("You can own at most {MAX_OWNED_BANDS} bands."),
+    ))?;
     sqlx::query("INSERT INTO band_members (band_id, user_id, role) VALUES (?, ?, 'owner')")
         .bind(id)
         .bind(user.id)
@@ -335,34 +332,49 @@ async fn add_member(
                 "No verified account with that email address.".into(),
             ))?;
 
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM band_members WHERE band_id = ?")
-        .bind(id)
-        .fetch_one(&state.db)
-        .await
-        .map_err(internal)?;
-    if count >= MAX_MEMBERS {
-        return Err((
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!("A band can have at most {MAX_MEMBERS} members."),
-        ));
-    }
-
+    // Ownership, band existence, capacity and uniqueness are all conditions of this one
+    // statement, so a concurrent deletion or addition cannot invalidate them between the
+    // check and the insert.
     let inserted = sqlx::query(
-        "INSERT OR IGNORE INTO band_members (band_id, user_id, role, default_instrument)
-         VALUES (?, ?, 'member', ?)",
+        "INSERT INTO band_members (band_id, user_id, role, default_instrument)
+         SELECT ?1, ?2, 'member', ?3
+         WHERE EXISTS (SELECT 1 FROM bands WHERE id = ?1)
+           AND EXISTS (SELECT 1 FROM band_members
+                       WHERE band_id = ?1 AND user_id = ?4 AND role = 'owner')
+           AND (SELECT COUNT(*) FROM band_members WHERE band_id = ?1) < ?5
+           AND NOT EXISTS (SELECT 1 FROM band_members WHERE band_id = ?1 AND user_id = ?2)",
     )
     .bind(id)
     .bind(new_user)
     .bind(instrument_to_db(req.default_instrument))
+    .bind(user.id)
+    .bind(MAX_MEMBERS)
     .execute(&state.db)
     .await
     .map_err(internal)?
     .rows_affected();
     if inserted == 0 {
-        return Err((
-            StatusCode::CONFLICT,
-            "Already a member of this band.".into(),
-        ));
+        // Say why: the band may have vanished or the caller lost ownership meanwhile.
+        owner_only(&state.db, id, user.id).await?;
+        let already: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM band_members WHERE band_id = ? AND user_id = ?",
+        )
+        .bind(id)
+        .bind(new_user)
+        .fetch_one(&state.db)
+        .await
+        .map_err(internal)?;
+        return Err(if already > 0 {
+            (
+                StatusCode::CONFLICT,
+                "Already a member of this band.".into(),
+            )
+        } else {
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("A band can have at most {MAX_MEMBERS} members."),
+            )
+        });
     }
     Ok(StatusCode::CREATED)
 }
@@ -802,5 +814,124 @@ mod tests {
         )
         .await;
         assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    // ── Concurrency ───────────────────────────────────────────────────────────
+
+    async fn app_and_pool() -> (axum::Router, sqlx::SqlitePool, String) {
+        let state = test_state().await;
+        let pool = state.db.clone();
+        let app = build_app(state, false);
+        let owner = register_and_login(&app, "owner@example.com").await;
+        register_and_login(&app, "a@example.com").await;
+        register_and_login(&app, "b@example.com").await;
+        (app, pool, owner)
+    }
+
+    /// Fake members (only the count matters) so a band holds `n` members including its owner.
+    async fn fill_band(pool: &sqlx::SqlitePool, band: i64, n: i64) {
+        for i in 0..(n - 1) {
+            sqlx::query(
+                "INSERT INTO band_members (band_id, user_id, role) VALUES (?, ?, 'member')",
+            )
+            .bind(band)
+            .bind(10_000 + i)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_additions_cannot_exceed_the_member_limit() {
+        let (app, pool, owner) = app_and_pool().await;
+        let band = create(&app, &owner, "Big").await;
+        fill_band(&pool, band, super::MAX_MEMBERS - 1).await;
+        let (x, y) = tokio::join!(
+            add(&app, &owner, band, "a@example.com"),
+            add(&app, &owner, band, "b@example.com")
+        );
+        let mut results = [x, y];
+        results.sort();
+        assert_eq!(
+            results,
+            [StatusCode::CREATED, StatusCode::UNPROCESSABLE_ENTITY]
+        );
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM band_members WHERE band_id = ?")
+            .bind(band)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, super::MAX_MEMBERS);
+    }
+
+    #[tokio::test]
+    async fn a_full_band_rejects_further_members() {
+        let (app, pool, owner) = app_and_pool().await;
+        let band = create(&app, &owner, "Full").await;
+        fill_band(&pool, band, super::MAX_MEMBERS).await;
+        assert_eq!(
+            add(&app, &owner, band, "a@example.com").await,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_band_creation_cannot_exceed_the_owner_limit() {
+        let (app, pool, owner) = app_and_pool().await;
+        let owner_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE email_hash = ?")
+            .bind(super::super::email_sha256("owner@example.com"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        for i in 0..(super::MAX_OWNED_BANDS - 1) {
+            sqlx::query("INSERT INTO bands (name, owner_id) VALUES (?, ?)")
+                .bind(format!("Band {i}"))
+                .bind(owner_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let body = || Some(json!({ "name": "Racer" }));
+        let (x, y) = tokio::join!(
+            call(&app, Method::POST, "/api/bands", &owner, body()),
+            call(&app, Method::POST, "/api/bands", &owner, body())
+        );
+        let mut results = [x.0, y.0];
+        results.sort();
+        assert_eq!(
+            results,
+            [StatusCode::CREATED, StatusCode::UNPROCESSABLE_ENTITY]
+        );
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bands WHERE owner_id = ?")
+            .bind(owner_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, super::MAX_OWNED_BANDS);
+    }
+
+    #[tokio::test]
+    async fn adding_a_member_while_the_band_is_deleted_leaves_no_orphan_membership() {
+        for _ in 0..5 {
+            let (app, pool, owner) = app_and_pool().await;
+            let band = create(&app, &owner, "Doomed").await;
+            let uri = format!("/api/bands/{band}");
+            let (added, _) = tokio::join!(
+                add(&app, &owner, band, "a@example.com"),
+                call(&app, Method::DELETE, &uri, &owner, None)
+            );
+            assert!(
+                matches!(added, StatusCode::CREATED | StatusCode::NOT_FOUND),
+                "{added}"
+            );
+            let orphans: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM band_members WHERE band_id NOT IN (SELECT id FROM bands)",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(orphans, 0);
+        }
     }
 }
