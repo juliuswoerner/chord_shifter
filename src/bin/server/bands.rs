@@ -144,7 +144,11 @@ fn instrument_from_db(s: Option<String>) -> Option<Instrument> {
 }
 
 /// The caller's role in the band, or 404 if they are not a member.
-async fn role_of(pool: &SqlitePool, band_id: i64, user_id: i64) -> Result<String, ApiError> {
+pub(super) async fn role_of(
+    pool: &SqlitePool,
+    band_id: i64,
+    user_id: i64,
+) -> Result<String, ApiError> {
     sqlx::query_scalar::<_, String>(
         "SELECT role FROM band_members WHERE band_id = ? AND user_id = ?",
     )
@@ -300,6 +304,12 @@ async fn delete_band(
 ) -> Result<StatusCode, ApiError> {
     owner_only(&state.db, id, user.id).await?;
     let mut tx = state.db.begin().await.map_err(internal)?;
+    // The band's songs return to their creators' personal libraries; nothing is lost.
+    sqlx::query("UPDATE songs SET band_id = NULL WHERE band_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
     sqlx::query("DELETE FROM band_members WHERE band_id = ?")
         .bind(id)
         .execute(&mut *tx)
@@ -802,5 +812,250 @@ mod tests {
         )
         .await;
         assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    // ── Band songs ────────────────────────────────────────────────────────────
+
+    fn song_with(name: &str, band: Option<i64>, expected: Option<i64>, key: &str) -> Value {
+        let mut song = chord_shifter::demo::demo_songs().remove(0);
+        song.name = name.to_string();
+        song.key = key.to_string();
+        json!({ "song": song, "band_id": band, "expected_version": expected })
+    }
+
+    async fn save_song(app: &axum::Router, token: &str, body: Value) -> (StatusCode, Value) {
+        call(app, Method::POST, "/api/songs", token, Some(body)).await
+    }
+
+    async fn song_ids(app: &axum::Router, token: &str) -> Vec<i64> {
+        let (_, list) = call(app, Method::GET, "/api/songs", token, None).await;
+        list.as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_i64().unwrap())
+            .collect()
+    }
+
+    /// A band with the owner and one member.
+    async fn duo() -> (axum::Router, String, String, String, i64) {
+        let (app, owner, member, outsider) = app_with_users().await;
+        let band = create(&app, &owner, "Duo").await;
+        add(&app, &owner, band, "member@example.com").await;
+        (app, owner, member, outsider, band)
+    }
+
+    #[tokio::test]
+    async fn band_songs_are_visible_to_every_member_but_nobody_else() {
+        let (app, owner, member, outsider, band) = duo().await;
+        let (s, saved) = save_song(&app, &member, song_with("Shared", Some(band), None, "G")).await;
+        assert_eq!(s, StatusCode::OK, "{saved}");
+        let id = saved["id"].as_i64().unwrap();
+        assert_eq!(saved["version"], 1);
+
+        for token in [&owner, &member] {
+            assert!(song_ids(&app, token).await.contains(&id));
+            let (s, song) = call(&app, Method::GET, &format!("/api/songs/{id}"), token, None).await;
+            assert_eq!(s, StatusCode::OK);
+            assert_eq!(song["name"], "Shared");
+            assert_eq!(song["band_id"], band);
+            assert_eq!(song["version"], 1);
+            assert_eq!(song["id"], id);
+        }
+        assert!(!song_ids(&app, &outsider).await.contains(&id));
+        let (s, _) = call(
+            &app,
+            Method::GET,
+            &format!("/api/songs/{id}"),
+            &outsider,
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn only_members_can_save_into_a_band() {
+        let (app, _, _, outsider, band) = duo().await;
+        let (s, _) = save_song(&app, &outsider, song_with("Sneaky", Some(band), None, "G")).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn every_member_can_edit_a_band_song_and_each_save_bumps_the_version() {
+        let (app, owner, member, _, band) = duo().await;
+        let (_, first) = save_song(&app, &member, song_with("Shared", Some(band), None, "G")).await;
+        let id = first["id"].as_i64().unwrap();
+
+        let (s, second) =
+            save_song(&app, &owner, song_with("Shared", Some(band), Some(1), "A")).await;
+        assert_eq!(s, StatusCode::OK, "{second}");
+        assert_eq!(second["id"], id, "an edit updates the same song");
+        assert_eq!(second["version"], 2);
+
+        let (_, song) = call(
+            &app,
+            Method::GET,
+            &format!("/api/songs/{id}"),
+            &member,
+            None,
+        )
+        .await;
+        assert_eq!(song["key"], "A");
+        assert_eq!(song["version"], 2);
+    }
+
+    #[tokio::test]
+    async fn a_stale_save_is_rejected_and_changes_nothing() {
+        let (app, owner, member, _, band) = duo().await;
+        let (_, first) = save_song(&app, &member, song_with("Shared", Some(band), None, "G")).await;
+        let id = first["id"].as_i64().unwrap();
+        // The owner saves while the member still has version 1 open.
+        save_song(&app, &owner, song_with("Shared", Some(band), Some(1), "A")).await;
+
+        let (s, _) = save_song(&app, &member, song_with("Shared", Some(band), Some(1), "D")).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        let (_, song) = call(
+            &app,
+            Method::GET,
+            &format!("/api/songs/{id}"),
+            &member,
+            None,
+        )
+        .await;
+        assert_eq!(song["key"], "A", "the rejected save must not be applied");
+        assert_eq!(song["version"], 2);
+
+        // After reloading, the member can save on top of the new version.
+        let (s, saved) =
+            save_song(&app, &member, song_with("Shared", Some(band), Some(2), "D")).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(saved["version"], 3);
+    }
+
+    #[tokio::test]
+    async fn saving_without_a_version_skips_the_check() {
+        let (app, owner, member, _, band) = duo().await;
+        save_song(&app, &member, song_with("Shared", Some(band), None, "G")).await;
+        let (s, saved) = save_song(&app, &owner, song_with("Shared", Some(band), None, "A")).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(saved["version"], 2);
+    }
+
+    #[tokio::test]
+    async fn personal_and_band_songs_with_the_same_name_are_separate() {
+        let (app, _, member, _, band) = duo().await;
+        let (_, personal) = save_song(&app, &member, song_with("Same", None, None, "G")).await;
+        let (_, shared) = save_song(&app, &member, song_with("Same", Some(band), None, "G")).await;
+        assert_ne!(personal["id"], shared["id"]);
+        // Saving the personal one again updates the personal one, not the band's.
+        let (_, again) = save_song(&app, &member, song_with("Same", None, None, "A")).await;
+        assert_eq!(again["id"], personal["id"]);
+    }
+
+    #[tokio::test]
+    async fn personal_songs_stay_private() {
+        let (app, owner, member, _, _) = duo().await;
+        let (_, saved) = save_song(&app, &member, song_with("Mine", None, None, "G")).await;
+        let id = saved["id"].as_i64().unwrap();
+        assert!(!song_ids(&app, &owner).await.contains(&id));
+        let (s, _) = call(&app, Method::GET, &format!("/api/songs/{id}"), &owner, None).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn band_song_deletion_is_limited_to_its_creator_and_the_band_owner() {
+        let (app, owner, member, outsider, band) = duo().await;
+        let (_, a) = save_song(&app, &owner, song_with("By owner", Some(band), None, "G")).await;
+        let (_, b) = save_song(&app, &member, song_with("By member", Some(band), None, "G")).await;
+        let (a, b) = (a["id"].as_i64().unwrap(), b["id"].as_i64().unwrap());
+        let del = |id: i64| format!("/api/songs/{id}");
+
+        assert_eq!(
+            call(&app, Method::DELETE, &del(a), &outsider, None).await.0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            call(&app, Method::DELETE, &del(a), &member, None).await.0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            call(&app, Method::DELETE, &del(b), &member, None).await.0,
+            StatusCode::NO_CONTENT
+        );
+        // The band owner may remove a member's song.
+        let (_, c) = save_song(&app, &member, song_with("Another", Some(band), None, "G")).await;
+        let c = c["id"].as_i64().unwrap();
+        assert_eq!(
+            call(&app, Method::DELETE, &del(c), &owner, None).await.0,
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            call(&app, Method::DELETE, &del(a), &owner, None).await.0,
+            StatusCode::NO_CONTENT
+        );
+    }
+
+    #[tokio::test]
+    async fn leaving_a_band_removes_access_to_its_songs() {
+        let (app, owner, member, _, band) = duo().await;
+        let (_, saved) = save_song(&app, &owner, song_with("Shared", Some(band), None, "G")).await;
+        let id = saved["id"].as_i64().unwrap();
+        let (_, detail) = call(
+            &app,
+            Method::GET,
+            &format!("/api/bands/{band}"),
+            &owner,
+            None,
+        )
+        .await;
+        let member_id = detail["members"][1]["user_id"].as_i64().unwrap();
+        call(
+            &app,
+            Method::DELETE,
+            &format!("/api/bands/{band}/members/{member_id}"),
+            &owner,
+            None,
+        )
+        .await;
+        assert!(!song_ids(&app, &member).await.contains(&id));
+    }
+
+    #[tokio::test]
+    async fn deleting_a_band_returns_its_songs_to_their_creators() {
+        let (app, owner, member, _, band) = duo().await;
+        let (_, by_owner) =
+            save_song(&app, &owner, song_with("Owner song", Some(band), None, "G")).await;
+        let (_, by_member) = save_song(
+            &app,
+            &member,
+            song_with("Member song", Some(band), None, "G"),
+        )
+        .await;
+        let (by_owner, by_member) = (
+            by_owner["id"].as_i64().unwrap(),
+            by_member["id"].as_i64().unwrap(),
+        );
+
+        call(
+            &app,
+            Method::DELETE,
+            &format!("/api/bands/{band}"),
+            &owner,
+            None,
+        )
+        .await;
+
+        assert!(song_ids(&app, &owner).await.contains(&by_owner));
+        assert!(song_ids(&app, &member).await.contains(&by_member));
+        assert!(!song_ids(&app, &owner).await.contains(&by_member));
+        let (_, song) = call(
+            &app,
+            Method::GET,
+            &format!("/api/songs/{by_owner}"),
+            &owner,
+            None,
+        )
+        .await;
+        assert_eq!(song["band_id"], Value::Null);
     }
 }

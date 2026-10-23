@@ -344,11 +344,19 @@ struct LoginRequest {
 #[derive(Deserialize)]
 struct SaveSongRequest {
     song: song::Song,
+    /// Save into this band's shared library (the caller must be a member). Omit for a personal song.
+    #[serde(default)]
+    band_id: Option<i64>,
+    /// The version the client last loaded. If the stored song has moved on, the save is rejected
+    /// with 409 so a band member's changes are not silently overwritten. Omit to skip the check.
+    #[serde(default)]
+    expected_version: Option<i64>,
 }
 
 #[derive(Serialize)]
 struct SaveSongResponse {
     id: i64,
+    version: i64,
 }
 
 #[derive(Serialize)]
@@ -357,6 +365,8 @@ struct SongListItem {
     name: String,
     artist: String,
     instruments: Vec<song::Instrument>,
+    /// The band this song is shared with, if any.
+    band_id: Option<i64>,
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -639,8 +649,33 @@ async fn run_migrations(pool: &SqlitePool) {
         }
     }
 
+    add_column(pool, "songs", "band_id", "INTEGER").await;
+    add_column(pool, "songs", "version", "INTEGER NOT NULL DEFAULT 1").await;
+
     bands::migrate(pool).await;
 }
+
+/// Idempotent `ALTER TABLE .. ADD COLUMN`.
+async fn add_column(pool: &SqlitePool, table: &str, column: &str, definition: &str) {
+    match sqlx::query(&format!(
+        "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+    ))
+    .execute(pool)
+    .await
+    {
+        Ok(_) => {}
+        Err(sqlx::Error::Database(db_err))
+            if db_err
+                .message()
+                .contains(&format!("duplicate column name: {column}")) => {}
+        Err(err) => panic!("Failed to add {table}.{column} column: {err}"),
+    }
+}
+
+/// SQL condition (with `?1` bound to the caller's id) for songs the caller may read: their own
+/// personal songs, the shared demo songs, and every song of a band they belong to.
+const READABLE_SONGS: &str = "((user_id = ?1 AND band_id IS NULL) OR user_id = 0 \
+     OR band_id IN (SELECT band_id FROM band_members WHERE user_id = ?1))";
 
 // ── Auth handlers ─────────────────────────────────────────────────────────────
 
@@ -920,12 +955,12 @@ async fn list_songs(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<Vec<SongListItem>>, (StatusCode, String)> {
-    let rows = sqlx::query_as::<_, (i64, String, String, String)>(
-        "SELECT id, name, artist, instruments_json
+    let rows = sqlx::query_as::<_, (i64, String, String, String, Option<i64>)>(&format!(
+        "SELECT id, name, artist, instruments_json, band_id
          FROM   songs
-         WHERE  user_id = ? OR user_id = 0
-         ORDER  BY id",
-    )
+         WHERE  {READABLE_SONGS}
+         ORDER  BY id"
+    ))
     .bind(user.id)
     .fetch_all(&state.db)
     .await
@@ -933,13 +968,14 @@ async fn list_songs(
 
     let items = rows
         .into_iter()
-        .map(|(id, name, artist, instruments_json)| {
+        .map(|(id, name, artist, instruments_json, band_id)| {
             let instruments = serde_json::from_str(&instruments_json).unwrap_or_default();
             SongListItem {
                 id,
                 name,
                 artist,
                 instruments,
+                band_id,
             }
         })
         .collect();
@@ -966,19 +1002,44 @@ async fn save_song(
     let pdf_json = serde_json::to_string(&s.pdf_settings)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Upsert: update if name + artist already exist for this user.
-    let existing = sqlx::query_scalar::<_, i64>(
-        "SELECT id FROM songs WHERE name = ? AND artist = ? AND user_id = ?",
-    )
-    .bind(&s.name)
-    .bind(&s.artist)
-    .bind(user.id)
-    .fetch_optional(&state.db)
-    .await
+    // A band song is shared by every member, so the caller must belong to the band.
+    if let Some(band_id) = req.band_id {
+        bands::role_of(&state.db, band_id, user.id)
+            .await
+            .map_err(|_| (StatusCode::NOT_FOUND, "Band not found.".to_string()))?;
+    }
+
+    // Upsert: update if name + artist already exist in the target library (the band's, or the
+    // caller's personal songs).
+    let existing = match req.band_id {
+        Some(band_id) => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT id FROM songs WHERE name = ? AND artist = ? AND band_id = ?",
+            )
+            .bind(&s.name)
+            .bind(&s.artist)
+            .bind(band_id)
+            .fetch_optional(&state.db)
+            .await
+        }
+        None => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT id FROM songs
+                 WHERE name = ? AND artist = ? AND user_id = ? AND band_id IS NULL",
+            )
+            .bind(&s.name)
+            .bind(&s.artist)
+            .bind(user.id)
+            .fetch_optional(&state.db)
+            .await
+        }
+    }
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let id = if let Some(id) = existing {
-        sqlx::query(
+    let (id, version) = if let Some(id) = existing {
+        // The version check and the write are one statement, so two members saving at the same
+        // moment cannot both win.
+        let version = sqlx::query_scalar::<_, i64>(
             "UPDATE songs
              SET    key_name              = ?,
                     parts_json            = ?,
@@ -986,8 +1047,10 @@ async fn save_song(
                     vocals_notes          = ?,
                     instrument_parts_json = ?,
                     instrument_capos_json = ?,
-                    pdf_settings_json     = ?
-             WHERE  id = ?",
+                    pdf_settings_json     = ?,
+                    version               = version + 1
+             WHERE  id = ? AND (? IS NULL OR version = ?)
+             RETURNING version",
         )
         .bind(&s.key)
         .bind(&parts_json)
@@ -997,20 +1060,30 @@ async fn save_song(
         .bind(&ic_json)
         .bind(&pdf_json)
         .bind(id)
-        .execute(&state.db)
+        .bind(req.expected_version)
+        .bind(req.expected_version)
+        .fetch_optional(&state.db)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        id
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| {
+            (
+                StatusCode::CONFLICT,
+                "Someone else changed this song since you opened it. Reload it and try again."
+                    .to_string(),
+            )
+        })?;
+        (id, version)
     } else {
-        sqlx::query_scalar::<_, i64>(
+        let id = sqlx::query_scalar::<_, i64>(
             "INSERT INTO songs
-                (user_id, name, artist, key_name, parts_json, instruments_json,
+                (user_id, band_id, name, artist, key_name, parts_json, instruments_json,
                  vocals_notes, instrument_parts_json, instrument_capos_json,
                  pdf_settings_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              RETURNING id",
         )
         .bind(user.id)
+        .bind(req.band_id)
         .bind(&s.name)
         .bind(&s.artist)
         .bind(&s.key)
@@ -1022,19 +1095,23 @@ async fn save_song(
         .bind(&pdf_json)
         .fetch_one(&state.db)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        (id, 1)
     };
 
-    Ok(Json(SaveSongResponse { id }))
+    Ok(Json(SaveSongResponse { id, version }))
 }
 
-/// Load a song. Allowed if the song belongs to the caller or is a shared demo (user_id = 0).
+/// Load a song. Allowed for the caller's own songs, shared demo songs (user_id = 0), and songs
+/// of the caller's bands.
 async fn load_song(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<i64>,
-) -> Result<Json<song::Song>, (StatusCode, String)> {
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     type Row = (
+        i64,
+        Option<i64>,
         String,
         String,
         String,
@@ -1046,53 +1123,69 @@ async fn load_song(
         String,
     );
 
-    let row = sqlx::query_as::<_, Row>(
-        "SELECT name, artist, key_name, parts_json, instruments_json,
+    let row = sqlx::query_as::<_, Row>(&format!(
+        "SELECT version, band_id, name, artist, key_name, parts_json, instruments_json,
                 vocals_notes, instrument_parts_json, instrument_capos_json,
                 pdf_settings_json
          FROM   songs
-         WHERE  id = ? AND (user_id = ? OR user_id = 0)",
-    )
-    .bind(id)
+         WHERE  id = ?2 AND {READABLE_SONGS}"
+    ))
     .bind(user.id)
+    .bind(id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Song {id} not found")))?;
 
-    let parts = serde_json::from_str(&row.3)
+    let parts = serde_json::from_str(&row.5)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let instruments = serde_json::from_str(&row.4).unwrap_or_default();
-    let instrument_parts = serde_json::from_str(&row.6).unwrap_or_default();
-    let instrument_capos = serde_json::from_str(&row.7).unwrap_or_default();
-    let pdf_settings = serde_json::from_str(&row.8).unwrap_or_default();
+    let instruments = serde_json::from_str(&row.6).unwrap_or_default();
+    let instrument_parts = serde_json::from_str(&row.8).unwrap_or_default();
+    let instrument_capos = serde_json::from_str(&row.9).unwrap_or_default();
+    let pdf_settings = serde_json::from_str(&row.10).unwrap_or_default();
 
-    Ok(Json(song::Song {
-        name: row.0,
-        artist: row.1,
-        key: row.2,
+    let song = song::Song {
+        name: row.2,
+        artist: row.3,
+        key: row.4,
         parts,
         instruments,
-        vocals_notes: row.5,
+        vocals_notes: row.7,
         instrument_parts,
         instrument_capos,
         pdf_settings,
-    }))
+    };
+    // The song itself, plus its id, version and band. Clients that only know `Song` ignore the
+    // extra fields; the version is what a band member sends back as `expected_version`.
+    let mut json = serde_json::to_value(song)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    json["id"] = id.into();
+    json["version"] = row.0.into();
+    json["band_id"] = row.1.into();
+    Ok(Json(json))
 }
 
-/// Delete a song. Only the owner can delete; shared demo songs (user_id = 0) are protected.
+/// Delete a song. Only its creator (or, for a band song, the band's owner) can delete it;
+/// shared demo songs (user_id = 0) are protected.
 async fn delete_song(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<i64>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let affected = sqlx::query("DELETE FROM songs WHERE id = ? AND user_id = ?")
-        .bind(id)
-        .bind(user.id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .rows_affected();
+    // Personal songs: the owner. Band songs: the member who created it, or the band's owner.
+    let affected = sqlx::query(
+        "DELETE FROM songs
+         WHERE id = ?1 AND user_id != 0
+           AND ((band_id IS NULL AND user_id = ?2)
+             OR (band_id IS NOT NULL AND (user_id = ?2 OR band_id IN
+                   (SELECT band_id FROM band_members WHERE user_id = ?2 AND role = 'owner'))))",
+    )
+    .bind(id)
+    .bind(user.id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .rows_affected();
 
     if affected == 0 {
         return Err((
