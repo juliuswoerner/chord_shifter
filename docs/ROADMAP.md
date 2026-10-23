@@ -4,6 +4,26 @@ A realistic plan for a small project. Phases are ordered by value over effort;
 within a phase, items are ordered by priority. Effort: S ≈ a day, M ≈ a few days, L ≈ 1–2 weeks.
 Current state is described in FEATURES.md.
 
+## Status
+
+| Phase | State |
+|---|---|
+| 0 Housekeeping | done (CI, README, release-build fixes) |
+| 1 Local demo | done (`scripts/demo.sh`, demo user, sample songs) |
+| 2 Durable data | mostly done: API wiring, import of browser songs, JSON import/export, server tests. Open: password reset, resend verification, Fly SQLite backup note |
+| 3 Bands and setlists | in progress |
+| 4–7 | not started |
+
+The piano grand-staff editor (see FEATURES.md) is also done; piano transpose uses `+` = higher.
+
+### Notation engine decision
+
+We keep the native renderer (our own staff layout drawn to SVG in the editor and to PDF via
+`printpdf`). LilyPond was evaluated and rejected: it is a native process, so it needs a server
+render service, breaks the offline demo, the iPad/Android app and live transpose, and its output
+is not interactive. Verovio (WASM) is the fallback if browser-side engraving becomes necessary.
+Planned notation work: beams, ties, rests, then a tab staff for guitar and bass.
+
 ## Phase 0 — Housekeeping (1–2 days)
 
 Fix things that mislead contributors and users before adding features.
