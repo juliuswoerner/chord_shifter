@@ -60,6 +60,9 @@ use tower_http::{cors::CorsLayer, services::ServeDir};
 
 use chord_shifter::{auth, song};
 
+#[path = "server/bands.rs"]
+mod bands;
+
 // ── App state ─────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -408,7 +411,7 @@ fn build_app(state: AppState, rate_limit: bool) -> Router {
         .route("/songs", get(list_songs).post(save_song))
         .route("/songs/{id}", get(load_song).delete(delete_song));
 
-    let api = auth_routes.merge(song_routes);
+    let api = auth_routes.merge(song_routes).merge(bands::routes());
 
     // Lock CORS to the configured APP_URL origin only.
     let allowed_origin = state
@@ -425,6 +428,7 @@ fn build_app(state: AppState, rate_limit: bool) -> Router {
         .allow_methods([
             axum::http::Method::GET,
             axum::http::Method::POST,
+            axum::http::Method::PUT,
             axum::http::Method::DELETE,
             axum::http::Method::OPTIONS,
         ])
@@ -634,6 +638,8 @@ async fn run_migrations(pool: &SqlitePool) {
             panic!("Failed to add songs.pdf_settings_json column: {err}");
         }
     }
+
+    bands::migrate(pool).await;
 }
 
 // ── Auth handlers ─────────────────────────────────────────────────────────────
@@ -1120,7 +1126,7 @@ mod validation_tests {
 }
 
 #[cfg(test)]
-mod api_tests {
+pub(crate) mod api_tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{header, Method, Request, StatusCode};
@@ -1128,7 +1134,7 @@ mod api_tests {
 
     const PASSWORD: &str = "Str0ng-Passw0rd!";
 
-    async fn test_state() -> AppState {
+    pub(super) async fn test_state() -> AppState {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -1149,7 +1155,7 @@ mod api_tests {
         }
     }
 
-    async fn send(
+    pub(super) async fn send(
         app: &Router,
         method: Method,
         uri: &str,
@@ -1350,7 +1356,7 @@ mod api_tests {
 
     // ── Songs ────────────────────────────────────────────────────────────────
 
-    async fn register_and_login(app: &Router, email: &str) -> String {
+    pub(super) async fn register_and_login(app: &Router, email: &str) -> String {
         send(
             app,
             Method::POST,
