@@ -2203,6 +2203,7 @@ fn SongView(
                     style: "display: flex; align-items: center; gap: 6px;",
                     span { style: "font-size: 12px; color: #666; font-weight: 600;", "Part labels" }
                     input {
+                        "aria-label": "Part label font size in points",
                         r#type: "number",
                         min: "6", max: "24",
                         style: "
@@ -2239,6 +2240,7 @@ fn SongView(
                     style: "display: flex; align-items: center; gap: 6px;",
                     span { style: "font-size: 12px; color: #666; font-weight: 600;", "Chords" }
                     input {
+                        "aria-label": "Chord font size in points",
                         r#type: "number",
                         min: "10", max: "36",
                         style: "
@@ -2276,6 +2278,7 @@ fn SongView(
                     span { style: "font-size: 12px; color: #666; font-weight: 600;", "Space between parts" }
                     input {
                         id: "part-gap-input",
+                        "aria-label": "Space between parts in millimetres",
                         r#type: "number",
                         min: "0", max: "40",
                         style: "

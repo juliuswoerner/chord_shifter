@@ -188,7 +188,7 @@ try {
             };
             return y('THEME') - y('BRIDGE');
         };
-        const input = page.locator('#part-gap-input');
+        const input = page.getByLabel('Space between parts in millimetres');
         expect((await input.inputValue()) === '0', 'the default extra space is 0 mm');
         const before = await labelGap();
         await input.fill('10');
