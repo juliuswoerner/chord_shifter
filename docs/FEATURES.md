@@ -48,7 +48,7 @@ code in `src/` as of commit `ebdd33e`, plus ideas for what is missing.
 - Live PDF preview in the app.
 - PDF export (client-side, `printpdf`): multi-page, superscript chord quality,
   tab and drum rendering, repeats/voltas, lyrics, notation and capo applied.
-- Configurable chord and part-label font sizes, stored per sheet.
+- Configurable chord and part-label font sizes and extra space between parts (0–40 mm), stored per sheet.
 - "Export as PDF" downloads a ZIP with one PDF per sheet (base plus each instrument).
 
 ### Library, accounts and storage

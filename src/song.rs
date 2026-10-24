@@ -711,13 +711,21 @@ impl Instrument {
 
 // ── PDF settings ─────────────────────────────────────────────────────────────
 
-/// Per-sheet PDF font-size settings.
+/// Per-sheet PDF layout settings.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PdfSettings {
     /// Font size for part-label text (default 9 pt).
     pub part_name_size: u32,
     /// Font size for chord roots (default 18 pt).
     pub chord_size: u32,
+    /// Extra space between two parts, in millimetres, on top of the standard spacing
+    /// (default 0). Songs saved before this setting existed load with the default.
+    #[serde(default)]
+    pub part_gap: u32,
+}
+
+impl PdfSettings {
+    pub const PART_GAP_MAX: u32 = 40;
 }
 
 impl Default for PdfSettings {
@@ -725,6 +733,7 @@ impl Default for PdfSettings {
         Self {
             part_name_size: 9,
             chord_size: 18,
+            part_gap: 0,
         }
     }
 }

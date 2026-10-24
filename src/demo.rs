@@ -323,6 +323,7 @@ fn twelve_bar_blues() -> Song {
         PdfSettings {
             part_name_size: 10,
             chord_size: 22,
+            part_gap: 0,
         },
     );
     song

@@ -169,6 +169,35 @@ try {
         expect((pdf.match(/\nf\n/g) ?? []).length >= 20, 'too few filled note heads in the PDF');
     });
 
+    await check('"Space between parts" moves the parts of the exported PDF apart', async () => {
+        // Export the Piano sheet and return the distance (pt) between two part labels.
+        const labelGap = async () => {
+            const [download] = await Promise.all([
+                page.waitForEvent('download', { timeout: 30000 }),
+                page.getByRole('button', { name: /Export as PDF/ }).click(),
+            ]);
+            const file = await download.path();
+            const entries = execFileSync('unzip', ['-Z1', file], { encoding: 'utf8' }).split('\n').filter(Boolean);
+            const raw = execFileSync('unzip', ['-p', file, entries.find((n) => /Piano\.pdf$/.test(n))], { maxBuffer: 64 * 1024 * 1024 });
+            const pdf = pdfContent(raw);
+            const hex = (t) => Buffer.from(t, 'latin1').toString('hex').toUpperCase();
+            const y = (label) => {
+                const m = pdf.match(new RegExp(`[\\d.]+ ([\\d.]+) Td\\s*<${hex(label)}> Tj`));
+                expect(m, `label ${label} not found in the PDF`);
+                return parseFloat(m[1]);
+            };
+            return y('THEME') - y('BRIDGE');
+        };
+        const input = page.locator('#part-gap-input');
+        expect((await input.inputValue()) === '0', 'the default extra space is 0 mm');
+        const before = await labelGap();
+        await input.fill('10');
+        const after = await labelGap();
+        const moved = after - before;
+        expect(Math.abs(moved - 10 * (72 / 25.4)) < 1, `10 mm should move BRIDGE down by 28.3 pt, moved ${moved}`);
+        await input.fill('0');
+    });
+
     await check('beats are keyboard-operable and Enter commits an edit', async () => {
         // Piano sheet controls are real buttons for assistive technology and the keyboard.
         const beats = page.locator('svg g[role="button"][aria-label^="Edit beat"]');
