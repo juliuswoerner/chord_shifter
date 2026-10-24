@@ -12,7 +12,7 @@ A chord sheet editor that runs in the browser (Rust + [Dioxus](https://dioxuslab
 - **Instrument sheets** — Electric, Acoustic, Bass, Piano, Drums and Vocals. Each instrument can have its own copy of the parts and its own capo (piano uses a transpose of −12…+12 instead).
 - **Tab editor** — click-to-edit grid for guitar (6 strings), bass (4) and drums (8 tracks) with frets, mutes, ghost notes, hammer-ons, pull-offs, bends, slides and free-form entries.
 - **Rendered view and PDF preview** — a layout that matches the PDF.
-- **PDF export** — multi-page, superscript chord quality, configurable chord and part-label font sizes per sheet. Export downloads a ZIP with one PDF per sheet.
+- **PDF export** — multi-page, superscript chord quality, configurable chord and part-label font sizes and space between parts per sheet. Export downloads a ZIP with one PDF per sheet.
 - **Library and accounts** — register/log in and keep a list of songs. In the web app, **accounts and songs are stored in the browser's `localStorage`** (nothing is synced between devices).
 - **Server (optional)** — an Axum + SQLite backend with email registration and verification, JWT login and a songs API. The web app does not call it yet.
 

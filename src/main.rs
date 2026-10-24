@@ -2203,6 +2203,7 @@ fn SongView(
                     style: "display: flex; align-items: center; gap: 6px;",
                     span { style: "font-size: 12px; color: #666; font-weight: 600;", "Part labels" }
                     input {
+                        "aria-label": "Part label font size in points",
                         r#type: "number",
                         min: "6", max: "24",
                         style: "
@@ -2225,8 +2226,9 @@ fn SongView(
                         oninput: move |e| {
                             if let Ok(v) = e.value().parse::<u32>() {
                                 let key = (*active_instrument.read()).map(|i| i.label().to_string()).unwrap_or_else(|| "Base".to_string());
-                                let cs = song.read().pdf_settings.get(&key).map(|p| p.chord_size).unwrap_or(18);
-                                song.write().pdf_settings.insert(key, song::PdfSettings { part_name_size: v.clamp(6, 24), chord_size: cs });
+                                let mut settings = song.read().pdf_settings.get(&key).cloned().unwrap_or_default();
+                                settings.part_name_size = v.clamp(6, 24);
+                                song.write().pdf_settings.insert(key, settings);
                             }
                         }
                     }
@@ -2238,6 +2240,7 @@ fn SongView(
                     style: "display: flex; align-items: center; gap: 6px;",
                     span { style: "font-size: 12px; color: #666; font-weight: 600;", "Chords" }
                     input {
+                        "aria-label": "Chord font size in points",
                         r#type: "number",
                         min: "10", max: "36",
                         style: "
@@ -2260,12 +2263,51 @@ fn SongView(
                         oninput: move |e| {
                             if let Ok(v) = e.value().parse::<u32>() {
                                 let key = (*active_instrument.read()).map(|i| i.label().to_string()).unwrap_or_else(|| "Base".to_string());
-                                let pns = song.read().pdf_settings.get(&key).map(|p| p.part_name_size).unwrap_or(9);
-                                song.write().pdf_settings.insert(key, song::PdfSettings { part_name_size: pns, chord_size: v.clamp(10, 36) });
+                                let mut settings = song.read().pdf_settings.get(&key).cloned().unwrap_or_default();
+                                settings.chord_size = v.clamp(10, 36);
+                                song.write().pdf_settings.insert(key, settings);
                             }
                         }
                     }
                     span { style: "font-size: 11px; color: #aaa;", "pt" }
+                }
+
+                // Extra space between parts
+                div {
+                    style: "display: flex; align-items: center; gap: 6px;",
+                    span { style: "font-size: 12px; color: #666; font-weight: 600;", "Space between parts" }
+                    input {
+                        id: "part-gap-input",
+                        "aria-label": "Space between parts in millimetres",
+                        r#type: "number",
+                        min: "0", max: "40",
+                        style: "
+                            width: 52px;
+                            font-size: 13px;
+                            font-weight: 600;
+                            color: #0a0f1e;
+                            text-align: center;
+                            border: 1px solid #bfdbfe;
+                            border-radius: 6px;
+                            background: #fff;
+                            outline: none;
+                            padding: 4px 6px;
+                            font-family: inherit;
+                        ",
+                        value: {
+                            let key = (*active_instrument.read()).map(|i| i.label().to_string()).unwrap_or_else(|| "Base".to_string());
+                            song.read().pdf_settings.get(&key).map(|p| p.part_gap).unwrap_or(0).to_string()
+                        },
+                        oninput: move |e| {
+                            if let Ok(v) = e.value().parse::<u32>() {
+                                let key = (*active_instrument.read()).map(|i| i.label().to_string()).unwrap_or_else(|| "Base".to_string());
+                                let mut settings = song.read().pdf_settings.get(&key).cloned().unwrap_or_default();
+                                settings.part_gap = v.min(song::PdfSettings::PART_GAP_MAX);
+                                song.write().pdf_settings.insert(key, settings);
+                            }
+                        }
+                    }
+                    span { style: "font-size: 11px; color: #aaa;", "mm" }
                 }
             }
 
@@ -2317,11 +2359,9 @@ fn SongView(
                     let note = notation();
                     let pdf_key = (*active_instrument.read()).map(|i| i.label().to_string()).unwrap_or_else(|| "Base".to_string());
                     let pdf_s = song.read().pdf_settings.get(&pdf_key).cloned().unwrap_or_default();
-                    let pns = pdf_s.part_name_size as f32;
-                    let cs  = pdf_s.chord_size as f32;
                     use js_sys::Uint8Array;
                     use web_sys::{Blob, BlobPropertyBag, Url};
-                    match pdf::generate_pdf_for(&preview_song, note, pns, cs, shift) {
+                    match pdf::generate_pdf_for(&preview_song, note, &pdf_s, shift) {
                         Ok(bytes) => {
                             let array = Uint8Array::from(bytes.as_slice());
                             let parts = js_sys::Array::new();
@@ -2362,10 +2402,10 @@ fn SongView(
                     let note = notation();
 
                     // Collect: base sheet + one entry per instrument that has saved overrides.
-                    // Each entry is (song_with_correct_parts, filename, shift_for_that_sheet, pns, cs).
-                    let mut exports: Vec<(Song, String, song::Shift, f32, f32)> = Vec::new();
+                    // Each entry is (song_with_correct_parts, filename, shift_for_that_sheet, pdf_settings).
+                    let mut exports: Vec<(Song, String, song::Shift, song::PdfSettings)> = Vec::new();
                     let base_pdf = s.pdf_settings.get("Base").cloned().unwrap_or_default();
-                    exports.push((s.clone(), s.name.clone(), song::Shift::Capo(0), base_pdf.part_name_size as f32, base_pdf.chord_size as f32));
+                    exports.push((s.clone(), s.name.clone(), song::Shift::Capo(0), base_pdf));
                     for inst in Instrument::all() {
                         if let Some(parts) = s.instrument_parts.get(inst.label()).cloned() {
                             let inst_cap = *s.instrument_capos.get(inst.label()).unwrap_or(&0);
@@ -2373,7 +2413,7 @@ fn SongView(
                             let mut inst_sheet = s.clone();
                             inst_sheet.parts = parts;
                             let filename = format!("{}_{}", s.name, inst.label());
-                            exports.push((inst_sheet, filename, inst.shift(inst_cap), inst_pdf.part_name_size as f32, inst_pdf.chord_size as f32));
+                            exports.push((inst_sheet, filename, inst.shift(inst_cap), inst_pdf));
                         }
                     }
 
@@ -2392,8 +2432,8 @@ fn SongView(
                             let opts = zip::write::SimpleFileOptions::default()
                                 .compression_method(zip::CompressionMethod::Deflated);
 
-                            for (sheet, filename, sheet_shift, pns, cs) in &exports {
-                                match pdf::generate_pdf_for(sheet, note, *pns, *cs, *sheet_shift) {
+                            for (sheet, filename, sheet_shift, sheet_pdf) in &exports {
+                                match pdf::generate_pdf_for(sheet, note, sheet_pdf, *sheet_shift) {
                                     Ok(bytes) => {
                                         let _ = zip.start_file(format!("{filename}.pdf"), opts);
                                         let _ = zip.write_all(&bytes);

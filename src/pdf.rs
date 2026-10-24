@@ -4,7 +4,7 @@ use printpdf::*;
 use std::io::BufWriter;
 
 use chord_shifter::piano;
-use chord_shifter::song::{apply_notation, Notation, Shift, Song};
+use chord_shifter::song::{apply_notation, Notation, PdfSettings, Shift, Song};
 
 const PAGE_W: f32 = 210.0;
 const PAGE_H: f32 = 297.0;
@@ -414,8 +414,11 @@ pub fn generate_pdf_bytes(
     generate_pdf_for(
         song,
         notation,
-        part_name_size,
-        chord_size,
+        &PdfSettings {
+            part_name_size: part_name_size as u32,
+            chord_size: chord_size as u32,
+            part_gap: 0,
+        },
         Shift::Capo(capo),
     )
 }
@@ -426,10 +429,12 @@ pub fn generate_pdf_bytes(
 pub fn generate_pdf_for(
     song: &Song,
     notation: Notation,
-    part_name_size: f32,
-    chord_size: f32,
+    settings: &PdfSettings,
     shift: Shift,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let part_name_size = settings.part_name_size as f32;
+    let chord_size = settings.chord_size as f32;
+    let part_gap = settings.part_gap.min(PdfSettings::PART_GAP_MAX) as f32;
     let capo = shift.as_capo();
     // When a capo/transpose is set, produce a shifted view of the song for rendering.
     let capo_song: Song;
@@ -540,7 +545,14 @@ pub fn generate_pdf_for(
         }};
     }
 
+    let mut first_part = true;
     for part in &effective.parts {
+        // The configured extra space between parts. It is dropped at the top of a page.
+        if !first_part {
+            y -= part_gap;
+        }
+        first_part = false;
+
         // ── Page-break check ────────────────────────────────────────────────
         // If the remaining vertical space is less than this part's estimated
         // height, start a fresh page so the part isn't split or clipped.
@@ -1667,8 +1679,9 @@ mod piano_pdf_tests {
     fn the_header_says_how_a_sheet_was_shifted() {
         use chord_shifter::song::Shift;
         let song = piano_song("C Major", "4/4", vec![col("C5", "C3", "4")]);
-        let render_for =
-            |shift| generate_pdf_for(&song, Notation::English, 9.0, 18.0, shift).unwrap();
+        let render_for = |shift| {
+            generate_pdf_for(&song, Notation::English, &PdfSettings::default(), shift).unwrap()
+        };
         let up = render_for(Shift::Transpose(2));
         assert_eq!(
             count(
@@ -1699,5 +1712,111 @@ mod piano_pdf_tests {
         // The notes themselves moved: up and down differ from each other and from the original.
         assert_ne!(up, down);
         assert_ne!(up, none);
+    }
+}
+
+#[cfg(test)]
+mod part_gap_tests {
+    use super::*;
+    use chord_shifter::song::{Chord, ChordQuality};
+
+    fn two_part_song() -> Song {
+        Song::new("T", "G Major", "A")
+            .with_part("Verse", vec![Chord::new("G", ChordQuality::Major)])
+            .with_part("Chorus", vec![Chord::new("C", ChordQuality::Major)])
+    }
+
+    /// The y position (pt) of the label text `label` (printed upper case).
+    fn label_y(pdf: &[u8], label: &str) -> f32 {
+        let text = String::from_utf8_lossy(pdf);
+        let hex: String = label
+            .to_uppercase()
+            .bytes()
+            .map(|b| format!("{b:02X}"))
+            .collect();
+        let at = text
+            .find(&format!("<{hex}> Tj"))
+            .unwrap_or_else(|| panic!("label {label} not found"));
+        let line = text[..at].trim_end().rsplit('\n').next().unwrap();
+        let mut numbers = line.split_whitespace();
+        numbers.next();
+        numbers.next().unwrap().parse().unwrap()
+    }
+
+    fn distance(part_gap: u32) -> f32 {
+        let settings = PdfSettings {
+            part_gap,
+            ..PdfSettings::default()
+        };
+        let bytes = generate_pdf_for(
+            &two_part_song(),
+            Notation::English,
+            &settings,
+            Shift::Capo(0),
+        )
+        .unwrap();
+        label_y(&bytes, "Verse") - label_y(&bytes, "Chorus")
+    }
+
+    const MM: f32 = 72.0 / 25.4;
+
+    #[test]
+    fn the_default_adds_no_space_between_parts() {
+        assert_eq!(PdfSettings::default().part_gap, 0);
+        let default = distance(0);
+        assert!(default > 50.0, "parts are further apart than {default}pt");
+    }
+
+    #[test]
+    fn the_gap_moves_the_next_part_down_by_that_many_millimetres() {
+        let base = distance(0);
+        for mm in [5u32, 12, 30] {
+            let extra = distance(mm) - base;
+            assert!(
+                (extra - mm as f32 * MM).abs() < 0.5,
+                "{mm} mm moved the part by {extra}pt, expected {}pt",
+                mm as f32 * MM
+            );
+        }
+    }
+
+    #[test]
+    fn the_gap_is_capped() {
+        assert_eq!(distance(1000), distance(PdfSettings::PART_GAP_MAX));
+    }
+
+    #[test]
+    fn the_first_part_does_not_move() {
+        let y = |gap| {
+            let settings = PdfSettings {
+                part_gap: gap,
+                ..PdfSettings::default()
+            };
+            let bytes = generate_pdf_for(
+                &two_part_song(),
+                Notation::English,
+                &settings,
+                Shift::Capo(0),
+            )
+            .unwrap();
+            label_y(&bytes, "Verse")
+        };
+        assert_eq!(y(0), y(25));
+    }
+
+    #[test]
+    fn settings_saved_before_the_gap_existed_still_load() {
+        let old: PdfSettings =
+            serde_json::from_str(r#"{"part_name_size":10,"chord_size":22}"#).unwrap();
+        assert_eq!(old.part_gap, 0);
+        let json = serde_json::to_string(&PdfSettings {
+            part_gap: 7,
+            ..PdfSettings::default()
+        })
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<PdfSettings>(&json).unwrap().part_gap,
+            7
+        );
     }
 }
