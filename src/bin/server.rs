@@ -62,6 +62,8 @@ use chord_shifter::{auth, song};
 
 #[path = "server/bands.rs"]
 mod bands;
+#[path = "server/setlists.rs"]
+mod setlists;
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
@@ -421,7 +423,10 @@ fn build_app(state: AppState, rate_limit: bool) -> Router {
         .route("/songs", get(list_songs).post(save_song))
         .route("/songs/{id}", get(load_song).delete(delete_song));
 
-    let api = auth_routes.merge(song_routes).merge(bands::routes());
+    let api = auth_routes
+        .merge(song_routes)
+        .merge(bands::routes())
+        .merge(setlists::routes());
 
     // Lock CORS to the configured APP_URL origin only.
     let allowed_origin = state
@@ -653,6 +658,7 @@ async fn run_migrations(pool: &SqlitePool) {
     add_column(pool, "songs", "version", "INTEGER NOT NULL DEFAULT 1").await;
 
     bands::migrate(pool).await;
+    setlists::migrate(pool).await;
 }
 
 /// Idempotent `ALTER TABLE .. ADD COLUMN`.
@@ -1193,6 +1199,13 @@ async fn delete_song(
             format!("Song {id} not found or not owned by you"),
         ));
     }
+
+    // A deleted song drops out of every setlist.
+    sqlx::query("DELETE FROM setlist_entries WHERE song_id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(StatusCode::NO_CONTENT)
 }
