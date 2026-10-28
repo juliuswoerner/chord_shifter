@@ -500,6 +500,11 @@ impl SongPart {
 
 // ── Music-theory helpers ────────────────────────────────────────────────────
 
+/// Whether `note` is a note name such as `C`, `F#` or `Bb` (the form a key root is written in).
+pub fn is_note_name(note: &str) -> bool {
+    note_to_index(note).is_some()
+}
+
 /// Returns the chromatic index (0 = C … 11 = B) for a note name, or `None`.
 fn note_to_index(note: &str) -> Option<u8> {
     match note.trim() {

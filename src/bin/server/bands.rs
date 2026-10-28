@@ -301,6 +301,19 @@ async fn delete_band(
 ) -> Result<StatusCode, ApiError> {
     owner_only(&state.db, id, user.id).await?;
     let mut tx = state.db.begin().await.map_err(internal)?;
+    sqlx::query(
+        "DELETE FROM setlist_entries
+         WHERE setlist_id IN (SELECT id FROM setlists WHERE band_id = ?)",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await
+    .map_err(internal)?;
+    sqlx::query("DELETE FROM setlists WHERE band_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(internal)?;
     // The band's songs return to their creators' personal libraries; nothing is lost.
     sqlx::query("UPDATE songs SET band_id = NULL WHERE band_id = ?")
         .bind(id)
